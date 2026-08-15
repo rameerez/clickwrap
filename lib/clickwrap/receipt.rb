@@ -418,8 +418,11 @@ module Clickwrap
       when "city" then annex.ip_geolocation_city_name
       when "postal_code" then annex.ip_geolocation_postal_code
       when "latitude_and_longitude"
-        next_value = [annex.ip_geolocation_latitude, annex.ip_geolocation_longitude]
-        next_value.all? ? { "latitude" => next_value[0].to_s, "longitude" => next_value[1].to_s } : nil
+        latitude = annex.ip_geolocation_latitude
+        longitude = annex.ip_geolocation_longitude
+        # Both or neither: half a coordinate is not a result, and a lone
+        # latitude in an export invites someone to pair it with a guess.
+        latitude && longitude ? { "latitude" => latitude.to_s, "longitude" => longitude.to_s } : nil
       when "timezone" then annex.ip_geolocation_timezone
       when "continent" then annex.ip_geolocation_continent_code
       when "metro_code" then annex.ip_geolocation_metro_code

@@ -434,8 +434,17 @@ class CreateClickwrapTables < ActiveRecord::Migration<%= migration_version %>
       t.string :ip_geolocation_region_code
       t.string :ip_geolocation_city_name
       t.string :ip_geolocation_postal_code
-      t.decimal :ip_geolocation_latitude, precision: 10, scale: 6
-      t.decimal :ip_geolocation_longitude, precision: 10, scale: 6
+
+      # Coordinates are strings, not decimals, for two reasons that point the
+      # same way. A receipt serializes them as strings anyway, so storing the
+      # decimal and formatting it back would introduce a rounding step between
+      # what the provider said and what the evidence shows. And a string column
+      # can carry ciphertext, which is what lets `encrypt_recorded_ip_geolocation`
+      # actually apply to the most identifying field in this table rather than
+      # being a setting that quietly does nothing.
+      t.string :ip_geolocation_latitude
+      t.string :ip_geolocation_longitude
+
       t.string :ip_geolocation_timezone
       t.string :ip_geolocation_continent_code
       t.string :ip_geolocation_metro_code

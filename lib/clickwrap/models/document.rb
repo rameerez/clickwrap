@@ -19,13 +19,21 @@ module Clickwrap
     # The version a policy should present right now for a locale: published,
     # already effective, and not retired. A version scheduled for the future is
     # deliberately not presentable yet — that is what `effective_at` is for.
+    # The version to present right now: published, already effective, and not
+    # retired. A version scheduled for the future is deliberately not
+    # presentable yet — that is what `effective_at` is for.
+    #
+    # The ordering is by effective time, then by publication time as a
+    # tie-breaker for two versions scheduled for the same instant. Publishing
+    # always writes an `effective_at`, so no NULL reaches this comparison and
+    # PostgreSQL and SQLite agree about which document a person was shown.
     def current_version(locale: I18n.locale, at: Clickwrap.now)
       versions
         .published
         .effective_at_or_before(at)
         .not_retired_at(at)
         .for_locale(locale)
-        .order(effective_at: :desc, created_at: :desc)
+        .order(effective_at: :desc, published_at: :desc, created_at: :desc)
         .first
     end
 

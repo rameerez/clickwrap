@@ -25,4 +25,4 @@ is advice about any of that.
 **Every external claim here carries an exact URL and a source class.** Law, court decisions,
 regulator guidance, technical standards, vendor documentation, and this project's own design
 inferences are labeled separately, because they carry very different weight. Source-code
-citations are pinned to commit `d245b92` of this repository rather than to a moving branch.
+citations are pinned to commit `a1ffe9b` of this repository rather than to a moving branch.

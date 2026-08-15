@@ -801,28 +801,39 @@ An abbreviated receipt looks like:
     }
   ],
   "documents": [
-    { "key": "terms", "version": "2026-08-15", "locale": "en", "sha256": "..." },
     {
-      "key": "privacy_notice",
+      "statement": "terms",
+      "key": "terms",
       "version": "2026-08-15",
       "locale": "en",
-      "sha256": "..."
+      "digest": "sha256:..."
     }
   ],
   "presentation": {
-    "manifest_sha256": "...",
+    "manifest_digest": "sha256:...",
     "submit_button_text": "Create account",
-    "offered_at": "2026-08-15T12:34:56.123456Z"
+    "locale": "en",
+    "capture_channel": "web_browser",
+    "offered_at": "2026-08-15T12:34:56.123456Z",
+    "proves": "The server generated this presentation manifest and accepted a submission bound to it. It does not establish that the person read or understood the documents, saw particular pixels, or received a legally sufficient interface."
   },
-  "outcome": { "type": "User", "reference": "usr_...", "status": "created" },
+  "outcome": { "action": "created", "reference": "gid://my-app/User/1" },
   "request_evidence": {
     "ip_address": { "state": "not_configured" },
     "browser_user_agent": { "state": "not_configured" },
     "ip_geolocation": { "state": "not_configured" }
   },
-  "integrity": { "digest_algorithm": "sha256", "verified": true }
+  "integrity": {
+    "digest_algorithm": "sha256",
+    "event_digest": "sha256:...",
+    "receipt_digest": "sha256:...",
+    "tier": "baseline",
+    "detects": "The recorded digest detects accidental or ordinary modification of the bytes it covers. It does not establish who produced them, when, or that a party controlling both the application and the database could not have written both the record and the digest."
+  }
 }
 ```
+
+Two digests, because they answer different questions. `receipt_digest` covers this receipt body, so a verifier holding only the file can check it. `event_digest` was computed over the event's own canonical body when the event was written, and nothing in a standalone file can re-derive it — it is reported so a reader can compare it against the application's own record.
 
 The bundle can include exact document files, manifest, per-act lifecycle/predecessor graph, protected outcome, optional provider receipts, integrity/checkpoint verification, system explanation, and verifier version.
 

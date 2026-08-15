@@ -407,7 +407,7 @@ set, another `disposition` event explains it, and the row stays where an auditor
 | [Order TED/815/2023, Article 14.12](https://www.boe.es/eli/es/o/2023/07/18/ted815) — retention until at least three years after liquidation | Law |
 | [GDPR Article 5](https://eur-lex.europa.eu/eli/reg/2016/679/art_5/oj/eng) (storage limitation), [Article 17](https://eur-lex.europa.eu/eli/reg/2016/679/art_17/oj/eng) (erasure, with its exceptions including legal claims) | Law |
 | [RFC 791](https://www.rfc-editor.org/info/rfc791/) — IPv4 addresses are 32 bits | Technical standard |
-| `lib/clickwrap/retention_class.rb`, `lib/clickwrap/dsl/retention_builder.rb`, `lib/clickwrap/retention/planner.rb`, `lib/clickwrap/retention/applier.rb`, `lib/clickwrap/retention/disposition.rb`, `lib/clickwrap/models/legal_hold.rb`, `lib/clickwrap/models/disposition_plan.rb` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/retention_class.rb`, `lib/clickwrap/dsl/retention_builder.rb`, `lib/clickwrap/retention/planner.rb`, `lib/clickwrap/retention/applier.rb`, `lib/clickwrap/retention/disposition.rb`, `lib/clickwrap/models/legal_hold.rb`, `lib/clickwrap/models/disposition_plan.rb` at commit `a1ffe9b` | Pinned source code |
 | The plan/apply split, the three-category report, and the hold requirements | Product-design inference |
 
 The periods in every example above are placeholders. Clickwrap does not know your jurisdiction,

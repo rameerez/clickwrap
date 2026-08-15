@@ -314,5 +314,5 @@ after the first release it is in receipts.
 | Source | Class |
 |---|---|
 | `docs/strategy/02-request-evidence.md`, "Public naming rules" — the normative source for this guide | Internal normative design document |
-| `lib/clickwrap/configuration.rb`, `lib/clickwrap/vocabulary.rb`, `lib/clickwrap.rb`, `lib/clickwrap/actor_proxy.rb`, `lib/clickwrap/dsl/policy_builder.rb`, `lib/clickwrap/models/request_evidence.rb` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/configuration.rb`, `lib/clickwrap/vocabulary.rb`, `lib/clickwrap.rb`, `lib/clickwrap/actor_proxy.rb`, `lib/clickwrap/dsl/policy_builder.rb`, `lib/clickwrap/models/request_evidence.rb` at commit `a1ffe9b` | Pinned source code |
 | Every rule, rejection, and rationale above | Product-design inference |

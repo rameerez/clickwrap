@@ -179,5 +179,5 @@ verdict. If it printed one, it would be the least trustworthy line in the output
 | [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785) | Technical standard |
 | [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) | Industry guidance |
 | [GDPR Article 32](https://eur-lex.europa.eu/eli/reg/2016/679/art_32/oj/eng) — security of processing | Law |
-| `lib/clickwrap/digest.rb`, `lib/clickwrap/integrity/chain.rb`, `lib/clickwrap/integrity/anchor.rb`, `lib/clickwrap/integrity/timestamp.rb`, `lib/clickwrap/models/event.rb`, `lib/clickwrap/receipt.rb`, `lib/clickwrap/vocabulary.rb` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/digest.rb`, `lib/clickwrap/integrity/chain.rb`, `lib/clickwrap/integrity/anchor.rb`, `lib/clickwrap/integrity/timestamp.rb`, `lib/clickwrap/models/event.rb`, `lib/clickwrap/receipt.rb`, `lib/clickwrap/vocabulary.rb` at commit `a1ffe9b` | Pinned source code |
 | The tier ladder and every "what Clickwrap does" cell above | Product-design inference |

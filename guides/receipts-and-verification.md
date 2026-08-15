@@ -20,7 +20,7 @@ you need one.
 
 ## Anatomy
 
-Everything below comes from `Clickwrap::Receipt#build_body` at commit `d245b92`. Keys whose
+Everything below comes from `Clickwrap::Receipt#build_body` at commit `a1ffe9b`. Keys whose
 value would be empty are omitted rather than written as `null` — the one exception being
 request evidence, which always reports an explicit state object.
 
@@ -367,8 +367,12 @@ and it has three parts the project holds itself to:
    verification changes in a way an auditor should be able to see in a receipt.
 3. **Every released receipt schema, canonicalization profile, digest field, event action, and
    lifecycle meaning gets a permanent fixture**, and the suite verifies every previously
-   released format on every run. A change to canonicalization, the receipt schema, digest
-   fields, migrations, or lifecycle meaning is not done until the old formats still verify.
+   released format on every run. The fixtures live in `test/fixtures/receipts/` — real
+   receipts, byte for byte, exactly as an earlier version exported them — with their document
+   bytes beside them, and `test/golden_receipts_test.rb` runs the current verifier against all
+   of them. They are never regenerated. When a format legitimately changes, the correct move is
+   to add a fixture under the new schema name and leave the old ones alone: a fixture updated
+   to match new behavior has stopped testing anything.
 
 Two consequences for contributors. Anything touching public vocabulary or an evidence claim — a
 receipt field, a lifecycle meaning, a sentence a receipt prints about what it proves — needs
@@ -385,5 +389,5 @@ installed application; upgrades add migrations and report their exact effects.
 | [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785) | Technical standard |
 | [NIST FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) — SHA-2 is a hash standard, not a signature, identity, or time source | Technical standard |
 | [RFC 3161](https://www.rfc-editor.org/info/rfc3161/) — a separate time-stamp protocol | Technical standard |
-| `lib/clickwrap/receipt.rb`, `lib/clickwrap/receipt_verifier.rb`, `lib/clickwrap/canonical_json.rb`, `lib/clickwrap/digest.rb`, `lib/clickwrap/models/event.rb`, `exe/clickwrap` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/receipt.rb`, `lib/clickwrap/receipt_verifier.rb`, `lib/clickwrap/canonical_json.rb`, `lib/clickwrap/digest.rb`, `lib/clickwrap/models/event.rb`, `exe/clickwrap` at commit `a1ffe9b` | Pinned source code |
 | The profile rules, the two-digest split, and the export design | Product-design inference |

@@ -109,7 +109,13 @@ module Clickwrap
             sanitizer_version: rendered&.fetch(:sanitizer_version, nil),
             storage_backend: backend,
             source_reference: definition.source_reference,
-            effective_at: definition.effective_at,
+            # A version with no declared schedule is effective as soon as it is
+            # published. Storing that explicitly rather than leaving NULL keeps
+            # "which version is current" a deterministic question: PostgreSQL
+            # sorts NULLs first in a descending order and SQLite sorts them
+            # last, so a nullable column here would mean two databases
+            # disagreeing about which document a person was shown.
+            effective_at: definition.effective_at || Clickwrap.now,
             published_at: Clickwrap.now,
             created_at: Clickwrap.now
           )

@@ -54,7 +54,7 @@ Four tables follow, one per group. Columns are the same in each:
 - **What it is** — one sentence.
 - **Where it comes from** — the reader, resolver, or computation that produced it.
 - **Does not establish** — the overclaim this field invites, said out loud.
-- **Encrypted** — whether the value itself is encrypted at rest at commit `d245b92`.
+- **Encrypted** — whether the value itself is encrypted at rest at commit `a1ffe9b`.
 - **Who can read it** — who gets the value rather than a state word.
 - **In a default export** — whether `to_canonical_json` / `Clickwrap.export_receipt` with no
   `include_*` flags contains it.
@@ -134,11 +134,19 @@ in every cell:
 
 - **Where it comes from:** the configured `ip_geolocation_resolver` — one provider's estimate
   about the observed IP address at resolution time. Nothing here is measured.
-- **Encrypted:** no. `encrypt_recorded_ip_geolocation` defaults to `true` and is recorded in
-  the policy snapshot, but at commit `d245b92` `Clickwrap::RequestEvidence::ENCRYPTED_COLUMNS`
-  covers only `ip_address_ciphertext` and `browser_user_agent_ciphertext`, so these columns
-  hold plain values. Treat the setting as a declared intent, not as encryption at rest, and
-  plan your database access controls accordingly.
+- **Encrypted:** yes, when `encrypt_recorded_ip_geolocation` is true, which is the default.
+  Every value column below is in `Clickwrap::RequestEvidence::ENCRYPTED_COLUMNS` and carries
+  ciphertext at rest — including the country code, which is lower precision than a coordinate
+  but is still personal data once it is attached to an identified actor and an event.
+  Coordinates are stored as strings rather than decimals for this reason and one other: a
+  receipt serializes them as strings anyway, so a decimal column would put a rounding step
+  between what the provider said and what the evidence shows.
+
+  The **provenance** columns beside them — provider name, provider source, database version and
+  digest, accuracy radius, estimated flag, resolution time, unavailable reason — are
+  deliberately *not* encrypted. They say how certain the values are rather than what they are,
+  they are what `clickwrap:doctor` and `Clickwrap::Privacy.inventory` read, and encrypting them
+  would hide the uncertainty while leaving the estimate itself just as sensitive.
 - **Who can read it / in a default export:** only a viewer authorized for the
   `ip_geolocation` category with a `because:`; never in a default export.
 - **Deletion trigger and result:** one category, one deletion. Deleting IP geolocation nulls
@@ -478,5 +486,5 @@ can never undo or stand in for the Clickwrap event. Clickwrap ships no Footprint
 | [RFC 791](https://www.rfc-editor.org/info/rfc791/) — IPv4 addresses are 32 bits, which is why the annex binding digest is keyed rather than a plain hash | Technical standard |
 | [Trackdown pinned result object](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/location_result.rb#L5-L55), [pinned Cloudflare provider](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/providers/cloudflare_provider.rb#L29-L64) | Pinned source code |
 | [Footprinted pinned model](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/footprint.rb#L7-L52), [tracking concern](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/model.rb#L7-L65) | Pinned source code |
-| `lib/clickwrap/models/request_evidence.rb`, `lib/clickwrap/request_evidence_extractor.rb`, `lib/clickwrap/ip_geolocation/trackdown_resolver.rb`, `lib/clickwrap/receipt.rb` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/models/request_evidence.rb`, `lib/clickwrap/request_evidence_extractor.rb`, `lib/clickwrap/ip_geolocation/trackdown_resolver.rb`, `lib/clickwrap/receipt.rb` at commit `a1ffe9b` | Pinned source code |
 | The field selection, the ordering of evidentiary priority, and every API prescription above | Product-design inference |

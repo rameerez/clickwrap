@@ -15,7 +15,7 @@ part that is actually yours.
 ## What the reference views do
 
 All of this is in `app/views/clickwrap/shared/_fields.html.erb`,
-`_statement.html.erb`, and `_error_summary.html.erb` at commit `d245b92`, and is exercised by
+`_statement.html.erb`, and `_error_summary.html.erb` at commit `a1ffe9b`, and is exercised by
 the gem's own suite.
 
 ### Labels and programmatic names
@@ -212,5 +212,5 @@ expensive to miss.
 | [WCAG 2.2](https://www.w3.org/TR/WCAG22/) | Technical standard |
 | [15 U.S.C. § 7001(d)](https://www.law.cornell.edu/uscode/text/15/7001) — accurate reflection, accessibility, and reproducibility of electronic records | Law |
 | [Berman v. Freedom Financial Network](https://cdn.ca9.uscourts.gov/datastore/opinions/2022/04/05/20-16900.pdf), [Toth v. Everly Well](https://www.ca1.uscourts.gov/sites/ca1/files/opnfiles/23-1727P-01A.pdf) — US appellate decisions assess conspicuous notice and unambiguous assent in the context of the whole interface; no control, color, or placement is a universal safe harbor | Cases |
-| `app/views/clickwrap/shared/_fields.html.erb`, `_statement.html.erb`, `_error_summary.html.erb`, `lib/clickwrap/linter.rb`, `lib/clickwrap/form_builder_extensions.rb` at commit `d245b92` | Pinned source code |
+| `app/views/clickwrap/shared/_fields.html.erb`, `_statement.html.erb`, `_error_summary.html.erb`, `lib/clickwrap/linter.rb`, `lib/clickwrap/form_builder_extensions.rb` at commit `a1ffe9b` | Pinned source code |
 | The division of responsibility and the checklist above | Product-design inference |

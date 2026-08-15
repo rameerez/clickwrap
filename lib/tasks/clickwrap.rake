@@ -447,3 +447,30 @@ namespace :clickwrap do
     ClickwrapTasks.say("  action.record_provider_outcome_unknown!(reason: \"...\")")
   end
 end
+
+namespace :clickwrap do
+  namespace :import do
+    namespace :fine_print do
+      desc "Preview what a FinePrint import would record, without writing anything"
+      task plan: :environment do
+        report = Clickwrap::Import::FinePrint.plan
+
+        ClickwrapTasks.heading("FinePrint import plan")
+        ClickwrapTasks.say(report.respond_to?(:message) ? report.message : report.to_s)
+        ClickwrapTasks.say
+        ClickwrapTasks.say("Nothing has been written. Fields FinePrint never recorded — the presentation")
+        ClickwrapTasks.say("manifest, the IP address, the call to action, the protected action — stay")
+        ClickwrapTasks.say("unknown in the imported events. Historical weakness stays visible rather than")
+        ClickwrapTasks.say("being laundered into modern certainty.")
+      end
+    end
+
+    desc "Import FinePrint contract versions and signatures as imported_legacy events"
+    task fine_print: :environment do
+      report = Clickwrap::Import::FinePrint.import!
+
+      ClickwrapTasks.heading("FinePrint import")
+      ClickwrapTasks.say(report.respond_to?(:message) ? report.message : report.to_s)
+    end
+  end
+end

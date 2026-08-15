@@ -134,6 +134,19 @@ module Clickwrap
       not_disposed.where(on_legal_hold: false).where(retain_core_event_until: ...at)
     }
 
+    # Questions an `after_event_is_committed` hook actually asks. A host wiring
+    # up "stop processing when someone withdraws" should not have to know that
+    # the answer is a string comparison against an event-type vocabulary.
+    def consent_was_withdrawn? = event_type == "withdrawal"
+    def consent_was_granted? = capture? && statements.any? { |s| s.kind == "consent" && s.answered? }
+    def declaration_was_corrected? = event_type == "correction"
+    def authorization_was_consumed? = event_type == "consumption"
+    def evidence_was_disposed? = event_type == "disposition"
+
+    # The purposes this event affected, for a hook that needs to know which
+    # processing to stop.
+    def purpose_keys = statements.filter_map(&:purpose_key).uniq
+
     def capture? = event_type == "capture"
     def imported? = %w[imported_legacy external_receipt].include?(event_type)
     def exemption? = event_type == "exemption"

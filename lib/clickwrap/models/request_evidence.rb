@@ -40,9 +40,30 @@ module Clickwrap
     # been read. The columns are named `_ciphertext` so that a developer reading
     # the schema, a database dump, or a query result can tell at a glance that
     # the plain value is not supposed to be there.
+    # The geolocation VALUE columns are encrypted too, when the host asks for
+    # it. The provenance columns beside them — provider name, database version,
+    # accuracy radius, resolution time — are not: they say how certain the
+    # values are rather than what they are, they are what `clickwrap:doctor` and
+    # the privacy inventory read, and encrypting them would hide the uncertainty
+    # while leaving the estimate itself just as sensitive.
+    #
+    # A country code is lower precision than a coordinate, but it is still
+    # personal data once it is attached to an identified actor and an event, so
+    # it is in this list rather than treated as harmless.
     ENCRYPTED_COLUMNS = {
       ip_address_ciphertext: :encrypt_recorded_ip_addresses,
-      browser_user_agent_ciphertext: :encrypt_recorded_browser_user_agents
+      browser_user_agent_ciphertext: :encrypt_recorded_browser_user_agents,
+      ip_geolocation_country_code: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_country_name: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_region_name: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_region_code: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_city_name: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_postal_code: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_latitude: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_longitude: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_timezone: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_continent_code: :encrypt_recorded_ip_geolocation,
+      ip_geolocation_metro_code: :encrypt_recorded_ip_geolocation
     }.freeze
 
     def self.apply_configured_encryption!

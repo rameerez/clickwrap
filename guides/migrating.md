@@ -318,5 +318,5 @@ decision to make explicitly rather than one to discover from a failing predicate
 |---|---|
 | [FinePrint README at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/README.md#L7-L25) | Pinned source code |
 | [FinePrint signature model at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/app/models/fine_print/signature.rb#L1-L33) | Pinned source code |
-| `lib/clickwrap/import/legacy.rb`, `lib/clickwrap/import/fine_print.rb`, `lib/clickwrap/vocabulary.rb` at commit `d245b92` | Pinned source code |
+| `lib/clickwrap/import/legacy.rb`, `lib/clickwrap/import/fine_print.rb`, `lib/clickwrap/vocabulary.rb` at commit `a1ffe9b` | Pinned source code |
 | The never-synthesize rule, the `unknown:` vocabulary, and the dry-run-first workflow | Product-design inference |

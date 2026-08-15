@@ -192,6 +192,46 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     assert fragment["unavailable_reason"].present?
   end
 
+  test "the recorded values are ciphertext at rest, and their provenance is not" do
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                          http_request: @http_request,
+                                                          answers: { regulated_action: "1" })
+
+    annex = receipt.event.reload.request_evidence
+    raw = ActiveRecord::Base.connection.select_one(
+      "SELECT ip_address_ciphertext, ip_geolocation_city_name, ip_geolocation_latitude, " \
+      "ip_geolocation_provider_name FROM clickwrap_request_evidence WHERE id = #{annex.id}"
+    )
+
+    # `encrypt_recorded_ip_geolocation` defaults to true, so it has to actually
+    # do something. A city name is lower precision than a coordinate but is
+    # still personal data once it is attached to an identified actor and an
+    # event, so it is encrypted too.
+    assert_equal "Madrid", annex.ip_geolocation_city_name
+    assert_not_equal "Madrid", raw["ip_geolocation_city_name"]
+    assert_not_equal "203.0.113.7", raw["ip_address_ciphertext"]
+    assert_not_equal "40.4168", raw["ip_geolocation_latitude"]
+
+    # Provenance stays readable: it says how certain the values are rather than
+    # what they are, and `clickwrap:doctor` and the privacy inventory read it.
+    assert_equal "static_test_resolver", raw["ip_geolocation_provider_name"]
+  end
+
+  test "coordinates are stored as strings, so the receipt shows what the provider said" do
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                          http_request: @http_request,
+                                                          answers: { regulated_action: "1" })
+
+    # A decimal column would introduce a rounding step between what the provider
+    # said and what the evidence shows, for a value the receipt serializes as a
+    # string anyway.
+    assert_equal "40.4168", receipt.event.reload.request_evidence.ip_geolocation_latitude
+  end
+
   # --- The annex is separately disposable ------------------------------------
 
   test "deleting a recorded IP address leaves the core event intact and verifiable" do
