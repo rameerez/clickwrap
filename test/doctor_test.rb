@@ -42,7 +42,7 @@ class DoctorTest < ActiveSupport::TestCase
     # having been loaded, and a doctor that printed "0 policies compiled ✓"
     # would be reassuring about the one thing that is broken.
     assert warning?(findings, /no policies are compiled/)
-    assert_match(/config\/clickwrap\.rb/, message_for(findings, /no policies are compiled/))
+    assert_match(%r{config/clickwrap\.rb}, message_for(findings, /no policies are compiled/))
     assert ok?(findings, /no policy references a document/)
   end
 
@@ -124,7 +124,7 @@ class DoctorTest < ActiveSupport::TestCase
 
   test "an event whose bytes changed after it was written is a problem that names one of them" do
     receipt = capture_clickwrap(:signup, actor: @user)
-    Clickwrap::Event.where(id: receipt.event_id).update_all(reason: "rewritten by hand") # rubocop:disable Rails/SkipsModelValidations
+    Clickwrap::Event.where(id: receipt.event_id).update_all(reason: "rewritten by hand")
 
     findings = Clickwrap::Doctor.new.report
     problem = findings.find { |finding| finding.problem? && finding.message.include?("event digests") }
@@ -139,9 +139,10 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "records past a retention rule and holds past their review date are warnings" do
-    receipt = capture_clickwrap(:signup, actor: @user)
-    receipt.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
-                                 review_on: 1.month.from_now)
+    capture_clickwrap(:signup, actor: @user)
+    held = capture_clickwrap(:signup, actor: create_user)
+    held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
+                              review_on: 1.month.from_now)
 
     assert ok?(Clickwrap::Doctor.new.report, /legal hold in effect, none past review/)
 
@@ -161,10 +162,14 @@ class DoctorTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
 
+    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+
     Clickwrap.authorize_external_action!(
-      :withdrawal_authorization, actor: @user, subject: withdrawal, provider_name: "stripe",
-      submission: submission_for(presentation, { withdrawal_requirements: "1",
-                                                 ride_exclusivity: "1", withdrawal: "1" })
+      :withdrawal_authorization,
+      actor: @user,
+      subject: withdrawal,
+      provider_name: "stripe",
+      submission: submission_for(presentation, answers)
     )
 
     findings = Clickwrap::Doctor.new.report

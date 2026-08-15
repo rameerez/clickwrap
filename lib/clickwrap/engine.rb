@@ -123,6 +123,24 @@ module Clickwrap
     # code; `to_prepare` re-reads them on every boot and every development
     # reload, and compilation raises on a mistake rather than deferring it to
     # the first person who tries to sign up.
+    # Every `requires_clickwrap` gate, checked once the host's routes exist.
+    #
+    # `after_routes_loaded` rather than `after_initialize`, and the difference
+    # matters: `after_initialize` runs while the application is still
+    # initializing, which is precisely when the routes reloader declines to
+    # load. Checking there would report "the engine is not mounted" to
+    # applications that mount it perfectly well, which is worse than not
+    # checking at all. This hook fires at the one moment the answer is knowable.
+    #
+    # A dead-end gate is still better found at boot than by the first person it
+    # stops, so the request path keeps its own backstop for controllers that are
+    # autoloaded later in development.
+    if config.respond_to?(:after_routes_loaded)
+      config.after_routes_loaded do
+        Clickwrap::ControllerHelpers.verify_registered_gates!
+      end
+    end
+
     config.to_prepare do
       Clickwrap::Services::LoadPolicies.new.call
 

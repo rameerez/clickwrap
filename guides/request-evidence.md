@@ -204,7 +204,7 @@ resolution time, invites a reader to treat a guess about an address as a fact ab
 | `ip_geolocation_delete_after` / `ip_geolocation_retain_until_rule` | The schedule recorded at capture | Policy `delete_after:` / `retain_until:`, else the configuration default | — | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_deleted_at` | When the values were deleted | Set by the disposition | — | No | Authorized `ip_geolocation` viewers | No | — | This is what makes the state `deleted_after_retention` |
 
-There are seven distinct reasons an estimate can be missing, and they are kept apart because
+There are six distinct reasons an estimate can be missing, and they are kept apart because
 they tell an auditor completely different things:
 
 | Reason | What actually happened |

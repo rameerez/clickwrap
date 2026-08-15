@@ -14,5 +14,10 @@ Rails.application.routes.draw do
 
   resources :withdrawals, only: %i[new create show]
 
+  # A host page behind `requires_clickwrap`, so the gate's redirect (HTML) and
+  # its structured `clickwrap_required` response (JSON) are exercised through a
+  # real request rather than by calling the private helper.
+  get "/billing", to: "billing#show", as: :billing
+
   root to: "sessions#home"
 end

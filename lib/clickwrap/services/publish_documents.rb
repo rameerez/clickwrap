@@ -142,8 +142,18 @@ module Clickwrap
         result
       end
 
-      def storage_backend_for(definition)
-        definition.source_kind == :resolver ? "resolver" : Clickwrap.config.store_document_contents_in.to_s
+      # Where the bytes come FROM and where they are KEPT are different
+      # questions, and a per-document `resolver:` answers the first one only —
+      # exactly like `from:` and `content:`. Publishing calls it once, and from
+      # then on the frozen snapshot is the evidence.
+      #
+      # `config.store_document_contents_in = :resolver` is the other question:
+      # it says the application will hand back the bytes on every read rather
+      # than have Clickwrap keep them. That adapter still has to return
+      # immutable bytes that hash to the recorded digest, which is verified on
+      # every read.
+      def storage_backend_for(_definition)
+        Clickwrap.config.store_document_contents_in.to_s
       end
 
       # Larger applications can keep document bodies in content-addressed object

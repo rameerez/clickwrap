@@ -44,7 +44,8 @@ class FormBuilderTest < ActionView::TestCase
     links = css_select("a.clickwrap-documents__link")
     # The accessible name is the document's own name. "Click here" tells a person
     # reading a link list nothing about what they are about to accept.
-    assert_equal ["Terms", "Privacy notice"], links.map { |link| link.text.strip }
+    link_texts = links.map { |link| link.text.strip }
+    assert_equal ["Terms", "Privacy notice"], link_texts
     links.each do |link|
       assert_equal "noopener", link["rel"]
       assert_equal "_blank", link["target"]
@@ -53,7 +54,7 @@ class FormBuilderTest < ActionView::TestCase
     # A link that only appears after the call to action has been pressed is not a
     # link to anything.
     assert_operator rendered.index("clickwrap-documents__link"), :<,
-                    rendered.index(%r{<input[^>]*type="submit"}),
+                    rendered.index(/<input[^>]*type="submit"/),
                     "document links must appear before the submit button in source order"
   end
 
@@ -118,13 +119,24 @@ class FormBuilderTest < ActionView::TestCase
     assert_equal "Create account", Clickwrap::PresentationManifest.from_token(presentation_token).submit_button_text
   end
 
+  test "an explicit capture channel travels into the manifest instead of being assumed" do
+    render_clickwrap(:manual_bank_transfer, submit: "Record the transfer", capture_channel: :operator)
+
+    # Where a capture came from is recorded, never guessed. This policy only
+    # accepts operator captures, so a default of web_browser would be refused —
+    # which is the point: the channel is a declared fact.
+    assert_equal "operator", Clickwrap::PresentationManifest.from_token(presentation_token).to_h["capture_channel"]
+  end
+
   # --- An explicit yes/no decision --------------------------------------------
 
   test "an explicit choice renders every option unselected inside a labelled group" do
     render_clickwrap(:research_contact, submit: "Save")
 
     radios = css_select("input[type=radio]")
-    assert_equal %w[yes no], radios.map { |radio| radio["value"] }
+    choices = radios.map { |radio| radio["value"] }
+
+    assert_equal %w[yes no], choices
     radios.each { |radio| assert_nil radio["checked"] }
     refute_match(/\bchecked\b/, rendered)
 

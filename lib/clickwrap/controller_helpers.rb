@@ -37,7 +37,19 @@ module Clickwrap
       # `remediation_path:` the host owns. Everything else in `**options` is
       # passed straight through to `before_action` (`only:`, `except:`, `if:`).
       def requires_clickwrap(policy_key, remediation_path: nil, **before_action_options)
-        ControllerHelpers.verify_remediation_is_possible!(
+        # The dead-end check is REGISTERED here, not run here.
+        #
+        # Rails eager-loads controllers before it draws the route set, so a
+        # class body in production can run while `Rails.application.routes` is
+        # still empty — and a check that ran now would fail on a perfectly
+        # well-configured application just because it looked too early. So the
+        # gate records itself, an `after_initialize` sweep checks every
+        # registered gate once the routes exist, and the request path checks
+        # again as a backstop for a controller that was autoloaded later.
+        #
+        # The developer still gets the same sentence at boot. It just comes from
+        # a moment when the answer is knowable.
+        ControllerHelpers.register_gate(
           policy_key,
           remediation_path: remediation_path,
           gate: "#{name || "an anonymous controller"}.requires_clickwrap"
@@ -68,19 +80,25 @@ module Clickwrap
         controller.send(method_name)
       end
 
-      # Whether a required gate has somewhere to send someone who has not
-      # completed the policy yet.
-      #
-      # This is checked when the gate is declared, which in a booted application
-      # is usually after the host's routes are drawn — but not always. Rails
-      # eager-loads controllers (`:eager_load!`) BEFORE it loads the route set
-      # (`:set_routes_reloader_hook`), so in production the class body of a
-      # gated controller can run while `Rails.application.routes` is still
-      # empty. Rails 7.1 added `reload_routes_unless_loaded` for exactly this
-      # situation; when it is unavailable or fails for a reason of the host's
-      # own, we defer rather than guess, and the same check runs again on the
-      # first request the gate handles. Either way the developer gets the same
-      # sentence — never a silent dead end.
+      # Remembers a declared gate so it can be checked once the route set
+      # exists. Re-declaring the same gate (a development reload) replaces the
+      # entry rather than accumulating duplicates.
+      def register_gate(policy_key, remediation_path:, gate:)
+        registered_gates[[gate, policy_key.to_s]] = remediation_path
+      end
+
+      def registered_gates
+        @registered_gates ||= {}
+      end
+
+      # Run from the engine's `after_initialize`, when the host's routes are
+      # drawn and the answer is actually knowable.
+      def verify_registered_gates!
+        registered_gates.each do |(gate, policy_key), remediation_path|
+          verify_remediation_is_possible!(policy_key, remediation_path: remediation_path, gate: gate)
+        end
+      end
+
       def verify_remediation_is_possible!(policy_key, remediation_path:, gate:)
         return true if remediation_path
         return true unless defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
@@ -107,7 +125,16 @@ module Clickwrap
               "Clickwrap will not compile one."
       end
 
+      # Rails names a mounted engine's URL-helper proxy after the engine's
+      # railtie name, so `mounted_helpers` defining `clickwrap` is the same fact
+      # as "this application mounted us" — and it is a fact Rails maintains
+      # rather than one inferred by walking route objects, whose wrapping has
+      # changed shape more than once across versions. The route scan stays as a
+      # second opinion for anything unusual.
       def engine_is_mounted?
+        helpers = ::Rails.application.routes.mounted_helpers
+        return true if helpers&.instance_methods&.include?(:clickwrap)
+
         ::Rails.application.routes.routes.any? { |route| mounts_clickwrap_engine?(route) }
       rescue StandardError
         false
@@ -124,7 +151,16 @@ module Clickwrap
         return :unavailable unless ::Rails.application.respond_to?(:reload_routes_unless_loaded)
 
         ::Rails.application.reload_routes_unless_loaded
-        :loaded
+
+        # Asking is not the same as getting. From Rails 7.2 on,
+        # `reload_routes_unless_loaded` is a no-op until the application has
+        # finished initializing — and every moment a gate is checked at boot
+        # (an eager-loaded class body, `after_initialize`) is before that, because
+        # `:set_routes_reloader_hook` runs last. Reporting `:loaded` there would
+        # tell a host that mounts the engine that the engine is not mounted, and
+        # refuse to boot over it. So report what is actually there and let the
+        # check defer to the first request, exactly as documented above.
+        ::Rails.application.routes.routes.any? ? :loaded : :unavailable
       rescue StandardError
         :unavailable
       end

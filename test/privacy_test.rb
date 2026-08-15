@@ -191,7 +191,7 @@ class PrivacyTest < ActiveSupport::TestCase
     # Each item says what the reviewer would be overriding, and is marked as an
     # actor request rather than a retention item, because the applier re-checks
     # those two for different things.
-    assert items.all? { |item| item["eligibility"] == "actor_request" }
+    assert(items.all? { |item| item["eligibility"] == "actor_request" })
     assert_includes items.map { |item| item["event_id"] }, receipt.event_id
     assert_operator summary["still_within_retention_period"], :>=, 1
     assert_match(/Still inside its retention period/, items.first["detail"])

@@ -101,7 +101,7 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
     )
 
     assert_not result.success?
-    assert result.failures.any? { |check| check.name.include?("terms") }
+    assert(result.failures.any? { |check| check.name.include?("terms") })
   end
 
   private
