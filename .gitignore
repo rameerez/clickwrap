@@ -14,7 +14,11 @@ Gemfile.lock
 gemfiles/*.lock
 
 test/dummy/db/*.sqlite3*
-test/dummy/log/*.log
+# A `db:test:prepare` roundtrip can leave an empty schema.rb here, and while it
+# exists `maintain_test_schema!` loads it over the real one and the whole suite
+# dies with "Migrations are pending". The migrations are the source of truth.
+test/dummy/db/schema.rb
+test/dummy/log/*.log*
 test/dummy/tmp/
 test/dummy/storage/
 test/dummy/.bundle/

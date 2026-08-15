@@ -368,6 +368,18 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # string stands in for "no tenant" and "no subject".
     # ---------------------------------------------------------------------------
     create_table :clickwrap_statement_states, id: primary_key_type do |t|
+      # A digest of the five identity columns below, carrying the unique index.
+      #
+      # This is a portability decision with teeth. Those five hold a policy key,
+      # a statement key, a GlobalID-shaped actor reference, a tenant key, and a
+      # subject key; five string columns exceed MySQL's 3072-byte index limit
+      # under utf8mb4 even at a reduced length, so a composite unique index over
+      # them cannot be created there at all. The guarantee this index provides is
+      # the one that keeps a double submit from becoming two debits, so it has to
+      # exist on every supported database — hence one fixed-width column, with an
+      # ordinary lookup index over the readable ones beside it.
+      t.string :identity_digest, null: false, limit: 71
+
       t.string :policy_key, null: false
       t.string :statement_key, null: false
       t.string :kind, null: false
@@ -401,9 +413,11 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.timestamps
     end
 
-    add_index :clickwrap_statement_states,
-              [ :policy_key, :statement_key, :actor_reference, :tenant_key, :subject_key ],
+    add_index :clickwrap_statement_states, :identity_digest,
               unique: true, name: "index_clickwrap_statement_states_on_identity"
+    add_index :clickwrap_statement_states,
+              [ :policy_key, :statement_key, :actor_reference ],
+              name: "index_clickwrap_statement_states_on_lookup"
     add_index :clickwrap_statement_states, [ :actor_reference, :state ],
               name: "index_clickwrap_statement_states_on_actor_and_state"
     add_index :clickwrap_statement_states, :expires_at,

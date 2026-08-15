@@ -223,7 +223,10 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get "/legal/receipts"
 
     assert_response :success
-    assert_includes response.body, mine.event_id
+    assert_includes response.body, mine.event_id,
+                    "the viewer's own event is missing from their own list. Recorded actor " \
+                    "references: #{Clickwrap::Event.pluck(:actor_reference).inspect}; the viewer's " \
+                    "is #{@user.clickwrap_actor_reference.inspect}"
     refute_includes response.body, theirs.event_id
   end
 

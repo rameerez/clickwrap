@@ -21,6 +21,12 @@ module Clickwrap
     belongs_to :policy_revision, class_name: "Clickwrap::PolicyRevision", optional: true
 
     validates :policy_key, :statement_key, :actor_reference, :current_event_id, presence: true
+    validates :identity_digest, presence: true
+
+    # Recomputed on every save rather than only on create: if any part of the
+    # identity is ever corrected, the digest has to follow it or the unique
+    # index would be guarding a value nothing matches.
+    before_validation :assign_identity_digest
     validates :kind, inclusion: { in: Vocabulary::KINDS }
     validates :state, inclusion: { in: Vocabulary::STATES }
 
@@ -40,13 +46,22 @@ module Clickwrap
     # string rather than NULL — otherwise a policy with no subject would happily
     # accumulate duplicate live grants.
     def self.identity_for(policy_key:, statement_key:, actor_reference:, tenant_key: nil, subject_key: nil)
-      {
+      attributes = {
         policy_key: policy_key.to_s,
         statement_key: statement_key.to_s,
         actor_reference: actor_reference.to_s,
         tenant_key: tenant_key.to_s,
         subject_key: subject_key.to_s
       }
+
+      attributes.merge(identity_digest: identity_digest_for(attributes))
+    end
+
+    # The digest the unique index is taken over. Canonicalized first, so the
+    # value depends on the five parts and not on the order a caller happened to
+    # build the hash in.
+    def self.identity_digest_for(attributes)
+      Digest.digest_canonical(attributes.transform_keys(&:to_s))
     end
 
     def self.subject_key_for(subject)
@@ -93,6 +108,16 @@ module Clickwrap
     def to_s = "#{kind} #{statement_key} for #{actor_reference} (#{state})"
 
     private
+
+    def assign_identity_digest
+      self.identity_digest = self.class.identity_digest_for(
+        policy_key: policy_key.to_s,
+        statement_key: statement_key.to_s,
+        actor_reference: actor_reference.to_s,
+        tenant_key: tenant_key.to_s,
+        subject_key: subject_key.to_s
+      )
+    end
 
     def expiry_error
       case kind
