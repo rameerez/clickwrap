@@ -316,10 +316,12 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
       post "/legal/consents/product_updates/withdrawal"
     end
 
-    # There is no active grant left to withdraw. The screen says so instead of
-    # appending a second withdrawal for something that is already withdrawn, and
-    # the answer to "is this purpose withdrawn" is unchanged either way.
-    assert_response 422
+    # Pressing the button twice is not an error worth showing a person: the
+    # purpose is withdrawn either way, which is exactly what they asked for. So
+    # the second press redirects like the first and appends nothing — as
+    # distinct from withdrawing something that was never granted, which is a
+    # different situation and does get an error.
+    assert_redirected_to "/legal/"
     refute @user.clickwraps.consented_to?(:product_updates)
   end
 

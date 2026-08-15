@@ -24,16 +24,28 @@ module Clickwrap
       def withdraw!(purpose_key, actor:, because:, tenant: nil, subject: nil, http_request: nil)
         require_reason!(because, "Withdrawing consent")
 
-        states = StatementState
-                 .for_actor(reference_for(actor))
-                 .for_purpose(purpose_key)
-                 .where(kind: "consent", state: "active")
+        for_purpose = StatementState
+                      .for_actor(reference_for(actor))
+                      .for_purpose(purpose_key)
+                      .where(kind: "consent")
+
+        states = for_purpose.where(state: "active")
 
         if states.empty?
+          # Two different situations, told apart, because a person pressing
+          # "withdraw" twice is not the same as an application withdrawing
+          # something that was never granted — and a controller showing the
+          # first person an error would be both wrong and alarming.
+          if for_purpose.where(state: "withdrawn").exists?
+            raise AlreadyWithdrawnError,
+                  "Consent for #{purpose_key.inspect} was already withdrawn. Nothing further " \
+                  "was recorded; withdrawing twice is not an error worth showing a person."
+          end
+
           raise NotWithdrawableError,
-                "There is no active consent for #{purpose_key.inspect} to withdraw. It may have " \
-                "been withdrawn already, or never granted — leaving an optional control " \
-                "unselected creates no grant."
+                "There is no consent for #{purpose_key.inspect} to withdraw. It was never " \
+                "granted — and leaving an optional control unselected creates no grant, so " \
+                "there may be nothing here to find."
         end
 
         events = states.map do |state|
