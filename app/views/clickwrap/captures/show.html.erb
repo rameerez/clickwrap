@@ -1,0 +1,31 @@
+<%#
+  The standalone capture screen: one policy, on a page of its own.
+
+  The form posts back to the SAME URL it was served from, so a failed
+  submission re-renders here — reloadable, shareable, and in the navigation
+  context the host intended, with or without JavaScript.
+%>
+<%= clickwrap_styles %>
+
+<div class="clickwrap clickwrap-screen">
+  <header class="clickwrap-screen__header">
+    <h1 class="clickwrap-screen__title"><%= t("clickwrap.captures.title") %></h1>
+    <p class="clickwrap-screen__intro"><%= t("clickwrap.captures.intro") %></p>
+  </header>
+
+  <% if flash.now[:alert].present? || flash[:alert].present? %>
+    <p class="clickwrap-flash clickwrap-flash--alert" role="alert"><%= flash[:alert] %></p>
+  <% end %>
+
+  <%= form_with url: clickwrap_routes.capture_path(@presentation.policy_key),
+        method: :post,
+        class: "clickwrap-screen__form" do %>
+    <%= hidden_field_tag :return_to, @return_to, id: nil %>
+
+    <%= render "clickwrap/shared/fields",
+          presentation: @presentation,
+          errors: clickwrap_errors,
+          submit: { text: @presentation.submit_button_text, options: {} },
+          wrapper_options: {} %>
+  <% end %>
+</div>

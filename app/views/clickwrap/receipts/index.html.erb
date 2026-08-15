@@ -1,0 +1,38 @@
+<%#
+  The viewer's own receipts, newest first.
+
+  Every row here passed the host's `authorize_receipt_access_with` callback. An
+  unconfigured host sees an empty list, which is the safe direction to be wrong
+  in: a receipt is only shown once somebody decided it should be.
+%>
+<%= clickwrap_styles %>
+
+<div class="clickwrap clickwrap-screen">
+  <header class="clickwrap-screen__header">
+    <h1 class="clickwrap-screen__title"><%= t("clickwrap.receipts.index_title") %></h1>
+  </header>
+
+  <% if @events.any? %>
+    <ul class="clickwrap-receipts">
+      <% @events.each do |event| %>
+        <li class="clickwrap-receipts__item">
+          <a class="clickwrap-receipts__link" href="<%= clickwrap_receipt_path(event.id) %>">
+            <%= event.policy_key %>
+          </a>
+          <%# Deliberately a plain UTC timestamp rather than `l()`: many hosts do
+              not bundle rails-i18n, and a time recorded by a server is clearest
+              when it is shown exactly as it was recorded. %>
+          <span class="clickwrap-receipts__meta">
+            <%= t("clickwrap.receipts.recorded_at_by_server") %>
+            <%= event.recorded_at_by_server&.utc&.strftime("%Y-%m-%d %H:%M UTC") %>
+          </span>
+          <span class="clickwrap-receipts__meta">
+            <%= t("clickwrap.event_types.#{event.event_type}", default: event.event_type.humanize) %>
+          </span>
+        </li>
+      <% end %>
+    </ul>
+  <% else %>
+    <p class="clickwrap-empty"><%= t("clickwrap.receipts.empty") %></p>
+  <% end %>
+</div>

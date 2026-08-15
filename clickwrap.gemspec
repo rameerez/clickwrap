@@ -8,38 +8,43 @@ Gem::Specification.new do |spec|
   spec.authors = ["rameerez"]
   spec.email = ["rubygems@rameerez.com"]
 
-  spec.summary = "Name reservation: clickwrap is not implemented or published yet"
-  spec.description = "This release holds the clickwrap gem name while the product is being defined; it is deliberately empty. It ships no engine, no models, no migrations, no generators, and no public API, and declares no runtime dependencies. Do not depend on it. The intended gem is an evidence-and-assent layer for Rails covering agreements, consent, declarations, and authorizations, and its README describes that intended design as a contract to build against, not as code that exists today. A functional release will be published as 0.1.0 or later."
+  spec.summary = "Trustworthy agreements, consent, declarations, and authorizations for Rails"
+  spec.description = "clickwrap is the missing evidence-and-assent layer for Rails. It turns terms acceptance, privacy notice acknowledgment, GDPR consent, factual declarations, operator attestations, and one-time authorizations into one coherent Rails primitive: immutable versioned documents, server-owned policies, signed presentation manifests that stop render-to-submit substitution, append-only evidence events, and canonical receipts anyone can verify independently. Required evidence and the protected database action commit in the same transaction, so an account, payout, or provider handoff can never succeed without the evidence that authorized it. Consent can actually be withdrawn, declarations expire and get corrected without rewriting history, authorizations are consumed once, and optional IP address, browser user-agent, and IP geolocation evidence is off by default, encrypted, separately disposable, and named field by field in plain English. No JavaScript package, no Redis, no background job, no external account, no legal-document vendor. clickwrap provides evidence mechanics only: your application and its counsel still own the legal text, lawful basis, substantive validity, capacity, authority, and retention periods, and the gem never claims compliance, enforceability, identity, or trusted time."
   spec.homepage = "https://github.com/rameerez/clickwrap"
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.1.0"
+  spec.required_ruby_version = ">= 3.2.0"
 
   spec.metadata["allowed_push_host"] = "https://rubygems.org"
-  spec.metadata["homepage_uri"] = spec.homepage
-  spec.metadata["source_code_uri"] = "#{spec.homepage}/tree/main"
+  spec.metadata["source_code_uri"] = spec.homepage
   spec.metadata["changelog_uri"] = "#{spec.homepage}/blob/main/CHANGELOG.md"
   spec.metadata["bug_tracker_uri"] = "#{spec.homepage}/issues"
+  spec.metadata["documentation_uri"] = "#{spec.homepage}#readme"
   spec.metadata["rubygems_mfa_required"] = "true"
 
   gemspec = File.basename(__FILE__)
+  development_files = %w[.simplecov AGENTS.md Appraisals CLAUDE.md Rakefile context7.json]
   spec.files = IO.popen(%w[git ls-files -z], chdir: __dir__, err: IO::NULL) do |ls|
-    ls.readlines("\x0", chomp: true).reject do |file|
-      (file == gemspec) ||
-        file.start_with?(*%w[
-          .github/
-          bin/
-          gemfiles/
-          spec/
-          test/
-        ]) ||
-        %w[
-          .gitignore
-          AGENTS.md
-        ].include?(file)
+    ls.readlines("\x0", chomp: true).reject do |f|
+      (f == gemspec) || development_files.include?(f) ||
+        f.start_with?(*%w[bin/ gemfiles/ test/ spec/ features/ .git .github appveyor Gemfile])
     end
   end
-
+  spec.bindir = "exe"
+  spec.executables = spec.files.grep(%r{\Aexe/}) { |f| File.basename(f) }
   spec.require_paths = ["lib"]
 
-  # No runtime dependencies: there is nothing here to depend on anything yet.
+  # Runtime dependencies are the Rails components the approved surface actually
+  # uses, never the `rails` meta-gem. Clickwrap's whole value is long-lived
+  # evidence in your own database, so installing it must not drag in
+  # infrastructure you then have to keep alive for the evidence to stay
+  # readable. Deliberately NOT dependencies, and never required at runtime:
+  # Devise, `trackdown`, Active Storage, Active Job, a job backend, Redis, a
+  # PDF library, a JavaScript runtime, a CSS framework, an HTTP client, or any
+  # external service. Every one of those is an optional adapter with a working
+  # no-op default.
+  spec.add_dependency "actionpack", ">= 7.1.0", "< 9.0"
+  spec.add_dependency "actionview", ">= 7.1.0", "< 9.0"
+  spec.add_dependency "activerecord", ">= 7.1.0", "< 9.0"
+  spec.add_dependency "activesupport", ">= 7.1.0", "< 9.0"
+  spec.add_dependency "railties", ">= 7.1.0", "< 9.0"
 end

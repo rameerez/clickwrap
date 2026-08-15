@@ -1,0 +1,30 @@
+<%#
+  Withdrawing one consent purpose: one sentence, one button.
+
+  Nothing is added to this page. Withdrawal must be no harder than granting was,
+  and every extra step here would be a step someone did not have to take to say
+  yes.
+%>
+<%= clickwrap_styles %>
+
+<div class="clickwrap clickwrap-screen">
+  <header class="clickwrap-screen__header">
+    <h1 class="clickwrap-screen__title">
+      <%= t("clickwrap.withdrawals.title", purpose: @purpose_key.humanize.downcase) %>
+    </h1>
+    <p class="clickwrap-screen__intro"><%= t("clickwrap.withdrawals.explanation") %></p>
+  </header>
+
+  <% if flash.now[:alert].present? || flash[:alert].present? %>
+    <p class="clickwrap-flash clickwrap-flash--alert" role="alert"><%= flash[:alert] %></p>
+  <% end %>
+
+  <%= form_with url: clickwrap_routes.withdrawal_path(@purpose_key),
+        method: :post,
+        class: "clickwrap-screen__form" do %>
+    <%= hidden_field_tag :return_to, @return_to, id: nil %>
+    <%= submit_tag t("clickwrap.withdrawals.confirm_button"), class: "clickwrap-submit" %>
+  <% end %>
+
+  <p class="clickwrap-note"><%= t("clickwrap.withdrawals.what_this_does") %></p>
+</div>

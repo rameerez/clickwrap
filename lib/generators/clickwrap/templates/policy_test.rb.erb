@@ -1,0 +1,76 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+# A policy is executable meaning, so it is worth testing like one. These are the
+# four questions worth asking about any policy; fill them in for
+# :<%= policy_key %> and delete whatever does not apply.
+#
+# Add `include Clickwrap::TestHelpers` to your ActiveSupport::TestCase (or keep
+# it here) to get `capture_clickwrap` and the assertions below. They create
+# real, internally consistent evidence without your tests knowing table names.
+class <%= test_class_name %> < ActiveSupport::TestCase
+  include Clickwrap::TestHelpers
+
+  setup do
+    # TODO: replace with your own fixture or factory.
+    @actor = users(:one)
+  end
+
+  # 1. It compiles, and it says what you think it says.
+  #
+  # This is the cheap test that catches a renamed document, a deleted statement,
+  # or a verb someone changed without meaning to.
+  test "the policy is defined with the statements it is supposed to have" do
+    policy = Clickwrap.policy!(:<%= policy_key %>)
+
+    # TODO: name the statements this policy actually presents.
+    # assert_equal %w[terms privacy_notice], policy.statements.map(&:key)
+    # assert_equal %w[agreement acknowledgment], policy.statements.map(&:kind)
+    assert policy
+  end
+
+  # 2. A complete submission produces the evidence you expect.
+  test "capturing it records the acts and verifies" do
+    receipt = capture_clickwrap(
+      :<%= policy_key %>,
+      actor: @actor,
+      # TODO: one answer per required statement.
+      answers: {}
+    )
+
+    assert_clickwrap_current :<%= policy_key %>, actor: @actor
+    assert_clickwrap_receipt_verifies receipt
+
+    # TODO: assert the specific acts, e.g.
+    # assert_clickwrap_agreed_to :terms, actor: @actor
+    # assert_clickwrap_acknowledged :privacy_notice, actor: @actor
+  end
+
+  # 3. An incomplete submission records NOTHING.
+  #
+  # The interesting half of any evidence policy is what it refuses. A missing
+  # required answer must not produce a partial event that later reads as assent.
+  test "it refuses an incomplete submission" do
+    # TODO: submit without the required answers and assert the failure, e.g.
+    # assert_no_clickwrap_event :<%= policy_key %>
+    skip "fill this in"
+  end
+
+  # 4. The evidence and the protected action commit together, or not at all.
+  #
+  # Only relevant if this policy guards a domain action through `capture_and!`.
+  # Fault injection is the point: if the event write fails, the action must roll
+  # back, and a failed evidence write must never leave a usable domain record
+  # behind.
+  test "a failed evidence write rolls the protected action back" do
+    # Clickwrap::Testing.fail_next_event_write do
+    #   assert_raises(Clickwrap::EventWriteFailed) do
+    #     # ...the call that captures evidence and performs the action...
+    #   end
+    # end
+    #
+    # assert_no_clickwrap_event :<%= policy_key %>
+    skip "fill this in if this policy protects a domain action"
+  end
+end

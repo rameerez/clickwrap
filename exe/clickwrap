@@ -1,0 +1,298 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# The standalone verifier.
+#
+#   clickwrap verify receipt.json --documents ./receipt-documents
+#
+# ==============================================================================
+# THIS COMMAND MUST WORK WITH NOTHING. No Rails, no host application, no
+# database, no configuration, no network, and no access to the code that wrote
+# the receipt. That is the entire point of it: a receipt whose only verifier is
+# the application that produced it is a receipt whose verification nobody
+# independent can repeat. Someone should be able to install this gem on a laptop
+# years from now, point it at a JSON file and a folder of documents, and get an
+# answer.
+#
+# So this file requires four things and nothing else: canonical JSON, the digest
+# helpers, the receipt verifier, and the standard library. Adding an
+# ActiveSupport call, a Rails constant, or a gem dependency here would quietly
+# break the promise the receipt itself makes in its `verifier_instructions`.
+# ==============================================================================
+#
+# What a successful run establishes is bounded, and the output says so: the
+# bytes in this file still hash to the digest recorded inside it, and the
+# document files supplied still hash to the digests the receipt cites. It does
+# not establish who wrote the receipt, when, or that whoever controlled the
+# application and its database could not have written both the record and its
+# digest.
+
+lib = File.expand_path("../lib", __dir__)
+$LOAD_PATH.unshift(lib) if File.directory?(lib) && !$LOAD_PATH.include?(lib)
+
+require "json"
+
+require "clickwrap/version"
+require "clickwrap/errors"
+require "clickwrap/canonical_json"
+require "clickwrap/digest"
+
+# The command-line front end. Argument parsing by hand rather than through
+# OptionParser: there is one command with one option, and a hand-written parser
+# is easier to read than the configuration of a general one.
+module ClickwrapCommandLine
+  SUCCESS = 0
+  FAILURE = 1
+
+  # Three states, not two. A check that could not run — a document whose bytes
+  # nobody supplied — is neither a pass nor a failure, and collapsing it into
+  # either one turns "we did not look" into "we looked and it was fine".
+  SYMBOLS = { true => "✓", false => "✗", nil => "–" }.freeze
+
+  USAGE = <<~TEXT
+    clickwrap #{Clickwrap::VERSION} — verify a Clickwrap receipt without the application that wrote it.
+
+    Usage:
+      clickwrap verify RECEIPT.json [--documents DIR] [--json]
+      clickwrap --help
+      clickwrap --version
+
+    Options:
+      --documents DIR   Folder holding the document files the receipt cites. Each file is
+                        matched to a document by key, version, and locale, and its bytes are
+                        hashed against the digest recorded when the receipt was written.
+      --json            Print the result as JSON instead of lines of text.
+
+    Exit status:
+      0  every check passed
+      1  a check failed, or the receipt could not be read
+
+    What a pass means: the canonical bytes still hash to the digest recorded inside the
+    receipt, and the documents supplied still hash to the digests it cites. It does not
+    establish who produced the receipt, when, or that a party controlling the original
+    application and its database could not have written both the record and its digest.
+  TEXT
+
+  module_function
+
+  def run(argv)
+    return help if argv.empty? || argv.first == "--help" || argv.first == "-h"
+    return version if argv.first == "--version" || argv.first == "-v"
+
+    command = argv.shift
+
+    case command
+    when "verify" then verify(argv)
+    else
+      warn("Unknown command #{command.inspect}.\n\n#{USAGE}")
+      FAILURE
+    end
+  end
+
+  def help
+    say(USAGE)
+    SUCCESS
+  end
+
+  def version
+    say("clickwrap #{Clickwrap::VERSION} (receipt schema #{Clickwrap::CANONICAL_SCHEMA_VERSION})")
+    SUCCESS
+  end
+
+  def verify(argv)
+    options = parse_verify_options(argv)
+    return FAILURE if options.nil?
+
+    receipt_json = read_receipt(options[:receipt_path])
+    return FAILURE if receipt_json.nil?
+
+    parsed = parse_json(receipt_json, options[:receipt_path])
+    return FAILURE if parsed.nil?
+
+    documents, sources = load_documents(parsed, options[:documents_directory])
+    return FAILURE if documents.nil?
+
+    result = verifier.verify(receipt_json, documents: documents)
+    options[:json] ? report_as_json(parsed, result, sources) : report(parsed, result, sources)
+    result.success? ? SUCCESS : FAILURE
+  rescue Clickwrap::Error => e
+    warn("#{e.class.name.split('::').last}: #{e.message}")
+    FAILURE
+  end
+
+  # --- Arguments ------------------------------------------------------------
+
+  def parse_verify_options(argv)
+    options = { receipt_path: nil, documents_directory: nil, json: false }
+
+    until argv.empty?
+      argument = argv.shift
+
+      case argument
+      when "--documents"
+        options[:documents_directory] = argv.shift
+      when /\A--documents=(.+)\z/
+        options[:documents_directory] = Regexp.last_match(1)
+      when "--json"
+        options[:json] = true
+      else
+        options[:receipt_path] = argument
+      end
+    end
+
+    return options if options[:receipt_path]
+
+    warn("clickwrap verify needs the path to a receipt file.\n\n#{USAGE}")
+    nil
+  end
+
+  # --- Reading --------------------------------------------------------------
+
+  def read_receipt(path)
+    unless File.file?(path)
+      warn("There is no file at #{path}.")
+      return nil
+    end
+
+    File.read(path, encoding: Encoding::UTF_8)
+  end
+
+  def parse_json(text, path)
+    JSON.parse(text)
+  rescue JSON::ParserError => e
+    warn("#{path} is not valid JSON: #{e.message}")
+    nil
+  end
+
+  # Matches each document the receipt cites to a file in the bundle.
+  #
+  # The receipt names a key, a version label, and a locale, so those are tried
+  # first, most specific first, and a file whose name merely starts with the key
+  # is the last resort. A document with no matching file is reported as not
+  # checked — never as verified, and never as failed, because "we did not look"
+  # and "we looked and it was wrong" are different answers.
+  def load_documents(receipt, directory)
+    entries = Array(receipt["documents"])
+    return [{}, {}] if directory.nil? || entries.empty?
+
+    unless File.directory?(directory)
+      warn("There is no directory at #{directory}.")
+      return [nil, nil]
+    end
+
+    files = Dir.children(directory).select { |name| File.file?(File.join(directory, name)) }
+    documents = {}
+    sources = {}
+
+    entries.each do |entry|
+      key = entry["key"].to_s
+      next if key.empty? || documents.key?(key)
+
+      name = match_file(files, key, entry["version"].to_s, entry["locale"].to_s)
+      next if name.nil?
+
+      documents[key] = File.binread(File.join(directory, name))
+      sources[key] = name
+    end
+
+    [documents, sources]
+  end
+
+  def match_file(files, key, version, locale)
+    candidates = ["#{key}-#{version}-#{locale}", "#{key}-#{version}", "#{key}.#{locale}", key]
+
+    candidates.each do |candidate|
+      found = files.find { |name| basename(name).casecmp?(candidate) }
+      return found if found
+    end
+
+    files.find { |name| basename(name).downcase.start_with?("#{key.downcase}-") }
+  end
+
+  def basename(name) = File.basename(name, File.extname(name))
+
+  # --- Reporting ------------------------------------------------------------
+
+  def report(receipt, result, sources)
+    say("Receipt #{receipt['event_id']} (schema #{result.schema || receipt['schema']})")
+    say
+
+    Array(result.checks).each { |check| say("  #{SYMBOLS.fetch(status(check), '?')} #{describe(check)}") }
+
+    say
+    sources.each { |key, name| say("  document #{key} read from #{name}") }
+    say("  no document files were supplied, so no document digest was checked") if sources.empty?
+
+    say
+    Array(result.failures).each { |failure| say("  #{failure}") } unless result.success?
+    say(result.success? ? summary(result) : "#{summary(result)} — see the failing checks above.")
+    say
+    say("A passing digest detects modification of the bytes it covers. It does not establish who")
+    say("produced them, when, or that whoever controlled the original application and its database")
+    say("could not have written both the record and the digest.")
+  end
+
+  def report_as_json(receipt, result, sources)
+    say(
+      JSON.pretty_generate(
+        "event_id" => receipt["event_id"],
+        "schema" => result.schema || receipt["schema"],
+        "success" => result.success?,
+        "checks" => Array(result.checks).map do |check|
+          { "name" => value(check, :name), "passed" => status(check), "detail" => value(check, :detail) }
+        end,
+        "failures" => Array(result.failures).map(&:to_s),
+        "documents_read" => sources,
+        "verifier_version" => Clickwrap::VERIFIER_VERSION
+      )
+    )
+  end
+
+  def summary(result)
+    checks = Array(result.checks)
+    passed = checks.count { |check| status(check) == true }
+    skipped = checks.count { |check| status(check).nil? }
+    sentence = "#{passed} of #{checks.length} checks passed"
+
+    skipped.zero? ? sentence : "#{sentence}, #{skipped} could not be run"
+  end
+
+  def describe(check)
+    detail = value(check, :detail)
+    name = value(check, :name)
+
+    detail.to_s.empty? ? name.to_s : "#{name}: #{detail}"
+  end
+
+  # true (checked and passed), false (checked and failed), nil (not checked).
+  def status(check)
+    passed = value(check, :passed)
+    return nil if passed.nil?
+
+    passed == true
+  end
+
+  # Check entries may arrive with symbol or string keys, or as objects that
+  # answer the same names. Reading all three costs four lines and saves the
+  # command from breaking on a detail nobody should have to think about.
+  def value(check, name)
+    return check.public_send(name) if check.respond_to?(name) && !check.is_a?(Hash)
+    return check[name] if check.respond_to?(:key?) && check.key?(name)
+    return check[name.to_s] if check.respond_to?(:key?) && check.key?(name.to_s)
+
+    nil
+  end
+
+  def verifier
+    require "clickwrap/receipt_verifier"
+    Clickwrap::ReceiptVerifier
+  rescue LoadError => e
+    raise Clickwrap::Error, "This build of clickwrap has no receipt verifier available (#{e.message})."
+  end
+
+  def say(text = "") = $stdout.puts(text)
+
+  def warn(text) = $stderr.puts(text)
+end
+
+exit(ClickwrapCommandLine.run(ARGV))

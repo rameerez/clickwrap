@@ -1,0 +1,84 @@
+<%#
+  One receipt, in human-readable form. The canonical JSON is one link away and
+  is the verifiable artifact; this page is the projection of it a person can
+  read.
+
+  The closing note is part of the product, not a disclaimer bolted on: it says
+  exactly what this record does and does not show, in plain words, on the same
+  page as the record itself.
+%>
+<%= clickwrap_styles %>
+
+<div class="clickwrap clickwrap-screen">
+  <header class="clickwrap-screen__header">
+    <h1 class="clickwrap-screen__title"><%= t("clickwrap.receipts.show_title") %></h1>
+    <p class="clickwrap-screen__intro">
+      <%= t("clickwrap.receipts.event_id") %>: <code class="clickwrap-code"><%= @event.id %></code>
+    </p>
+  </header>
+
+  <dl class="clickwrap-facts">
+    <dt><%= t("clickwrap.receipts.policy") %></dt>
+    <dd><%= @event.policy_key %></dd>
+
+    <dt><%= t("clickwrap.receipts.event_type") %></dt>
+    <dd><%= t("clickwrap.event_types.#{@event.event_type}", default: @event.event_type.humanize) %></dd>
+
+    <dt><%= t("clickwrap.receipts.recorded_at_by_server") %></dt>
+    <dd><%= @event.recorded_at_by_server&.utc&.strftime("%Y-%m-%d %H:%M:%S UTC") %></dd>
+
+    <% if @event.presentation_manifest.present? %>
+      <dt><%= t("clickwrap.receipts.submit_button_text") %></dt>
+      <dd><%= @event.presentation_manifest["submit_button_text"] %></dd>
+    <% end %>
+  </dl>
+
+  <h2 class="clickwrap-screen__subtitle"><%= t("clickwrap.receipts.acts") %></h2>
+  <ul class="clickwrap-acts">
+    <% @event.statements.each do |statement| %>
+      <li class="clickwrap-acts__item">
+        <p class="clickwrap-acts__assertion"><%= statement.assertion_text %></p>
+        <p class="clickwrap-acts__meta">
+          <%= t("clickwrap.kinds.#{statement.kind}", default: statement.kind.humanize) %>
+          —
+          <%= t("clickwrap.actions.#{statement.action}", default: statement.action.to_s.humanize) %>
+          <% if statement.offered_and_not_taken? %>
+            — <%= t("clickwrap.receipts.offered_and_not_taken") %>
+          <% end %>
+        </p>
+      </li>
+    <% end %>
+  </ul>
+
+  <% if @event.documents.any? %>
+    <h2 class="clickwrap-screen__subtitle"><%= t("clickwrap.receipts.documents") %></h2>
+    <ul class="clickwrap-documents">
+      <% @event.documents.each do |document| %>
+        <li class="clickwrap-documents__item">
+          <% if document.document_version_id.present? %>
+            <%= link_to document.document_key,
+                  clickwrap_document_version_path(document.document_version_id),
+                  class: "clickwrap-documents__link",
+                  target: "_blank",
+                  rel: "noopener" %>
+          <% else %>
+            <span class="clickwrap-documents__link"><%= document.document_key %></span>
+          <% end %>
+          <span class="clickwrap-documents__version">
+            <%= t("clickwrap.ui.document_version", version: document.version_label) %>
+            (<%= document.locale %>)
+          </span>
+          <code class="clickwrap-code clickwrap-code--digest"><%= document.content_digest %></code>
+        </li>
+      <% end %>
+    </ul>
+  <% end %>
+
+  <p class="clickwrap-screen__actions">
+    <%= link_to t("clickwrap.receipts.canonical_json"),
+          clickwrap_receipt_path(@event.id, format: :json),
+          class: "clickwrap-link" %>
+  </p>
+
+  <p class="clickwrap-note"><%= t("clickwrap.receipts.what_this_records") %></p>
+</div>

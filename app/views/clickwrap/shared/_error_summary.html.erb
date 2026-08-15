@@ -1,0 +1,36 @@
+<%#
+  The error summary, at the top of the block where a person looking for what
+  went wrong will find it.
+
+  role="alert" so assistive technology announces it when the failed submission
+  re-renders. tabindex="-1" so it can hold focus, and `autofocus` so the browser
+  moves focus here on load without a line of JavaScript — this whole file has to
+  work when the page never runs a script.
+
+  Each entry links to the control it is about, so the fix is one press away
+  rather than a scroll and a hunt. The message is TEXT: the styling underlines
+  it, but nothing here depends on a color being seen.
+
+  Locals: presentation, errors, failing_statements
+%>
+<% if failing_statements.any? %>
+  <div class="clickwrap-error-summary"
+       id="<%= "clickwrap_#{presentation.policy_key}_errors" %>"
+       role="alert"
+       tabindex="-1"
+       autofocus>
+    <h2 class="clickwrap-error-summary__heading">
+      <%= t("clickwrap.ui.error_summary_heading") %>
+    </h2>
+
+    <ul class="clickwrap-error-summary__list">
+      <% failing_statements.each do |statement| %>
+        <li class="clickwrap-error-summary__item">
+          <a class="clickwrap-error-summary__link" href="#<%= statement.control_id %>">
+            <%= Array(errors[statement.key]).join(" ") %>
+          </a>
+        </li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>

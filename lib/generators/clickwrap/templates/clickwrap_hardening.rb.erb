@@ -1,0 +1,181 @@
+# frozen_string_literal: true
+
+# ==============================================================================
+# Clickwrap database hardening — OPT-IN
+# ==============================================================================
+#
+# Clickwrap's models already refuse `update` and `destroy` on an evidence event.
+# This migration adds the same refusal one layer down, where a console session, a
+# bulk `update_all`, or a data-fix script cannot go around a callback.
+#
+# WHAT THIS CLAIMS, IN FULL: it rejects unsupported mutation paths within the
+# documented database threat model.
+#
+# WHAT IT DOES NOT CLAIM: it does not make a row impossible to change. Anyone
+# with database superuser rights, direct file access, or permission to drop these
+# triggers can still rewrite anything — and in most Rails applications that is
+# the same credential that ran this migration. Assurance against that is a
+# different tier: chained history, heads anchored outside this database, and
+# provider timestamps, each claiming only what it actually supplies.
+#
+# WHAT IS PROTECTED
+#
+#   clickwrap_events              UPDATE rejected except the three columns
+#                                 Clickwrap itself writes; DELETE rejected
+#   clickwrap_event_statements    UPDATE and DELETE rejected
+#   clickwrap_event_documents     UPDATE and DELETE rejected
+#
+# WHAT IS DELIBERATELY NOT PROTECTED
+#
+#   clickwrap_request_evidence    the optional personal annex has to stay
+#                                 deletable on its retention schedule; that is
+#                                 the whole reason it is a separate table
+#
+# BEFORE YOU RUN THIS, CHECK YOUR TEST SUITE. Transactional tests are fine — a
+# rollback is not a DELETE. Fixtures and any cleaner using the deletion strategy
+# issue `DELETE FROM …`, and these triggers will reject that on the three tables
+# above.
+#
+# Reversible: `rails db:rollback` drops what it created and touches no data.
+# ==============================================================================
+class ClickwrapDatabaseHardening < ActiveRecord::Migration<%= migration_version %>
+  # The columns Clickwrap legitimately writes after an event exists: marking the
+  # core event disposed, flagging a legal hold, and linking the request-evidence
+  # annex. Mirrors Clickwrap::Event::MUTABLE_COLUMNS, and `up` refuses to install
+  # protection that disagrees with it.
+  MUTABLE_EVENT_COLUMNS = %w[ core_event_disposed_at on_legal_hold request_evidence_id ].freeze
+
+  APPEND_ONLY_TABLES = %w[ clickwrap_event_statements clickwrap_event_documents ].freeze
+
+  def up
+    return say_unsupported_adapter unless postgresql?
+
+    check_mutable_columns_still_match!
+
+    execute <<~SQL
+      CREATE OR REPLACE FUNCTION clickwrap_reject_write() RETURNS trigger AS $function$
+      BEGIN
+        RAISE EXCEPTION
+          'clickwrap: % is append-only. Corrections, withdrawals, expiries, and '
+          'supersessions are new linked events, and disposition runs through '
+          'Clickwrap::Retention with a reason and its own recorded event.',
+          TG_TABLE_NAME
+          USING ERRCODE = 'restrict_violation';
+      END;
+      $function$ LANGUAGE plpgsql;
+    SQL
+
+    execute <<~SQL
+      CREATE OR REPLACE FUNCTION clickwrap_reject_event_update() RETURNS trigger AS $function$
+      BEGIN
+        IF (to_jsonb(NEW) - 'core_event_disposed_at' - 'on_legal_hold' - 'request_evidence_id')
+           IS DISTINCT FROM
+           (to_jsonb(OLD) - 'core_event_disposed_at' - 'on_legal_hold' - 'request_evidence_id') THEN
+          RAISE EXCEPTION
+            'clickwrap: clickwrap_events is append-only. Only core_event_disposed_at, '
+            'on_legal_hold, and request_evidence_id may change after an event is written.'
+            USING ERRCODE = 'restrict_violation';
+        END IF;
+
+        RETURN NEW;
+      END;
+      $function$ LANGUAGE plpgsql;
+    SQL
+
+    # Dropped first so re-running this (a redo, a repaired migration) installs
+    # the same protection instead of failing on a trigger that already exists.
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_update ON clickwrap_events;"
+    execute <<~SQL
+      CREATE TRIGGER clickwrap_events_reject_update
+        BEFORE UPDATE ON clickwrap_events
+        FOR EACH ROW EXECUTE FUNCTION clickwrap_reject_event_update();
+    SQL
+
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_delete ON clickwrap_events;"
+    execute <<~SQL
+      CREATE TRIGGER clickwrap_events_reject_delete
+        BEFORE DELETE ON clickwrap_events
+        FOR EACH ROW EXECUTE FUNCTION clickwrap_reject_write();
+    SQL
+
+    APPEND_ONLY_TABLES.each do |table|
+      execute "DROP TRIGGER IF EXISTS #{table}_reject_update ON #{table};"
+      execute <<~SQL
+        CREATE TRIGGER #{table}_reject_update
+          BEFORE UPDATE ON #{table}
+          FOR EACH ROW EXECUTE FUNCTION clickwrap_reject_write();
+      SQL
+
+      execute "DROP TRIGGER IF EXISTS #{table}_reject_delete ON #{table};"
+      execute <<~SQL
+        CREATE TRIGGER #{table}_reject_delete
+          BEFORE DELETE ON #{table}
+          FOR EACH ROW EXECUTE FUNCTION clickwrap_reject_write();
+      SQL
+    end
+
+    say "clickwrap: update/delete protection installed on clickwrap_events, " \
+        "#{APPEND_ONLY_TABLES.join(" and ")}."
+  end
+
+  def down
+    return unless postgresql?
+
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_update ON clickwrap_events;"
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_delete ON clickwrap_events;"
+
+    APPEND_ONLY_TABLES.each do |table|
+      execute "DROP TRIGGER IF EXISTS #{table}_reject_update ON #{table};"
+      execute "DROP TRIGGER IF EXISTS #{table}_reject_delete ON #{table};"
+    end
+
+    execute "DROP FUNCTION IF EXISTS clickwrap_reject_event_update();"
+    execute "DROP FUNCTION IF EXISTS clickwrap_reject_write();"
+
+    say "clickwrap: update/delete protection removed. No evidence rows were changed."
+  end
+
+  private
+
+  def postgresql?
+    connection.adapter_name.downcase.include?("postgresql")
+  end
+
+  # If a later release of the gem starts writing a fourth column on an existing
+  # event, the trigger above would reject a write the gem considers legitimate —
+  # at runtime, in production, on someone's disposition run. Better to refuse the
+  # migration now and let an upgrade migration install the matching protection.
+  def check_mutable_columns_still_match!
+    expected = Clickwrap::Event::MUTABLE_COLUMNS.map(&:to_s).sort
+    return if expected == MUTABLE_EVENT_COLUMNS.sort
+
+    raise <<~MSG
+      This migration protects clickwrap_events by allowing exactly these columns to
+      change after an event is written:
+
+        #{MUTABLE_EVENT_COLUMNS.sort.join(", ")}
+
+      The installed version of the gem now mutates:
+
+        #{expected.join(", ")}
+
+      Installing this protection would reject a write clickwrap considers legitimate.
+      Run `rails generate clickwrap:upgrade` for the migration that matches your
+      installed version instead of editing this file — a released migration is never
+      edited underneath an application.
+    MSG
+  end
+
+  def say_unsupported_adapter
+    say "clickwrap: no database-level protection was installed."
+    say "  This migration only applies to PostgreSQL, where triggers can reject an " \
+        "UPDATE or DELETE that the application layer would have refused anyway.", true
+    say "  On SQLite there are no roles at all: any process that can write the file " \
+        "can drop a trigger as easily as update a row.", true
+    say "  On MySQL triggers exist, but the account that runs migrations can remove " \
+        "them; the control that works there is privilege separation between a " \
+        "migration role and a runtime role with SELECT and INSERT only.", true
+    say "  The model-level refusals, the digests, and `bin/rails clickwrap:verify` " \
+        "work on every adapter.", true
+  end
+end

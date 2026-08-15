@@ -1,0 +1,51 @@
+# frozen_string_literal: true
+
+source "https://rubygems.org"
+
+# Runtime dependencies are specified in clickwrap.gemspec
+gemspec
+
+# Build & release tools
+gem "rake", "~> 13.0"
+
+group :development do
+  gem "appraisal"
+
+  # Code quality
+  gem "rubocop", "~> 1.0", require: false
+  gem "rubocop-minitest", "~> 0.35", require: false
+  gem "rubocop-performance", "~> 1.0", require: false
+end
+
+group :test do
+  gem "minitest", "~> 6.0"
+  # Minitest 6 extracted minitest/mock into its own gem.
+  gem "minitest-mock"
+  gem "mocha", "~> 2.0"
+  # Pinned to the 0.x line: SimpleCov 1.0 deprecates `SimpleCov.start` from a
+  # `.simplecov` file, which is the layout the whole gem ecosystem uses.
+  gem "simplecov", "~> 0.22", require: false
+
+  # Rails frameworks the dummy app boots that are NOT runtime dependencies of
+  # the gem itself. Clickwrap never requires a job backend or a mailer, but the
+  # dummy app exercises the after-commit hook and the retention tasks against
+  # real Rails APIs, and Active Job's :test adapter is how we prove that an
+  # analytics or notification failure can never undo a committed action.
+  gem "actionmailer"
+  gem "activejob"
+
+  # Database adapters. SQLite is the default lane; PostgreSQL runs the
+  # concurrency, locking, and hardening lanes because that is where the
+  # advisory locks and update/delete protections actually differ.
+  gem "mysql2"
+  gem "pg"
+  gem "sqlite3"
+
+  # Dummy Rails app
+  gem "bootsnap", require: false
+  gem "propshaft"
+  gem "puma"
+
+  # Fix RDoc version conflict (Ruby 3.4+ ships with 7.0.3)
+  gem "rdoc", ">= 7.0"
+end

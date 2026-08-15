@@ -1,0 +1,131 @@
+# The gem's own English strings.
+#
+# Two things to know before changing anything in here:
+#
+#   1. Wording is product design, and some of these sentences carry meaning the
+#      rest of the gem depends on. A person AGREES TO Terms and ACKNOWLEDGES a
+#      Privacy Notice — a privacy notice is information someone is entitled to,
+#      not a bargain they strike, and "I agree to the privacy policy" quietly
+#      turns one into the other. Keep the verbs matched to the kinds.
+#   2. Nothing here may claim, or read as claiming, that anything is compliant,
+#      enforceable, legally binding, court-proof, or that a person read or
+#      understood a document. These strings appear on screens and in receipts,
+#      which is exactly where an overclaim would do damage.
+#
+# Hosts override any of this by defining the same key in their own locale files
+# (the application's translations load last and win), and a policy can name its
+# own key or literal text instead.
+en:
+  clickwrap:
+    # Conventional first-person assertions. `agree_to :terms` with no
+    # `statement:` resolves to clickwrap.statements.agreement.terms; a policy
+    # that says something more specific passes its own text or key.
+    statements:
+      agreement:
+        terms: "I agree to the Terms."
+      acknowledgment:
+        privacy_notice: "I acknowledge the Privacy Notice."
+
+    ui:
+      error_summary_heading: "Check these before continuing"
+      error_prefix: "Error:"
+      required: "Required"
+      optional: "Optional"
+      opens_in_new_tab: "(opens in a new tab)"
+      document_version: "Version %{version}"
+      withdrawal_link: "Withdraw %{purpose} at any time"
+
+    # Labels for an explicit yes/no consent choice. Quoted because unquoted
+    # `yes:` and `no:` are booleans in YAML, not the words.
+    choices:
+      "yes": "Yes"
+      "no": "No"
+      grant: "Yes"
+      decline: "No"
+
+    errors:
+      required_statement: "You need to answer this before continuing."
+      answer_not_accepted: "This answer was not accepted. Please check it and try again."
+      presentation_no_longer_valid: "This page expired before it was submitted, so it has been
+        offered again. Please check your answers and submit once more."
+
+    captures:
+      title: "Before you continue"
+      intro: "Please look over the documents below and make your choices. Nothing is selected for
+        you."
+      submit_button_text: "Continue"
+      recorded: "Thank you — that has been recorded."
+
+    withdrawals:
+      title: "Withdraw %{purpose}"
+      explanation: "You can withdraw this at any time, and it takes one press — the same as giving
+        it did."
+      confirm_button: "Withdraw"
+      confirmed: "That purpose has been withdrawn."
+      already_withdrawn: "That purpose was already withdrawn."
+      recorded_reason: "The person withdrew this purpose from the consent withdrawal screen."
+      what_this_does: "Withdrawing records that you have withdrawn this purpose from now on. It
+        adds a new record rather than deleting the earlier one, so the history stays accurate."
+
+    receipts:
+      index_title: "Your records"
+      show_title: "Record"
+      empty: "There is nothing here yet."
+      policy: "Policy"
+      event_id: "Record ID"
+      event_type: "What happened"
+      recorded_at_by_server: "Recorded by the server at"
+      submit_button_text: "Button that was pressed"
+      acts: "What was asked and answered"
+      documents: "Documents as they were at the time"
+      offered_and_not_taken: "offered, not taken"
+      canonical_json: "Download the canonical JSON"
+      what_this_records: "This record shows what this application presented, in the exact wording
+        and document versions used at the time, and what was submitted back. It does not show that
+        anyone read or understood the documents, and it is not a legal opinion about them."
+
+    # The six kinds, for display. This taxonomy is product design; naming an act
+    # an agreement or a consent does not decide its legal effect.
+    kinds:
+      agreement: "Agreement"
+      acknowledgment: "Acknowledgment"
+      consent: "Consent"
+      declaration: "Declaration"
+      attestation: "Attestation"
+      authorization: "Authorization"
+
+    actions:
+      agreed: "Agreed"
+      acknowledged: "Acknowledged"
+      granted: "Granted"
+      declined: "Declined"
+      declared: "Declared"
+      attested: "Attested"
+      authorized: "Authorized"
+      withdrawn: "Withdrawn"
+      renewed: "Renewed"
+      scope_changed: "Scope changed"
+      superseded: "Superseded"
+      expired: "Expired"
+      consumed: "Used"
+      revoked: "Revoked"
+      corrected: "Corrected"
+
+    event_types:
+      capture: "Submitted"
+      withdrawal: "Withdrawn"
+      correction: "Corrected"
+      supersession: "Superseded"
+      expiry: "Expired"
+      consumption: "Used"
+      revocation: "Revoked"
+      renewal: "Renewed"
+      scope_change: "Scope changed"
+      exemption: "Recorded exemption — no human action"
+      imported_legacy: "Imported from earlier records"
+      external_receipt: "Recorded by another provider"
+      disposition: "Disposed of under a retention rule"
+      legal_hold_placed: "Placed on hold"
+      legal_hold_released: "Hold released"
+      receipt_access: "Record accessed"
+      provider_outcome: "Provider outcome recorded"

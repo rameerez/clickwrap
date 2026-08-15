@@ -1,0 +1,119 @@
+<%#
+  One statement: one control, one label carrying the exact first-person sentence
+  the receipt will record, the documents it is about, and its own error.
+
+  Rules this file exists to keep:
+
+    * one control per statement — two acts never share a checkbox, because
+      "agreed to the Terms" and "acknowledged the Privacy Notice" are different
+      facts with different lifecycles;
+    * the control is REAL and starts EMPTY. There is no `checked` anywhere in
+      this file and there never will be: a pre-ticked box records the page's
+      default rather than a person's action;
+    * the label contains the assertion and is tied to the control, so pressing
+      the words works and assistive technology announces them together;
+    * document links come BEFORE the action, carry the document's own name (not
+      "click here"), and open in a new tab so a half-filled form is not lost;
+    * `required` is progressive enhancement only. THE SERVER DECIDES. A browser
+      that ignores it, a client that never sends the field, and a script that
+      posts by hand all meet the same server-side check at capture.
+
+  Locals: statement, error
+%>
+<%
+  error = local_assigns[:error].presence
+  error_text = Array(error).join(" ")
+  described_by = error ? statement.error_id : nil
+  statement_classes = ["clickwrap-statement", "clickwrap-statement--#{statement.kind}"]
+  statement_classes << "clickwrap-statement--invalid" if error
+%>
+<div class="<%= statement_classes.join(" ") %>">
+  <% if statement.choices.present? %>
+    <%# An explicit yes/no decision: every option unselected, so the answer is
+        one the person actually made rather than one the page made for them. %>
+    <%
+      fieldset_options = { class: "clickwrap-statement__choices" }
+      fieldset_options[:"aria-invalid"] = "true" if error
+      fieldset_options[:"aria-describedby"] = described_by if described_by
+    %>
+    <%= tag.fieldset(**fieldset_options) do %>
+      <legend class="clickwrap-statement__legend">
+        <%= statement.assertion %>
+        <%= tag.span(t("clickwrap.ui.required"), class: "clickwrap-statement__flag") if statement.required? %>
+        <%= tag.span(t("clickwrap.ui.optional"), class: "clickwrap-statement__flag") if statement.optional? %>
+      </legend>
+
+      <% statement.choices.each_key do |choice| %>
+        <%
+          choice_id = "#{statement.control_id}_#{choice}"
+          choice_options = { id: choice_id, class: "clickwrap-statement__radio" }
+          choice_options[:required] = true if statement.requires_an_explicit_choice?
+          choice_options[:"aria-describedby"] = described_by if described_by
+        %>
+        <span class="clickwrap-statement__choice">
+          <%= radio_button_tag statement.control_name, choice, false, choice_options %>
+          <%= label_tag choice_id,
+                t("clickwrap.choices.#{choice}", default: choice.to_s.humanize),
+                class: "clickwrap-statement__choice-label" %>
+        </span>
+      <% end %>
+    <% end %>
+  <% else %>
+    <%
+      control_options = { id: statement.control_id, class: "clickwrap-statement__checkbox" }
+      control_options[:required] = true if statement.required?
+      control_options[:"aria-invalid"] = "true" if error
+      control_options[:"aria-describedby"] = described_by if described_by
+    %>
+    <div class="clickwrap-statement__control">
+      <%= check_box_tag statement.control_name, "1", false, control_options %>
+      <%= label_tag statement.control_id, class: "clickwrap-statement__label" do %>
+        <%= statement.assertion %>
+        <%= tag.span(t("clickwrap.ui.required"), class: "clickwrap-statement__flag") if statement.required? %>
+        <%= tag.span(t("clickwrap.ui.optional"), class: "clickwrap-statement__flag") if statement.optional? %>
+      <% end %>
+    </div>
+  <% end %>
+
+  <% if statement.documents.any? %>
+    <ul class="clickwrap-documents">
+      <% statement.documents.each do |document| %>
+        <li class="clickwrap-documents__item">
+          <% if document.path.present? %>
+            <%= link_to document.label, document.path,
+                  class: "clickwrap-documents__link",
+                  target: "_blank",
+                  rel: "noopener" %>
+            <span class="clickwrap-documents__hint">
+              <%= t("clickwrap.ui.opens_in_new_tab") %>
+            </span>
+          <% else %>
+            <span class="clickwrap-documents__link clickwrap-documents__link--unavailable">
+              <%= document.label %>
+            </span>
+          <% end %>
+          <span class="clickwrap-documents__version">
+            <%= t("clickwrap.ui.document_version", version: document.version_label) %>
+          </span>
+        </li>
+      <% end %>
+    </ul>
+  <% end %>
+
+  <% if error %>
+    <%# Announced through aria-describedby above, and readable as ordinary text
+        here: the meaning is in the words, not in the color they are printed in. %>
+    <p class="clickwrap-statement__error" id="<%= statement.error_id %>">
+      <span class="clickwrap-statement__error-prefix"><%= t("clickwrap.ui.error_prefix") %></span>
+      <%= error_text %>
+    </p>
+  <% end %>
+
+  <% if statement.withdrawal_path.present? %>
+    <p class="clickwrap-statement__withdrawal">
+      <%= link_to t("clickwrap.ui.withdrawal_link", purpose: statement.purpose_key.humanize.downcase),
+            statement.withdrawal_path,
+            class: "clickwrap-statement__withdrawal-link" %>
+    </p>
+  <% end %>
+</div>
