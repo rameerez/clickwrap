@@ -147,6 +147,32 @@ class DocumentsTest < ActiveSupport::TestCase
     assert_raises(Clickwrap::DocumentNotPublishedError) { Clickwrap.publish! }
   end
 
+  test "a document containing non-ASCII characters publishes and still verifies" do
+    # Documents are read as binary so the digest covers the exact bytes on disk,
+    # and a text column holds text — so the two have to be reconciled somewhere.
+    # An em dash is enough to hit it, and real legal text is full of them.
+    text = "Terms — with an em dash, a café, and a ﬁ ligature."
+    Clickwrap.document(:unicode_terms, version: "1", content: text)
+    Clickwrap.publish!
+
+    version = Clickwrap::Document.find_by(key: "unicode_terms").current_version
+
+    assert_equal text, version.content_bytes
+    assert version.verify_content_digest
+    assert_equal Clickwrap::Digest.digest(text), version.content_digest
+  end
+
+  test "a document that is not valid UTF-8 is refused rather than corrupted" do
+    # A corrupted document is one whose digest will never verify again, which is
+    # a worse outcome than a clear refusal pointing at the right storage backend.
+    Clickwrap.document(:binary_doc, version: "1", content: (+"\xFF\xFE\x00binary").force_encoding("BINARY"))
+
+    error = assert_raises(Clickwrap::DefinitionError) { Clickwrap.publish! }
+
+    assert_match(/not valid UTF-8/, error.message)
+    assert_match(/active_storage/, error.message)
+  end
+
   test "a renderer's exact output is digested alongside the source" do
     Clickwrap.config.document_renderer = lambda do |bytes, _definition|
       { bytes: "<p>#{bytes.strip}</p>", media_type: "text/html",

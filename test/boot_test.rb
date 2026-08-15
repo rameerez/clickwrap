@@ -72,6 +72,21 @@ class BootTest < ActiveSupport::TestCase
     assert_not_includes Clickwrap::Event.column_names, "updated_at"
   end
 
+  test "every public constant is autoloadable from its own file" do
+    # Zeitwerk maps one constant to one file. Two classes sharing a file resolve
+    # under eager loading and then raise NameError in an ordinary development
+    # app, which is how `Clickwrap.system_actor` was broken everywhere except
+    # this suite until a real host app tried it.
+    assert_equal "system/seed", Clickwrap.system_actor("seed").clickwrap_actor_reference
+    assert_equal "anonymous/checkout_1", Clickwrap.anonymous_actor("checkout_1").clickwrap_actor_reference
+
+    { Clickwrap::AnonymousActor => "lib/clickwrap/anonymous_actor.rb",
+      Clickwrap::SystemActor => "lib/clickwrap/system_actor.rb" }.each do |constant, path|
+      expected = Clickwrap::Engine.root.join(path).to_s
+      assert_equal expected, Object.const_source_location(constant.name).first
+    end
+  end
+
   test "the six kinds and their actions are frozen vocabularies" do
     assert_equal 6, Clickwrap::Vocabulary::KINDS.length
     assert Clickwrap::Vocabulary::KINDS.frozen?

@@ -32,14 +32,17 @@ module Clickwrap
 
     validates :event_id, presence: true, uniqueness: true
 
-    # Application-layer encryption for the two raw values, on by default.
+    before_save :ensure_encryption_is_possible
+
+    # Application-layer encryption, on by default.
     #
     # Applied from the engine's `to_prepare` rather than declared here, because
-    # whether to encrypt is a host decision (`encrypt_recorded_ip_addresses`) and
-    # a declaration in the class body would apply before the initializer has
-    # been read. The columns are named `_ciphertext` so that a developer reading
-    # the schema, a database dump, or a query result can tell at a glance that
-    # the plain value is not supposed to be there.
+    # whether to encrypt is a host decision (`encrypt_recorded_ip_addresses` and
+    # friends) and a declaration in the class body would apply before the
+    # initializer has been read. The two raw columns are named `_ciphertext` so
+    # that a developer reading the schema, a database dump, or a query result
+    # can tell at a glance that the plain value is not supposed to be there.
+    #
     # The geolocation VALUE columns are encrypted too, when the host asks for
     # it. The provenance columns beside them — provider name, database version,
     # accuracy radius, resolution time — are not: they say how certain the
@@ -72,27 +75,41 @@ module Clickwrap
       wanted = ENCRYPTED_COLUMNS.select { |_, setting| Clickwrap.config.public_send(setting) }.keys
       return if wanted.empty?
 
-      ensure_encryption_keys_available!(wanted)
-
-      already = encrypted_attributes || []
-      (wanted - already.map(&:to_sym)).each { |column| encrypts column }
+      already = (encrypted_attributes || []).map(&:to_sym)
+      (wanted - already).each { |column| encrypts column }
     end
 
-    # Fails at boot with a sentence rather than at 3am with a stack trace from
-    # inside Active Record. A host that has asked Clickwrap to encrypt this data
-    # and has no keys to encrypt it with should find that out before the first
-    # capture, not during one.
-    def self.ensure_encryption_keys_available!(columns)
+    # Whether this application has Active Record encryption keys at all.
+    # Reading the key raises when it is unset, which is why this is a probe
+    # rather than a plain read.
+    def self.encryption_keys_available?
       encryption = ::ActiveRecord::Encryption.config
-      return if encryption.primary_key.present? && encryption.key_derivation_salt.present?
+      encryption.primary_key.present? && encryption.key_derivation_salt.present?
+    rescue StandardError
+      false
+    end
+
+    # Checked when something is actually about to be encrypted, NOT at boot.
+    #
+    # That distinction matters more than it looks. Adding this gem to an
+    # application must never stop it from booting, and most applications
+    # record no request evidence at all — so a boot-time key check would fail
+    # installations that were never going to encrypt anything, before the
+    # developer had a chance to run the installer or generate a key. A host
+    # that does collect this data gets the sentence below the first time it
+    # tries, and `clickwrap:doctor` reports the missing keys before that.
+    def ensure_encryption_is_possible
+      encrypted = self.class.encrypted_attributes.to_a.map(&:to_sym)
+      return if encrypted.none? { |column| self[column].present? }
+      return if self.class.encryption_keys_available?
 
       raise ConfigurationError,
-            "Clickwrap is configured to encrypt #{columns.join(" and ")}, but this application " \
-            "has no Active Record encryption keys. Generate them with " \
-            "`bin/rails db:encryption:init` and add them to your credentials, or — if storing " \
-            "these values in plain text is a reviewed decision — say so explicitly with " \
-            "`config.deliberately_store_request_evidence_unencrypted!(because: \"...\")` and set " \
-            "the matching `encrypt_recorded_*` settings to false."
+            "Clickwrap is about to record request evidence it is configured to encrypt, but " \
+            "this application has no Active Record encryption keys. Generate them with " \
+            "`bin/rails db:encryption:init` and add them to your credentials — or, if storing " \
+            "these values in plain text is a reviewed decision, say so explicitly with " \
+            "`config.deliberately_store_request_evidence_unencrypted!(because: \"...\")` and " \
+            "set the matching `encrypt_recorded_*` settings to false."
     end
 
     scope :with_ip_address_due, lambda { |at = Clickwrap.now|

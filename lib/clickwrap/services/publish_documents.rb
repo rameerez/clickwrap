@@ -95,7 +95,7 @@ module Clickwrap
             version_label: definition.version_label,
             locale: definition.locale,
             media_type: definition.media_type,
-            content: backend == "database" ? bytes : nil,
+            content: backend == "database" ? text_for_database(definition, bytes) : nil,
             storage_locator: backend == "active_storage" ? store_in_active_storage(definition, bytes) : nil,
             content_byte_size: bytes.bytesize,
             content_digest_algorithm: digest_algorithm,
@@ -146,6 +146,26 @@ module Clickwrap
         end
 
         result
+      end
+
+      # Documents are read as binary, because the digest has to cover the exact
+      # bytes on disk and nothing about them may be normalized on the way in.
+      # A text column, though, holds text — so the bytes are tagged UTF-8 here,
+      # and a document that is not valid UTF-8 is refused rather than mangled.
+      #
+      # An em dash is enough to hit this: the bytes come back as ASCII-8BIT and
+      # a database that is told to store them as text will either raise or
+      # quietly corrupt them, and a corrupted document is one whose digest will
+      # never verify again.
+      def text_for_database(definition, bytes)
+        text = bytes.dup.force_encoding(Encoding::UTF_8)
+        return text if text.valid_encoding?
+
+        raise DefinitionError,
+              "Document #{definition} is not valid UTF-8, so it cannot be stored in a text " \
+              "column. Binary documents — a PDF, a scan, an image — need a storage backend " \
+              "that keeps bytes as bytes: set `config.store_document_contents_in = " \
+              ":active_storage`, or supply a resolver that returns them."
       end
 
       # Where the bytes come FROM and where they are KEPT are different
