@@ -134,7 +134,7 @@ module Clickwrap
 
     def validate!
       unless Vocabulary.kind?(kind)
-        raise DefinitionError, "#{kind.inspect} is not one of: #{Vocabulary::KINDS.join(', ')}"
+        raise DefinitionError, "#{kind.inspect} is not one of: #{Vocabulary::KINDS.join(", ")}"
       end
 
       validate_assertion!
@@ -182,8 +182,8 @@ module Clickwrap
       return if unknown.empty?
 
       raise DefinitionError,
-            "Statement #{key} maps a choice to #{unknown.join(', ')}, which is not something a " \
-            "#{kind} can record. Use one of: #{permitted.uniq.join(', ')}."
+            "Statement #{key} maps a choice to #{unknown.join(", ")}, which is not something a " \
+            "#{kind} can record. Use one of: #{permitted.uniq.join(", ")}."
     end
 
     def validate_consent!

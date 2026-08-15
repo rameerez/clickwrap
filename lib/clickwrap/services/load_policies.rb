@@ -56,8 +56,8 @@ module Clickwrap
 
       def load_file(file)
         load file
-      rescue DefinitionError, ConfigurationError => e
-        raise e.class, "#{e.message}\n\n  (while loading #{relative(file)})", e.backtrace
+      rescue DefinitionError, ConfigurationError => error
+        raise error.class, "#{error.message}\n\n  (while loading #{relative(file)})", error.backtrace
       end
 
       def relative(file)

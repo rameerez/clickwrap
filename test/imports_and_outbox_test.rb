@@ -35,7 +35,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
                  provenance["unknown"]
 
     # The admission is inside the digested body too, not only beside it.
-    assert event.statements.all? { |s| s.assertion_text.include?("was not recorded") }
+    assert(event.statements.all? { |s| s.assertion_text.include?("was not recorded") })
     assert event.digest_verified?
 
     # exact_document_bytes was listed unknown, so no document rows were invented.
@@ -79,13 +79,13 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   test "import_external_receipt! is idempotent on the provider event id" do
     first = Clickwrap.import_external_receipt!(
       :signup, actor: @user, provider_name: "stripe", provider_event_id: "acct_1",
-      provider_receipt: { "service_agreement" => "full" },
-      verified_with: :stripe_api, verified_at: Time.current
+               provider_receipt: { "service_agreement" => "full" },
+               verified_with: :stripe_api, verified_at: Time.current
     )
     again = Clickwrap.import_external_receipt!(
       :signup, actor: @user, provider_name: "stripe", provider_event_id: "acct_1",
-      provider_receipt: { "service_agreement" => "full" },
-      verified_with: :stripe_api, verified_at: Time.current
+               provider_receipt: { "service_agreement" => "full" },
+               verified_with: :stripe_api, verified_at: Time.current
     )
 
     assert_equal first.id, again.id
@@ -102,7 +102,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   test "an unchecked provider receipt says so" do
     event = Clickwrap.import_external_receipt!(
       :signup, actor: @user, provider_name: "docusign", provider_event_id: "env_2",
-      provider_receipt: nil, verified_with: nil, verified_at: nil
+               provider_receipt: nil, verified_with: nil, verified_at: nil
     )
 
     assert_equal "not_checked", event.provider_verification["state"]
@@ -212,11 +212,11 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
     first = Clickwrap.authorize_external_action!(
       :withdrawal_authorization, actor: @user, subject: withdrawal,
-      submission: submission_for(presentation, answers)
+                                 submission: submission_for(presentation, answers)
     )
     again = Clickwrap.authorize_external_action!(
       :withdrawal_authorization, actor: @user, subject: withdrawal,
-      submission: submission_for(presentation, answers)
+                                 submission: submission_for(presentation, answers)
     )
 
     assert_equal first.id, again.id
@@ -393,8 +393,8 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
     assert result.success?, result.to_s
     assert_equal "clickwrap.receipt.v1", result.schema
-    assert result.checks.any? { |check| check.name == "receipt_digest" && check.passed? }
-    assert result.checks.any? { |check| check.name == "canonical_bytes" && check.passed? }
+    assert(result.checks.any? { |check| check.name == "receipt_digest" && check.passed? })
+    assert(result.checks.any? { |check| check.name == "canonical_bytes" && check.passed? })
   end
 
   test "the standalone verifier checks supplied document bytes and reports the ones it was not given" do
@@ -405,7 +405,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       receipt.to_canonical_json, documents: { "terms" => terms.content_bytes }
     )
     assert with_terms.success?, with_terms.to_s
-    assert with_terms.checks.any? { |check| check.name.include?("terms") && check.passed? }
+    assert(with_terms.checks.any? { |check| check.name.include?("terms") && check.passed? })
 
     # A document nobody supplied is neither a pass nor a failure. Collapsing the
     # three states into two is how "we did not look" becomes "we looked and it
@@ -416,7 +416,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       receipt.to_canonical_json, documents: { "terms" => "these are not the bytes that were shown" }
     )
     assert_not wrong.success?
-    assert wrong.failures.any? { |check| check.name.include?("terms") }
+    assert(wrong.failures.any? { |check| check.name.include?("terms") })
   end
 
   test "the standalone verifier detects an edited receipt" do
@@ -427,7 +427,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     result = Clickwrap::ReceiptVerifier.verify(Clickwrap::CanonicalJson.generate(body))
 
     assert_not result.success?
-    assert result.failures.any? { |check| check.name == "receipt_digest" }
+    assert(result.failures.any? { |check| check.name == "receipt_digest" })
   end
 
   test "the standalone verifier refuses an unknown schema rather than guessing" do
@@ -438,7 +438,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     result = Clickwrap::ReceiptVerifier.verify(Clickwrap::CanonicalJson.generate(body))
 
     assert_not result.success?
-    assert result.failures.any? { |check| check.detail.include?("clickwrap.receipt.v1") }
+    assert(result.failures.any? { |check| check.detail.include?("clickwrap.receipt.v1") })
   end
 
   test "the receipt reports both digests and says which one a file can check" do

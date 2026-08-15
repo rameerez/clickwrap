@@ -82,7 +82,7 @@ module ClickwrapTasks
     end
 
     say("  #{statement.key} (#{statement.kind})")
-    current.each { |key, id| say("    current published version of #{key}: #{id || '(nothing published)'}") }
+    current.each { |key, id| say("    current published version of #{key}: #{id || "(nothing published)"}") }
     say("    actors with current evidence:    #{total}")
     say("    actors who would be asked again: #{affected.size}")
   end
@@ -144,7 +144,7 @@ namespace :clickwrap do
     ClickwrapTasks.heading("Publishing documents")
     outcomes.each { |outcome| ClickwrapTasks.say("  #{outcome.status}: #{outcome.definition} — #{outcome.message}") }
     ClickwrapTasks.say
-    ClickwrapTasks.say("#{ClickwrapTasks.count(outcomes.count(&:published?), 'document')} published, " \
+    ClickwrapTasks.say("#{ClickwrapTasks.count(outcomes.count(&:published?), "document")} published, " \
                        "#{outcomes.count(&:unchanged?)} already published with identical bytes.")
   end
 
@@ -205,7 +205,7 @@ namespace :clickwrap do
         ClickwrapTasks.say("  policy:            #{event.policy_key} (#{event.event_type})")
         ClickwrapTasks.say("  recorded by server: #{event.recorded_at_by_server}")
         ClickwrapTasks.say("  digest verifies:   #{event.digest_verified?}")
-        ClickwrapTasks.say("  verification:      #{result.success? ? 'satisfied' : result.error}")
+        ClickwrapTasks.say("  verification:      #{result.success? ? "satisfied" : result.error}")
       end
 
       exit(1) unless event.digest_verified?
@@ -220,12 +220,12 @@ namespace :clickwrap do
         ClickwrapTasks.say("  chaining enabled:  #{chain.chaining_enabled}")
         ClickwrapTasks.say("  scopes walked:     #{chain.scopes.length}")
         ClickwrapTasks.say("  events checked:    #{chain.checked}")
-        ClickwrapTasks.say("  first break:       #{chain.first_break || 'none'}")
+        ClickwrapTasks.say("  first break:       #{chain.first_break || "none"}")
         ClickwrapTasks.say
         ClickwrapTasks.heading("Event digests")
-        ClickwrapTasks.say("  events checked:    #{digests['checked']}")
-        ClickwrapTasks.say("  digests verifying: #{digests['verified']}")
-        ClickwrapTasks.say("  not verifying:     #{digests['failed'].length}")
+        ClickwrapTasks.say("  events checked:    #{digests["checked"]}")
+        ClickwrapTasks.say("  digests verifying: #{digests["verified"]}")
+        ClickwrapTasks.say("  not verifying:     #{digests["failed"].length}")
         ClickwrapTasks.list(digests["failed"].first(20))
         ClickwrapTasks.say
         ClickwrapTasks.say("A verifying digest detects accidental or ordinary modification of the bytes it")
@@ -269,9 +269,9 @@ namespace :clickwrap do
         ClickwrapTasks.dump("plan_id" => plan.id, "expires_at" => plan.expires_at.to_s, "summary" => summary)
       else
         ClickwrapTasks.heading("Disposition plan #{plan.id}")
-        ClickwrapTasks.say("  due:        #{summary['due']}")
-        ClickwrapTasks.say("  held:       #{summary['held']} (a legal hold is pausing these)")
-        ClickwrapTasks.say("  unresolved: #{summary['unresolved']} (a host event has not happened yet)")
+        ClickwrapTasks.say("  due:        #{summary["due"]}")
+        ClickwrapTasks.say("  held:       #{summary["held"]} (a legal hold is pausing these)")
+        ClickwrapTasks.say("  unresolved: #{summary["unresolved"]} (a host event has not happened yet)")
         ClickwrapTasks.say
         ClickwrapTasks.say("  by part:")
         summary["by_part"].each { |part, counts| ClickwrapTasks.say("    #{part}: #{counts.inspect}") }
@@ -346,30 +346,30 @@ namespace :clickwrap do
       else
         ClickwrapTasks.heading("Request-evidence inventory")
         ClickwrapTasks.say("  records anything by default: " \
-                           "#{inventory['defaults']['records_any_request_evidence_by_default']}")
+                           "#{inventory["defaults"]["records_any_request_evidence_by_default"]}")
         ClickwrapTasks.say("  unresolved host events:      " \
-                           "#{inventory['unresolved_host_events'].join(', ').presence || '(none)'}")
+                           "#{inventory["unresolved_host_events"].join(", ").presence || "(none)"}")
 
         recording, quiet = inventory["policies"].partition { |policy| policy["records_any_request_evidence"] }
 
         ClickwrapTasks.say("  policies recording no request evidence: " \
-                           "#{quiet.map { |policy| policy['policy'] }.join(', ').presence || '(none)'}")
+                           "#{quiet.map { |policy| policy["policy"] }.join(", ").presence || "(none)"}")
 
         recording.each do |policy|
           ClickwrapTasks.say
-          ClickwrapTasks.say("  #{policy['policy']} (retention class #{policy['retention_class']})")
+          ClickwrapTasks.say("  #{policy["policy"]} (retention class #{policy["retention_class"]})")
           policy["fields"].each do |field, details|
             next unless details["recorded"]
 
-            ClickwrapTasks.say("    #{field}: #{details['because']}")
+            ClickwrapTasks.say("    #{field}: #{details["because"]}")
             ClickwrapTasks.say("      legal basis reference: " \
-                               "#{details['legal_basis_reference'] || '(none supplied)'}")
-            ClickwrapTasks.say("      encrypted: #{details['encrypted']}, " \
-                               "delete after: #{details['delete_after_seconds'] || details['retain_until_rule']}")
-            ClickwrapTasks.say("      fields: #{details['fields'].join(', ')}") if details["fields"]
+                               "#{details["legal_basis_reference"] || "(none supplied)"}")
+            ClickwrapTasks.say("      encrypted: #{details["encrypted"]}, " \
+                               "delete after: #{details["delete_after_seconds"] || details["retain_until_rule"]}")
+            ClickwrapTasks.say("      fields: #{details["fields"].join(", ")}") if details["fields"]
           end
           ClickwrapTasks.say("    review on: " \
-                             "#{policy['review_request_evidence_configuration_on'] || '(no date set)'}")
+                             "#{policy["review_request_evidence_configuration_on"] || "(no date set)"}")
         end
 
         ClickwrapTasks.say
@@ -411,10 +411,10 @@ namespace :clickwrap do
         summary = plan.summary.to_h
 
         ClickwrapTasks.heading("Actor disposition plan #{plan.id}")
-        ClickwrapTasks.say("  items:                         #{summary['due']}")
-        ClickwrapTasks.say("  held by a legal hold:          #{summary['held']}")
-        ClickwrapTasks.say("  still within retention period: #{summary['still_within_retention_period']}")
-        ClickwrapTasks.say("  by part: #{summary['by_part'].inspect}")
+        ClickwrapTasks.say("  items:                         #{summary["due"]}")
+        ClickwrapTasks.say("  held by a legal hold:          #{summary["held"]}")
+        ClickwrapTasks.say("  still within retention period: #{summary["still_within_retention_period"]}")
+        ClickwrapTasks.say("  by part: #{summary["by_part"].inspect}")
         ClickwrapTasks.say
         ClickwrapTasks.say("Nothing has been deleted. This plan does not decide whether an erasure request")
         ClickwrapTasks.say("overrides a retention duty, a legal claim, or a hold — it shows what exists so")

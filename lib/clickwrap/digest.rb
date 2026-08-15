@@ -100,7 +100,7 @@ module Clickwrap
         SUPPORTED_ALGORITHMS.fetch(algorithm.to_s) do
           raise ConfigurationError,
                 "#{algorithm.inspect} is not a supported digest algorithm. " \
-                "Choose one of: #{SUPPORTED_ALGORITHMS.keys.join(', ')}."
+                "Choose one of: #{SUPPORTED_ALGORITHMS.keys.join(", ")}."
         end
       end
     end

@@ -29,6 +29,11 @@ module Clickwrap
     DOCUMENT_STORES = %i[database active_storage resolver].freeze
     DIGEST_ALGORITHMS = %i[sha256 sha384 sha512].freeze
 
+    # The readers are grouped by section on purpose, and kept that way even
+    # though rubocop would happily collapse them into one line. The initializer
+    # this class backs is the main thing a host reads about Clickwrap, and the
+    # shape of these groups is the shape of that file.
+    #
     # --- Identity -------------------------------------------------------------
     attr_reader :actor_class_name, :current_actor_method_name, :parent_controller_class_name
     attr_reader :find_current_tenant_with, :identify_actor_with, :snapshot_actor_with
@@ -37,6 +42,7 @@ module Clickwrap
     # --- Documents and policies -----------------------------------------------
     attr_reader :store_document_contents_in, :document_renderer, :document_resolver
     attr_accessor :policy_paths
+
     attr_reader :raise_on_missing_translation
 
     # --- Presentation ---------------------------------------------------------
@@ -51,6 +57,10 @@ module Clickwrap
     attr_reader :authorize_receipt_access_with, :authorize_unredacted_request_evidence_access_with
 
     # --- Request evidence: what is recorded by default ------------------------
+    #
+    # One reader per IP-geolocation field, spelled out rather than generated,
+    # because each is a separate decision about what to keep about someone's
+    # network context and each should be greppable by its own name.
     attr_reader :record_ip_address_by_default, :record_browser_user_agent_by_default
     attr_reader :record_ip_geolocation_country_by_default,
                 :record_ip_geolocation_region_by_default,
@@ -77,7 +87,7 @@ module Clickwrap
                 :delete_recorded_ip_geolocation_after
     attr_reader :read_ip_address_from_http_request_with, :read_browser_user_agent_from_http_request_with
     attr_reader :ip_geolocation_resolver, :fail_capture_when_ip_geolocation_is_unavailable
-    attr_reader :trusted_proxy_configuration_digest
+    attr_reader :trusted_proxy_configuration_digest, :reason_for_storing_request_evidence_unencrypted
 
     # --- Hooks ----------------------------------------------------------------
     attr_reader :after_event_is_committed, :report_after_commit_failure_with
@@ -503,7 +513,7 @@ module Clickwrap
       if enabled_default_ip_geolocation_fields.any?
         raise ConfigurationError,
               "Clickwrap is set to record the IP-geolocation fields " \
-              "#{enabled_default_ip_geolocation_fields.join(', ')} but no " \
+              "#{enabled_default_ip_geolocation_fields.join(", ")} but no " \
               "`ip_geolocation_resolver` is configured, so there is nothing to resolve them. " \
               "Set one (for example Clickwrap::IpGeolocation::TrackdownResolver.new) or turn " \
               "the fields off."
@@ -540,9 +550,7 @@ module Clickwrap
     def ensure_class_name(value, name)
       class_name = value.is_a?(Class) ? value.name : value.to_s
 
-      if class_name.strip.empty?
-        raise ConfigurationError, "#{name} can't be blank"
-      end
+      raise ConfigurationError, "#{name} can't be blank" if class_name.strip.empty?
 
       class_name
     end
@@ -634,8 +642,6 @@ module Clickwrap
       @deliberately_storing_request_evidence_unencrypted = true
       @reason_for_storing_request_evidence_unencrypted = because
     end
-
-    attr_reader :reason_for_storing_request_evidence_unencrypted
 
     def storing_request_evidence_unencrypted? = @deliberately_storing_request_evidence_unencrypted == true
   end

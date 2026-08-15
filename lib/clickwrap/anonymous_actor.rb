@@ -23,7 +23,7 @@ module Clickwrap
       if @identifier.strip.empty?
         raise ArgumentError,
               "An anonymous actor needs a stable identifier your application owns, for example " \
-              "\"checkout_#{'#'}{signed_checkout_id}\"."
+              "\"checkout_#{signed_checkout_id}\"."
       end
 
       if IP_ADDRESS_PATTERN.match?(@identifier)

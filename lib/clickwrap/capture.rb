@@ -126,9 +126,9 @@ module Clickwrap
     # nested one that could succeed while the outer one rolls back.
     def run_in_transaction(&)
       ::ActiveRecord::Base.transaction(requires_new: false, &)
-    rescue ::ActiveRecord::Deadlocked, ::ActiveRecord::SerializationFailure => e
+    rescue ::ActiveRecord::Deadlocked, ::ActiveRecord::SerializationFailure => error
       raise RetryableTransactionError,
-            "The capture hit a #{e.class.name.demodulize.underscore.humanize.downcase}. Clickwrap " \
+            "The capture hit a #{error.class.name.demodulize.underscore.humanize.downcase}. Clickwrap " \
             "does not retry automatically here because it cannot prove your protected action is " \
             "safe to run twice. Retry the whole operation if it is."
     end
@@ -214,12 +214,12 @@ module Clickwrap
                   version.verify_content_digest
 
           raise PresentationInvalid.new(
-            "The document #{document['key']} version #{document['version']} no longer matches " \
+            "The document #{document["key"]} version #{document["version"]} no longer matches " \
             "what this presentation offered. Re-render the form so the person sees the current " \
             "version before acting on it.",
             result: Verification::Result.failure(
               :document_digest_mismatch, policy_key: policy.key,
-              details: { "document" => document["key"] }
+                                         details: { "document" => document["key"] }
             )
           )
         end
@@ -259,7 +259,7 @@ module Clickwrap
 
       unless unknown.empty?
         raise SubmissionInvalid,
-              "The submission answers #{unknown.join(', ')}, which this presentation never " \
+              "The submission answers #{unknown.join(", ")}, which this presentation never " \
               "offered. Answers are only accepted for the statements the server declared."
       end
 
@@ -294,7 +294,7 @@ module Clickwrap
 
       raise AnswerInvalid.new(
         "#{value.inspect} is not one of the choices offered for #{statement.key} " \
-        "(#{statement.choices.keys.join(', ')}).",
+        "(#{statement.choices.keys.join(", ")}).",
         statement_key: statement.key, reason: :missing_answer
       )
     end
@@ -325,8 +325,8 @@ module Clickwrap
     # event.
     def replay(event, answers)
       recorded = event.statements.to_h { |statement| [statement.statement_key, statement.answer] }
-      submitted = answers.transform_values { |value| value.nil? ? nil : value.to_s }
-      comparable = recorded.transform_values { |value| value.nil? ? nil : value.to_s }
+      submitted = answers.transform_values { |value| value&.to_s }
+      comparable = recorded.transform_values { |value| value&.to_s }
 
       unless comparable == submitted.slice(*comparable.keys)
         raise ReplayRejected,
@@ -395,6 +395,7 @@ module Clickwrap
         recorded_at_by_server: now,
         idempotency_key: idempotency_key_for(manifest),
         http_request_id: http_request_id,
+        presentation: persisted_presentation(manifest),
         presentation_manifest: manifest.to_h,
         presentation_manifest_digest: manifest.digest,
         retention_class_key: policy.retention_class_key,
@@ -413,6 +414,7 @@ module Clickwrap
 
       save_event_with_idempotency(event, answers)
       attach_request_evidence(event, annex)
+      record_chain_head(event)
 
       event
     end
@@ -452,7 +454,7 @@ module Clickwrap
           assertion_text: fragment["assertion"],
           assertion_locale: manifest.locale,
           label_text: fragment["label"],
-          link_labels: fragment["documents"]&.to_h { |d| [d["key"], d["label"]] } || {},
+          link_labels: Array(fragment["documents"]).to_h { |d| [d["key"], d["label"]] },
           choices: statement.choices,
           required: statement.required?,
           optional: statement.optional?,
@@ -527,16 +529,31 @@ module Clickwrap
     def assign_chain_position(event)
       return unless Clickwrap.config.chain_event_history_with
 
-      scope = [tenant_key.presence || "global", policy.key].join("/")
-      previous_digest, sequence = ChainHead.append!(
-        chain_scope: scope,
-        event_id: event.id || Identifier.generate,
-        event_digest: nil
-      )
+      previous_digest, sequence = ChainHead.reserve!(chain_scope: chain_scope_for(event))
 
-      event.chain_scope = scope
+      event.chain_scope = chain_scope_for(event)
       event.chain_sequence = sequence
       event.previous_event_digest = previous_digest
+    end
+
+    # Phase two: the head learns the digest the event was actually written with,
+    # so the next event in this scope links to something real rather than to the
+    # nil the digest had not become yet.
+    def record_chain_head(event)
+      return unless Clickwrap.config.chain_event_history_with
+
+      ChainHead.record!(
+        chain_scope: event.chain_scope,
+        event_id: event.id,
+        event_digest: event.event_digest
+      )
+    end
+
+    # Per tenant and policy, never one global chain. A single chain across
+    # unrelated tenants makes every capture queue behind every other capture and
+    # buys assurance nobody asked for at a cost everybody pays.
+    def chain_scope_for(_event)
+      [tenant_key.presence || "global", policy.key].join("/")
     end
 
     # Builds the annex record in memory, so its binding digest can go into the
@@ -580,7 +597,7 @@ module Clickwrap
       outcome = statement.record_protected_outcome_with.call(subject)
       return if outcome.nil?
 
-      event.update_columns(protected_outcome: outcome.deep_stringify_keys) # rubocop:disable Rails/SkipsModelValidations
+      event.update_columns(protected_outcome: outcome.deep_stringify_keys)
     end
 
     def update_projections!(event)
@@ -591,11 +608,23 @@ module Clickwrap
       Presentation.find_by(nonce: manifest.nonce)&.mark_accepted!
     end
 
+    # The persisted presentation row this capture accepted, for the policies
+    # that keep one. Linking it to the event is what makes
+    # `Presentation.where.missing(:events)` mean "nobody ever submitted this":
+    # without the link, a retention run reads the manifest a receipt cites as an
+    # abandoned offer and deletes it. Only looked up for a policy that persists
+    # presentations, because for every other policy there is no row to find.
+    def persisted_presentation(manifest)
+      return nil unless policy.persist_presentations?
+
+      Presentation.find_by(nonce: manifest.nonce)
+    end
+
     def rebind_actor_after_registration!(pending)
       @actor = @prospective_actor
       return if actor.nil?
 
-      pending.event.update_columns( # rubocop:disable Rails/SkipsModelValidations
+      pending.event.update_columns(
         actor_type: actor.class.name,
         actor_id: actor.id,
         actor_reference: actor_reference
@@ -643,7 +672,7 @@ module Clickwrap
     end
 
     def authentication_context
-      @resolved_authentication_context ||= (@authentication_context || {}).to_h.symbolize_keys
+      @authentication_context = (@authentication_context || {}).to_h.symbolize_keys
     end
 
     def attribution_method

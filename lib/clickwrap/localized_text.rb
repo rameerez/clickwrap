@@ -66,9 +66,7 @@ module Clickwrap
 
       text = ::I18n.t(declaration, locale:, default: nil, **interpolations)
 
-      if text.nil? || text.to_s.strip.empty?
-        raise MissingTranslation.new(key: declaration, locale:)
-      end
+      raise MissingTranslation.new(key: declaration, locale:) if text.nil? || text.to_s.strip.empty?
 
       [text.to_s, locale.to_s]
     end

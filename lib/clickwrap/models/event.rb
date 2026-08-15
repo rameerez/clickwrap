@@ -204,11 +204,11 @@ module Clickwrap
     # what disappears is the payload, and the disposition is itself recorded as
     # a linked event, so an auditor sees a documented deletion rather than a gap.
     def mark_core_event_disposed!(at: Clickwrap.now)
-      update_columns(core_event_disposed_at: at) # rubocop:disable Rails/SkipsModelValidations
+      update_columns(core_event_disposed_at: at)
     end
 
     def set_legal_hold!(held)
-      update_columns(on_legal_hold: held) # rubocop:disable Rails/SkipsModelValidations
+      update_columns(on_legal_hold: held)
     end
 
     # Only the foreign key. The binding digest was written when the event was
@@ -218,7 +218,7 @@ module Clickwrap
     # precisely because it is NOT in the canonical body — it is a pointer, not
     # a fact about what was recorded.
     def attach_request_evidence!(record)
-      update_columns(request_evidence_id: record.id) # rubocop:disable Rails/SkipsModelValidations
+      update_columns(request_evidence_id: record.id)
     end
 
     def to_s = "#{event_type} #{policy_key} #{id}"
@@ -293,8 +293,8 @@ module Clickwrap
 
     def run_after_commit_hook
       Clickwrap.config.after_event_is_committed.call(self)
-    rescue StandardError => e
-      Clickwrap.report_after_commit_failure(e, self)
+    rescue StandardError => error
+      Clickwrap.report_after_commit_failure(error, self)
     end
 
     def refuse_ordinary_update
@@ -302,7 +302,7 @@ module Clickwrap
       return if touched.empty?
 
       raise EventWriteFailed,
-            "Clickwrap events are append-only, so #{touched.join(', ')} cannot be updated on " \
+            "Clickwrap events are append-only, so #{touched.join(", ")} cannot be updated on " \
             "event #{id}. Corrections, withdrawals, expiries, and supersessions are new linked " \
             "events; that is what keeps a receipt able to show what was true at the time as " \
             "well as what is true now."

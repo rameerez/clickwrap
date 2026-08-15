@@ -188,15 +188,15 @@ class CaptureTest < ActiveSupport::TestCase
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
     runs = 0
 
-    first = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                              submission: submission_for(presentation, default_withdrawal_answers)) do
-      runs += 1
-    end
+    submission = submission_for(presentation, default_withdrawal_answers)
 
-    second = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                               submission: submission_for(presentation, default_withdrawal_answers)) do
-      runs += 1
-    end
+    first = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user,
+                                                              subject: withdrawal,
+                                                              submission: submission) { runs += 1 }
+
+    second = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user,
+                                                               subject: withdrawal,
+                                                               submission: submission) { runs += 1 }
 
     assert_equal first.event_id, second.event_id
     assert_equal 1, runs, "the protected action must not run a second time"
@@ -235,8 +235,10 @@ class CaptureTest < ActiveSupport::TestCase
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
 
     error = assert_raises(Clickwrap::PresentationInvalid) do
-      Clickwrap.capture!(:withdrawal_authorization, actor: @user, subject: other_withdrawal,
-                                                    submission: submission_for(presentation, default_withdrawal_answers))
+      Clickwrap.capture!(:withdrawal_authorization,
+                         actor: @user,
+                         subject: other_withdrawal,
+                         submission: submission_for(presentation, default_withdrawal_answers))
     end
 
     assert_equal :presentation_subject_mismatch, error.result.error

@@ -18,25 +18,42 @@ module Clickwrap
 
     validates :chain_scope, presence: true, uniqueness: true
 
-    # Appends an event to its chain and returns [previous_digest, sequence].
-    # Takes a row lock so two concurrent captures in the same scope cannot both
-    # read the same predecessor and produce a fork.
-    def self.append!(chain_scope:, event_id:, event_digest:)
+    # Appending is two phases, and it has to be.
+    #
+    # An event's digest is computed from its own body, which the event does not
+    # have until it is built — but its `previous_event_digest` has to be set
+    # before it is saved. So `reserve!` hands out the predecessor's digest and
+    # the next sequence number, the event is written with those, and `record!`
+    # then stores the digest the event actually ended up with.
+    #
+    # Doing it in one call is how a chain quietly ends up with a head full of
+    # nils: every link would point at a digest that had not been computed yet.
+
+    # Takes the next position in the chain. The row lock is what stops two
+    # concurrent captures in the same scope from reading the same predecessor
+    # and forking the chain.
+    def self.reserve!(chain_scope:)
       head = lock.find_by(chain_scope: chain_scope) ||
              create!(chain_scope: chain_scope, sequence: 0)
 
-      previous_digest = head.last_event_digest
       next_sequence = head.sequence + 1
+      previous_digest = head.last_event_digest
 
-      head.update!(
-        last_event_id: event_id,
-        last_event_digest: event_digest,
-        sequence: next_sequence
-      )
+      head.update!(sequence: next_sequence)
 
       [previous_digest, next_sequence]
     rescue ActiveRecord::RecordNotUnique
       retry
+    end
+
+    # Records the digest the event was actually written with, so the next event
+    # in this scope links to something real.
+    def self.record!(chain_scope:, event_id:, event_digest:)
+      head = lock.find_by(chain_scope: chain_scope)
+      return nil unless head
+
+      head.update!(last_event_id: event_id, last_event_digest: event_digest)
+      head
     end
 
     def to_s = "chain #{chain_scope} at #{sequence}"

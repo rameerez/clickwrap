@@ -52,7 +52,7 @@ module Clickwrap
       when "declaration" then "Declared: #{subject}"
       when "attestation" then "Attested: #{subject}"
       when "authorization" then "Authorized: #{subject}"
-      else "#{h(act['action'])}: #{subject}"
+      else "#{h(act["action"])}: #{subject}"
       end
     end
 
@@ -66,14 +66,14 @@ module Clickwrap
       when "not_configured"
         "No #{name} was recorded. This policy does not collect it."
       when "unavailable"
-        "The #{name} could not be resolved (#{h(fragment['unavailable_reason'])}), so none was recorded."
+        "The #{name} could not be resolved (#{h(fragment["unavailable_reason"])}), so none was recorded."
       when "recorded"
         "The #{name} was recorded and is shown below."
       when "redacted_for_this_viewer"
         "A #{name} was recorded. It is not shown to this viewer."
       when "deleted_after_retention"
         "The #{name} was recorded and has since been deleted under the retention policy" \
-          "#{fragment['deleted_at'] ? " on #{h(fragment['deleted_at'])}" : ''}."
+          "#{fragment["deleted_at"] ? " on #{h(fragment["deleted_at"])}" : ""}."
       when "held"
         "A #{name} was recorded and is under a legal hold."
       else

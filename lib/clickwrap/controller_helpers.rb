@@ -171,6 +171,30 @@ module Clickwrap
       Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(options), &block)
     end
 
+    # Signup, for Rails' own authentication generator or any hand-rolled
+    # registration:
+    #
+    #   register_with_clickwrap :signup, user: @user do
+    #     @user.save!
+    #   end
+    #
+    # The account and the evidence that authorized creating it commit together.
+    # A failed evidence write raises rather than returning falsy, so the sign-in,
+    # the welcome email, and the redirect that would normally follow simply do
+    # not happen — which is the difference between a refused signup and a live
+    # account nobody can explain.
+    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **options, &block)
+      Clickwrap::Registration.perform(
+        policy_key,
+        prospective_actor: prospective_actor || user,
+        http_request: request,
+        submission: clickwrap_submission,
+        tenant: Clickwrap.config.find_current_tenant_with.call(self),
+        **options,
+        &block
+      )
+    end
+
     # Whatever the host chose to record about how this request was
     # authenticated. Clickwrap does not inspect the session itself: what counts
     # as an authentication context is the host's decision, and the default is an

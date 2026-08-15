@@ -71,7 +71,7 @@ module Clickwrap
 
       if provided.length > 1
         raise DefinitionError,
-              "Document #{key} #{version_label} declares #{provided.keys.join(' and ')}. " \
+              "Document #{key} #{version_label} declares #{provided.keys.join(" and ")}. " \
               "Give it exactly one source."
       end
 
@@ -121,9 +121,7 @@ module Clickwrap
 
     def normalize_key(value)
       normalized = value.to_s
-      if normalized.empty?
-        raise DefinitionError, "A document needs a key, for example :terms"
-      end
+      raise DefinitionError, "A document needs a key, for example :terms" if normalized.empty?
 
       normalized
     end

@@ -127,7 +127,7 @@ module Clickwrap
 
       raise DefinitionError,
             "Policy #{policy.key} does not accept captures from #{capture_channel}. It allows: " \
-            "#{policy.capture_channels.join(', ')}."
+            "#{policy.capture_channels.join(", ")}."
     end
 
     def validate_locale!

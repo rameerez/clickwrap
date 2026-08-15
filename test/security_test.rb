@@ -208,7 +208,7 @@ class SecurityTest < ActiveSupport::TestCase
 
     # Simulate a privileged actor going around the model's append-only guard.
     Clickwrap::Event.where(id: receipt.event_id)
-                    .update_all(actor_reference: @attacker.clickwrap_actor_reference) # rubocop:disable Rails/SkipsModelValidations
+                    .update_all(actor_reference: @attacker.clickwrap_actor_reference)
 
     assert_not receipt.event.reload.digest_verified?
     assert_equal :integrity_check_failed, Clickwrap.verify(receipt.event_id).error

@@ -85,8 +85,8 @@ module Clickwrap
       unknown = rules.keys - PARTS
       unless unknown.empty?
         raise DefinitionError,
-              "Retention class #{key} declares rules for #{unknown.join(', ')}, which are not " \
-              "parts of an event. Choose from: #{PARTS.join(', ')}."
+              "Retention class #{key} declares rules for #{unknown.join(", ")}, which are not " \
+              "parts of an event. Choose from: #{PARTS.join(", ")}."
       end
 
       rules.each_value do |rule|

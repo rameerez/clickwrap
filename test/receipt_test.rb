@@ -103,7 +103,7 @@ class ReceiptTest < ActiveSupport::TestCase
     receipt = capture_clickwrap(:signup, actor: create_user,
                                          answers: { terms: "1", privacy_notice: "1" })
 
-    assert_no_match(%r{<script>alert}, receipt.to_html)
+    assert_no_match(/<script>alert/, receipt.to_html)
   end
 
   test "to_pdf explains that a PDF is a rendering rather than the record" do

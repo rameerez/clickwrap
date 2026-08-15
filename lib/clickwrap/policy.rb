@@ -19,9 +19,8 @@ module Clickwrap
   # canonicalized. That boundary is stated in the receipt rather than papered
   # over.
   class Policy
-    attr_reader :key, :statements, :retention_class_key, :request_evidence,
-                :persist_presentations_for, :persist_presentations_because,
-                :capture_channels, :locales, :options
+    attr_reader :key, :statements, :retention_class_key, :request_evidence, :persist_presentations_for,
+                :persist_presentations_because, :capture_channels, :locales, :options, :snapshot, :revision
 
     def initialize(key:, statements:, retention_class_key: nil, request_evidence: nil,
                    persist_presentations_for: nil, persist_presentations_because: nil,
@@ -42,8 +41,6 @@ module Clickwrap
       freeze
     end
 
-    attr_reader :snapshot, :revision
-
     def statement(statement_key)
       statements.find { |statement| statement.key == statement_key.to_s }
     end
@@ -52,7 +49,7 @@ module Clickwrap
       statement(statement_key) || raise(
         UnknownStatementError,
         "Policy #{key} has no statement #{statement_key.inspect}. It declares: " \
-        "#{statements.map(&:key).join(', ')}."
+        "#{statements.map(&:key).join(", ")}."
       )
     end
 
@@ -130,7 +127,7 @@ module Clickwrap
       return if duplicates.empty?
 
       raise DefinitionError,
-            "Policy #{key} declares #{duplicates.join(', ')} more than once. Two statements " \
+            "Policy #{key} declares #{duplicates.join(", ")} more than once. Two statements " \
             "with the same key would produce evidence nobody can tell apart."
     end
 
@@ -189,8 +186,8 @@ module Clickwrap
       return if unknown.empty?
 
       raise DefinitionError,
-            "Policy #{key} allows unknown capture channels #{unknown.join(', ')}. " \
-            "Choose from: #{Vocabulary::CAPTURE_CHANNELS.join(', ')}."
+            "Policy #{key} allows unknown capture channels #{unknown.join(", ")}. " \
+            "Choose from: #{Vocabulary::CAPTURE_CHANNELS.join(", ")}."
     end
   end
 end

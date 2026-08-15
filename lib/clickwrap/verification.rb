@@ -101,24 +101,18 @@ module Clickwrap
       def verify_policy(policy_key, actor:, subject:, tenant:, at:)
         policy = Clickwrap.policies[policy_key.to_s]
 
-        unless policy
-          return Result.failure(:unknown_policy, policy_key: policy_key.to_s)
-        end
+        return Result.failure(:unknown_policy, policy_key: policy_key.to_s) unless policy
 
         actor_reference = reference_for(actor)
 
-        unless actor_reference
-          return Result.failure(:wrong_actor, policy_key: policy.key)
-        end
+        return Result.failure(:wrong_actor, policy_key: policy.key) unless actor_reference
 
         states = load_states(policy, actor_reference, tenant, subject)
 
         policy.required_statements.each do |statement|
           state = states[statement.key]
 
-          unless state
-            return Result.failure(:no_evidence, policy_key: policy.key, statement_key: statement.key)
-          end
+          return Result.failure(:no_evidence, policy_key: policy.key, statement_key: statement.key) unless state
 
           failure = check_statement(policy, statement, state, subject, at)
           return failure if failure
@@ -131,16 +125,20 @@ module Clickwrap
 
       def check_statement(policy, statement, state, subject, at)
         unless state.satisfies?(at)
-          return Result.failure(state.failure_reason(at), policy_key: policy.key,
-                                statement_key: statement.key, event_id: state.current_event_id)
+          return Result.failure(state.failure_reason(at),
+                                policy_key: policy.key,
+                                statement_key: statement.key,
+                                event_id: state.current_event_id)
         end
 
         if statement.subject_bound?
           expected = subject_fingerprint_for(statement, subject)
 
           if expected && !Digest.secure_compare?(expected, state.subject_fingerprint.to_s)
-            return Result.failure(:subject_fingerprint_mismatch, policy_key: policy.key,
-                                  statement_key: statement.key, event_id: state.current_event_id)
+            return Result.failure(:subject_fingerprint_mismatch,
+                                  policy_key: policy.key,
+                                  statement_key: statement.key,
+                                  event_id: state.current_event_id)
           end
         end
 
@@ -148,8 +146,10 @@ module Clickwrap
           stale = stale_document?(statement, state)
 
           if stale
-            return Result.failure(:unseen_document_version, policy_key: policy.key,
-                                  statement_key: statement.key, event_id: state.current_event_id,
+            return Result.failure(:unseen_document_version,
+                                  policy_key: policy.key,
+                                  statement_key: statement.key,
+                                  event_id: state.current_event_id,
                                   details: { "document" => stale })
           end
         end
@@ -166,8 +166,8 @@ module Clickwrap
           next if prerequisite
 
           return Result.failure(:predecessor_missing, policy_key: policy.key,
-                                statement_key: statement.key, event_id: state.current_event_id,
-                                details: { "requires" => prerequisite_key })
+                                                      statement_key: statement.key, event_id: state.current_event_id,
+                                                      details: { "requires" => prerequisite_key })
         end
 
         nil
@@ -180,12 +180,10 @@ module Clickwrap
 
         if policy && event.policy_key != policy.to_s
           return Result.failure(:presentation_policy_mismatch, policy_key: event.policy_key,
-                                event_id: event.id)
+                                                               event_id: event.id)
         end
 
-        if event.disposed?
-          return Result.failure(:core_event_disposed, policy_key: event.policy_key, event_id: event.id)
-        end
+        return Result.failure(:core_event_disposed, policy_key: event.policy_key, event_id: event.id) if event.disposed?
 
         unless event.digest_verified?
           return Result.failure(:integrity_check_failed, policy_key: event.policy_key, event_id: event.id)
@@ -203,8 +201,8 @@ module Clickwrap
 
         unless mismatched.empty?
           return Result.failure(:document_digest_mismatch, policy_key: event.policy_key,
-                                event_id: event.id,
-                                details: { "documents" => mismatched.map(&:document_key) })
+                                                           event_id: event.id,
+                                                           details: { "documents" => mismatched.map(&:document_key) })
         end
 
         if subject && event.subject_key.present? &&

@@ -181,7 +181,7 @@ module Clickwrap
 
           raise ArgumentError,
                 "#{field.inspect} is not a request-evidence field Clickwrap can delete. " \
-                "Choose one of: #{FIELDS.join(', ')}. Each one is deleted by name so a " \
+                "Choose one of: #{FIELDS.join(", ")}. Each one is deleted by name so a " \
                 "disposition report can say which value went."
         end
 

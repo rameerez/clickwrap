@@ -49,7 +49,7 @@ module ClickwrapCommandLine
   # either one turns "we did not look" into "we looked and it was fine".
   SYMBOLS = { true => "✓", false => "✗", nil => "–" }.freeze
 
-  USAGE = <<~TEXT
+  USAGE = <<~TEXT.freeze
     clickwrap #{Clickwrap::VERSION} — verify a Clickwrap receipt without the application that wrote it.
 
     Usage:
@@ -77,7 +77,7 @@ module ClickwrapCommandLine
 
   def run(argv)
     return help if argv.empty? || argv.first == "--help" || argv.first == "-h"
-    return version if argv.first == "--version" || argv.first == "-v"
+    return version if ["--version", "-v"].include?(argv.first)
 
     command = argv.shift
 
@@ -115,8 +115,8 @@ module ClickwrapCommandLine
     result = verifier.verify(receipt_json, documents: documents)
     options[:json] ? report_as_json(parsed, result, sources) : report(parsed, result, sources)
     result.success? ? SUCCESS : FAILURE
-  rescue Clickwrap::Error => e
-    warn("#{e.class.name.split('::').last}: #{e.message}")
+  rescue Clickwrap::Error => error
+    warn("#{error.class.name.split("::").last}: #{error.message}")
     FAILURE
   end
 
@@ -159,8 +159,8 @@ module ClickwrapCommandLine
 
   def parse_json(text, path)
     JSON.parse(text)
-  rescue JSON::ParserError => e
-    warn("#{path} is not valid JSON: #{e.message}")
+  rescue JSON::ParserError => error
+    warn("#{path} is not valid JSON: #{error.message}")
     nil
   end
 
@@ -183,6 +183,7 @@ module ClickwrapCommandLine
     files = Dir.children(directory).select { |name| File.file?(File.join(directory, name)) }
     documents = {}
     sources = {}
+    @ambiguous_documents = {}
 
     entries.each do |entry|
       key = entry["key"].to_s
@@ -198,30 +199,56 @@ module ClickwrapCommandLine
     [documents, sources]
   end
 
+  # Finds the one file that holds a document's bytes, or nothing.
+  #
+  # "Or nothing" is deliberate, and so is the ambiguity check. Two files can
+  # easily reduce to the same name — `terms.md` beside a stray `terms.bak`, or
+  # two locales dropped in the same folder — and a verifier that quietly picked
+  # one would report that a document verified while having read a file the
+  # operator never meant to offer. That is the one failure mode a verification
+  # tool must not have, so an ambiguous match is reported as ambiguous and the
+  # document is left unchecked rather than checked against a guess.
   def match_file(files, key, version, locale)
     candidates = ["#{key}-#{version}-#{locale}", "#{key}-#{version}", "#{key}.#{locale}", key]
 
     candidates.each do |candidate|
-      found = files.find { |name| basename(name).casecmp?(candidate) }
-      return found if found
+      matches = files.select { |name| basename(name).casecmp?(candidate) }
+      return matches.first if matches.length == 1
+      return ambiguous(key, matches) if matches.length > 1
     end
 
-    files.find { |name| basename(name).downcase.start_with?("#{key.downcase}-") }
+    prefixed = files.select { |name| basename(name).downcase.start_with?("#{key.downcase}-") }
+    return prefixed.first if prefixed.length == 1
+    return ambiguous(key, prefixed) if prefixed.length > 1
+
+    nil
+  end
+
+  def ambiguous(key, matches)
+    @ambiguous_documents[key] = matches.sort
+    nil
   end
 
   def basename(name) = File.basename(name, File.extname(name))
 
+  def ambiguous_documents = @ambiguous_documents ||= {}
+
   # --- Reporting ------------------------------------------------------------
 
   def report(receipt, result, sources)
-    say("Receipt #{receipt['event_id']} (schema #{result.schema || receipt['schema']})")
+    say("Receipt #{receipt["event_id"]} (schema #{result.schema || receipt["schema"]})")
     say
 
-    Array(result.checks).each { |check| say("  #{SYMBOLS.fetch(status(check), '?')} #{describe(check)}") }
+    Array(result.checks).each { |check| say("  #{SYMBOLS.fetch(status(check), "?")} #{describe(check)}") }
 
     say
     sources.each { |key, name| say("  document #{key} read from #{name}") }
     say("  no document files were supplied, so no document digest was checked") if sources.empty?
+
+    ambiguous_documents.each do |key, matches|
+      say("  ! document #{key} was NOT checked: #{matches.join(" and ")} both match that key.")
+      say("    Leave exactly one file per document so the check reads what you meant.")
+    end
 
     say
     Array(result.failures).each { |failure| say("  #{failure}") } unless result.success?
@@ -286,13 +313,15 @@ module ClickwrapCommandLine
   def verifier
     require "clickwrap/receipt_verifier"
     Clickwrap::ReceiptVerifier
-  rescue LoadError => e
-    raise Clickwrap::Error, "This build of clickwrap has no receipt verifier available (#{e.message})."
+  rescue LoadError => error
+    raise Clickwrap::Error, "This build of clickwrap has no receipt verifier available (#{error.message})."
   end
 
   def say(text = "") = $stdout.puts(text)
 
-  def warn(text) = $stderr.puts(text)
+  # Anything that is not the report itself goes to standard error, so
+  # `clickwrap verify ... > result.txt` captures the result and nothing else.
+  def warn(text) = Kernel.warn(text)
 end
 
 exit(ClickwrapCommandLine.run(ARGV))

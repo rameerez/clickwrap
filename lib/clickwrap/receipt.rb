@@ -98,7 +98,7 @@ module Clickwrap
 
         raise AccessNotAuthorized,
               "The host's authorize_unredacted_request_evidence_access_with callback declined " \
-              "this request for #{requested.select { |_, w| w }.keys.join(', ')}."
+              "this request for #{requested.select { |_, w| w }.keys.join(", ")}."
       end
     end
 

@@ -1,7 +1,9 @@
 # ☑️ `clickwrap` — trustworthy agreements, consent, declarations, and authorizations for Rails
 
+[![Gem Version](https://badge.fury.io/rb/clickwrap.svg)](https://badge.fury.io/rb/clickwrap) [![Build Status](https://github.com/rameerez/clickwrap/workflows/Tests/badge.svg)](https://github.com/rameerez/clickwrap/actions)
+
 > [!IMPORTANT]
-> **README-first product contract.** `clickwrap` is not implemented or published yet. This README deliberately describes the finished gem we intend to build so we can work backward from the ideal developer experience. Every public promise below is an acceptance criterion, not a claim about code that exists today. Remove this notice only after the implementation and proof integrations satisfy it.
+> **Status: built and tested, not yet proven in production.** Everything described below is implemented and covered by the test suite. What has *not* happened yet is the part that decides whether this gem is worth depending on: the three proof integrations, a usability test with a developer who has never seen it, and a legal review of the default wording and receipt claims. Those gates are tracked in [`docs/strategy/03-readiness-market-and-next-steps.md`](docs/strategy/03-readiness-market-and-next-steps.md). Until they pass, treat this as a release candidate for evaluation rather than something to put under a payout flow. The two areas most likely to change are the exact public names and the receipt schema; the [stability promise](#stability-and-upgrade-promise) applies from 0.1.0 onward.
 
 `clickwrap` is the missing evidence-and-assent layer for Rails.
 
@@ -774,7 +776,7 @@ receipt = Clickwrap.receipt(event_id)
 
 receipt.to_canonical_json
 receipt.to_html
-receipt.to_pdf              # optional renderer; never the source of truth
+receipt.to_pdf              # your renderer over to_html; never the source of truth
 receipt.verify
 ```
 
@@ -1550,6 +1552,16 @@ Clickwrap does not:
 
 Adapters let those systems contribute provider receipts without changing what Clickwrap itself claims.
 
+## What is not finished yet
+
+Everything above is implemented and tested. These parts are deliberately thinner than the rest, and it is better to read that here than to discover it during an audit:
+
+- **Independent anchoring and trusted timestamps are adapter contracts, not providers.** `anchor_event_history_with` and `timestamp_receipts_with` define the interface and ship working no-op defaults. Clickwrap does not bundle an RFC 3161 client or a trust-service integration, and a receipt reports the baseline or chained tier until you supply one.
+- **The Active Storage document backend is implemented but lightly exercised.** The database backend is the tested default and the one the whole suite runs against.
+- **Database hardening is PostgreSQL-only in substance.** `clickwrap:hardening --database` emits real update/delete protection on PostgreSQL. On SQLite and MySQL it says plainly what the database can and cannot reject rather than generating something that looks like protection and is not.
+- **The proof integrations have not run against real applications.** They exist as contract tests in this repository's suite. The four-part release test in [the readiness record](docs/strategy/03-readiness-market-and-next-steps.md) has not been evaluated.
+- **No legal or privacy review has been completed** on the default statement wording, the receipt claim sentences, or the request-evidence boundaries.
+
 ## FinePrint and Clickwrap solve different-sized problems
 
 [FinePrint](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/README.md#L7-L25) is established Rails prior art for versioned contracts, signatures, gates, and views. Clickwrap should never market itself as the first Rails agreement gem.
@@ -1688,21 +1700,41 @@ No gem can answer that universally. Clickwrap provides privacy-aware mechanisms 
 
 ```bash
 bin/setup
-bin/test
-bin/rubocop
-bin/rails test
+bundle exec rake test
+bundle exec rubocop
 ```
 
-The project uses Minitest, a dummy Rails application, SimpleCov, RuboCop, Appraisal matrices, SQLite/PostgreSQL/MySQL integration lanes, concurrency/fault tests, generator tests, Brakeman where relevant, and independent receipt-verifier golden fixtures.
+Against a specific Rails version:
 
-Every change to canonicalization, schema, receipts, migrations, cryptographic fields, or lifecycle behavior must prove backward verification against all released fixtures.
+```bash
+bundle exec appraisal rails-7.1 rake test
+```
+
+Against another database:
+
+```bash
+DATABASE_URL=postgres://localhost/clickwrap_test bundle exec rake db:migrate:reset test
+```
+
+The project uses Minitest, a dummy Rails application under `test/dummy`, SimpleCov, RuboCop, Appraisal matrices, and SQLite/PostgreSQL/MySQL lanes in CI. The concurrent-writer tests skip on SQLite, which allows a single writer, and run on the PostgreSQL and MySQL lanes where a real race can actually happen.
+
+A few test conventions exist because of what this gem stores:
+
+- the dummy app migrates a **concrete copy** of the install generator's migration template, and a drift test fails the build the moment the two disagree — so "the migration the dummy proved" and "the migration users get" cannot diverge silently;
+- fault injection (`Clickwrap::Testing.fail_next_event_write`) proves the atomicity claim from both sides rather than asserting it in prose; and
+- every change to canonicalization, receipt schema, digest fields, migrations, or lifecycle meaning must keep verifying every previously released receipt format.
 
 ## Contributing
 
-Bug reports and focused pull requests are welcome once the repository opens for implementation. Changes to public vocabulary or evidence claims require corresponding documentation, source review, migration/compatibility analysis, and proof-integration coverage.
+Bug reports and focused pull requests are welcome at https://github.com/rameerez/clickwrap. Please run `bundle exec rake test` and `bundle exec rubocop` first.
 
-Please do not use issues to request jurisdiction-specific legal advice or ask maintainers to approve legal text.
+Two kinds of change need more than a passing test:
+
+- **Anything touching public vocabulary or an evidence claim** — a method name, a receipt field, a lifecycle meaning, a sentence a receipt prints about what it proves. These need the documentation change alongside the code, plus a note on what happens to receipts already written under the old behavior.
+- **Anything touching canonicalization, the receipt schema, digests, or migrations.** Released evidence formats are permanent. A new gem version may stop creating an old schema; it must never stop verifying one.
+
+Please do not use issues to request jurisdiction-specific legal advice or to ask maintainers to approve legal text. Security reports go through [`SECURITY.md`](SECURITY.md), privately, and without real evidence records or personal data in them.
 
 ## License
 
-MIT.
+The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).

@@ -89,7 +89,10 @@ module Clickwrap
         "media_type" => media_type,
         content_digest_algorithm => bare_digest(content_digest)
       }.tap do |fragment|
-        fragment["rendered_#{content_digest_algorithm}"] = bare_digest(rendered_content_digest) if rendered_content_digest
+        if rendered_content_digest
+          fragment["rendered_#{content_digest_algorithm}"] =
+            bare_digest(rendered_content_digest)
+        end
       end
     end
 
@@ -138,7 +141,7 @@ module Clickwrap
       return if changed_frozen.empty?
 
       raise DocumentVersionConflictError,
-            "Document version #{self} is published, so #{changed_frozen.join(', ')} cannot " \
+            "Document version #{self} is published, so #{changed_frozen.join(", ")} cannot " \
             "change. Publish a new version instead — receipts already point at this one, and " \
             "editing it would silently change what they say the person was shown."
     end

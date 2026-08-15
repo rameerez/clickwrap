@@ -21,7 +21,7 @@ module Clickwrap
       # withdrawn as easily as it was given is not what this gem will record as
       # consent — the policy compiler already refused to accept one without a
       # withdrawal route.
-      def withdraw!(purpose_key, actor:, tenant: nil, subject: nil, because:, http_request: nil)
+      def withdraw!(purpose_key, actor:, because:, tenant: nil, subject: nil, http_request: nil)
         require_reason!(because, "Withdrawing consent")
 
         states = StatementState
@@ -38,7 +38,7 @@ module Clickwrap
 
         events = states.map do |state|
           transition!(state, to: "withdrawn", event_type: "withdrawal", action: "withdrawn",
-                      because: because, http_request: http_request, actor: actor)
+                             because: because, http_request: http_request, actor: actor)
         end
 
         events.length == 1 ? events.first : events
@@ -62,8 +62,8 @@ module Clickwrap
 
         ::ActiveRecord::Base.transaction do
           transition!(state, to: "corrected", event_type: "correction", action: "corrected",
-                      because: because, http_request: http_request, actor: actor,
-                      predecessor: replaces)
+                             because: because, http_request: http_request, actor: actor,
+                             predecessor: replaces)
 
           Capture.new(policy: policy, actor: actor, subject: subject, tenant: tenant,
                       http_request: http_request, submission: submission, answers: answers,
@@ -85,20 +85,20 @@ module Clickwrap
         end
       end
 
-      def revoke!(statement_key, actor:, subject: nil, tenant: nil, because:, http_request: nil)
+      def revoke!(statement_key, actor:, because:, subject: nil, tenant: nil, http_request: nil)
         require_reason!(because, "Revoking an authorization")
 
         state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
 
         transition!(state, to: "revoked", event_type: "revocation", action: "revoked",
-                    because: because, http_request: http_request, actor: actor)
+                           because: because, http_request: http_request, actor: actor)
       end
 
       def supersede!(statement_key, actor:, subject: nil, tenant: nil, because: nil, http_request: nil)
         state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
 
         transition!(state, to: "superseded", event_type: "supersession", action: "superseded",
-                    because: because, http_request: http_request, actor: actor)
+                           because: because, http_request: http_request, actor: actor)
       end
 
       # Consumes a one-time authorization. Called inside the transaction that
@@ -118,7 +118,7 @@ module Clickwrap
           end
 
           transition!(state, to: "consumed", event_type: "consumption", action: "consumed",
-                      because: because, actor: nil)
+                             because: because, actor: nil)
         end
       end
 
@@ -128,7 +128,7 @@ module Clickwrap
       def expire_due!(at: Clickwrap.now)
         StatementState.due_for_expiry(at).map do |state|
           transition!(state, to: "expired", event_type: "expiry", action: "expired",
-                      because: "The validity period recorded at capture ended", actor: nil, at: at)
+                             because: "The validity period recorded at capture ended", actor: nil, at: at)
         end
       end
 
@@ -140,7 +140,7 @@ module Clickwrap
       # who created it and why, and never satisfies `agreed_to?` — it answers
       # the separate `exempted_from?` question. There is no "missing checkbox
       # means system account" inference anywhere in this gem.
-      def exempt!(policy_key, actor:, subject: nil, tenant: nil, because:)
+      def exempt!(policy_key, actor:, because:, subject: nil, tenant: nil)
         require_reason!(because, "Recording an exemption")
 
         policy = Clickwrap.policy!(policy_key.to_s)

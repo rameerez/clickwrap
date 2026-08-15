@@ -47,7 +47,7 @@ module Clickwrap
     def refuse(method_name)
       raise ReceiptNotCommitted,
             "##{method_name} is not available on a pending receipt. The transaction has not " \
-            "committed yet, so there is nothing to #{method_name == :verify ? 'verify' : 'export'} " \
+            "committed yet, so there is nothing to #{method_name == :verify ? "verify" : "export"} " \
             "— and if the block raises, this event will never exist. Store `event_id` on your " \
             "domain row and use the Receipt that `capture_and!` returns."
     end

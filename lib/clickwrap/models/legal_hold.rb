@@ -30,9 +30,7 @@ module Clickwrap
     def in_effect? = !released?
 
     def release!(because:, released_by:)
-      if because.to_s.strip.empty?
-        raise LegalHoldInEffect, "Releasing a legal hold needs a `because:` explaining why."
-      end
+      raise LegalHoldInEffect, "Releasing a legal hold needs a `because:` explaining why." if because.to_s.strip.empty?
 
       update!(released_at: Clickwrap.now, released_by_reference: released_by.to_s, release_reason: because)
     end

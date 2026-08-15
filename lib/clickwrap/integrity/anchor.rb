@@ -18,11 +18,11 @@ module Clickwrap
     # WHAT AN ANCHOR CLAIMS. Exactly what the place it published to can support,
     # and not one word more. Clickwrap records the reference and the receipt an
     # adapter returns; it never upgrades either into a guarantee the anchoring
-    # service did not make. An anchor does not make evidence tamper-proof, does
-    # not establish identity, and does not supply time — a storage service
-    # writing "received at 14:02" is telling you when it received bytes, which
-    # is a different claim from a timestamp authority's, which is different again
-    # from proof that something happened at 14:02.
+    # service did not make. An anchor does not make evidence impossible to
+    # alter, does not establish identity, and does not supply time — a storage
+    # service writing "received at 14:02" is telling you when it received bytes,
+    # which is a different claim from a timestamp authority's, and different
+    # again from proof that something happened at 14:02.
     #
     # WRITING ONE. Implement `#publish(chain_head)` and `#verify(chain_head)`,
     # and report honestly from `#capabilities`. Subclassing this class is the
@@ -78,7 +78,7 @@ module Clickwrap
       # events it covers have committed, never inside their transaction: an
       # anchoring service cannot join a database transaction, and pretending
       # otherwise is how a network timeout becomes a rolled-back capture.
-      def publish(chain_head)
+      def publish(_chain_head)
         Publication.new(
           anchored: false,
           provider_name: provider_name,
@@ -95,7 +95,7 @@ module Clickwrap
       # Re-reads what was published and compares it with the head as it stands
       # now. This is the half that does the work: publishing a head nobody ever
       # checks establishes nothing.
-      def verify(chain_head)
+      def verify(_chain_head)
         Verification.new(
           checked: false,
           verified: false,

@@ -128,7 +128,7 @@ module Clickwrap
       policies.fetch(key.to_s) do
         raise UnknownPolicyError,
               "No policy named #{key.inspect}. Defined policies: " \
-              "#{policies.keys.sort.join(', ').presence || '(none)'}. Policies are declared with " \
+              "#{policies.keys.sort.join(", ").presence || "(none)"}. Policies are declared with " \
               "`Clickwrap.policy #{key.inspect} do ... end`, conventionally in config/clickwrap.rb."
       end
     end
@@ -137,7 +137,7 @@ module Clickwrap
       retention_classes.fetch(key.to_s) do
         raise UnknownRetentionClassError,
               "No retention class named #{key.inspect}. Defined classes: " \
-              "#{retention_classes.keys.sort.join(', ').presence || '(none)'}."
+              "#{retention_classes.keys.sort.join(", ").presence || "(none)"}."
       end
     end
 
@@ -277,8 +277,8 @@ module Clickwrap
     # have already committed and nothing an analytics call does may undo them.
     def report_after_commit_failure(error, event)
       config.report_after_commit_failure_with.call(error, event)
-    rescue StandardError => nested
-      logger&.error("[clickwrap] after-commit failure reporter itself raised: #{nested.class}")
+    rescue StandardError => error
+      logger&.error("[clickwrap] after-commit failure reporter itself raised: #{error.class}")
       nil
     end
   end

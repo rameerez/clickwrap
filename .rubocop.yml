@@ -66,6 +66,22 @@ Lint/UnusedBlockArgument:
 Naming/RescuedExceptionsVariableName:
   PreferredName: error
 
+# Configuration's readers are grouped by section, matching the order and shape
+# of the generated initializer — which is the main thing a host ever reads
+# about this gem. Collapsing them into one declaration produces a single
+# thousand-character line and loses that structure entirely.
+Style/AccessorGrouping:
+  Exclude:
+    - lib/clickwrap/configuration.rb
+
+# `->(http_request) { http_request.remote_ip }` keeps the parameter name, and
+# the parameter name is the point: the naming contract says `http_request`, not
+# a bare `&:remote_ip` whose receiver is anybody's guess when a host overrides
+# the reader.
+Style/SymbolProc:
+  Exclude:
+    - lib/clickwrap/configuration.rb
+
 Layout/LineLength:
   Max: 120
   Exclude:

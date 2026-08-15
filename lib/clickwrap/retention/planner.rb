@@ -174,10 +174,10 @@ module Clickwrap
           end
 
           Eligibility.new(eligible_at: resolved, rule: rule)
-        rescue StandardError => e
+        rescue StandardError => error
           Eligibility.new(
             rule: "host_event:#{name}",
-            unresolved_reason: "The host calculation #{name} could not be evaluated (#{e.class})."
+            unresolved_reason: "The host calculation #{name} could not be evaluated (#{error.class})."
           )
         end
       end
@@ -244,7 +244,7 @@ module Clickwrap
       def core_event_scopes
         scopes = [base_events.where.not(retain_core_event_until: nil).where(retain_core_event_until: ...at)]
 
-        Clickwrap.retention_classes.values.each do |retention_class|
+        Clickwrap.retention_classes.each do |retention_class|
           rule = retention_class.rule_for(:core_event)
           next if rule.nil?
 
@@ -294,8 +294,8 @@ module Clickwrap
       def annex_scopes(part)
         [
           base_annexes.public_send(:"with_#{part}_due", at),
-          base_annexes.where(:"#{part}_deleted_at" => nil, :"#{part}_delete_after" => nil)
-                      .where.not(:"#{part}_retain_until_rule" => nil)
+          base_annexes.where("#{part}_deleted_at": nil, "#{part}_delete_after": nil)
+                      .where.not("#{part}_retain_until_rule": nil)
         ]
       end
 

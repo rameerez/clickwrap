@@ -51,7 +51,7 @@ module Clickwrap
         "answer" => answer.presence,
         "purpose" => purpose_key,
         "expires_at" => Receipt.format_time(expires_at),
-        "one_time" => one_time? ? true : nil,
+        "one_time" => one_time? || nil,
         "subject_fingerprint" => subject_fingerprint
       }.compact
     end
@@ -67,7 +67,7 @@ module Clickwrap
       errors.add(
         :action,
         "#{action.inspect} is not something a #{kind} can record. A #{kind} can be: " \
-        "#{Vocabulary::ACTIONS_FOR_KIND.fetch(kind, []).join(', ')}."
+        "#{Vocabulary::ACTIONS_FOR_KIND.fetch(kind, []).join(", ")}."
       )
     end
 

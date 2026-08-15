@@ -135,7 +135,7 @@ module Clickwrap
       # Keyset pagination on the (chain_scope, chain_sequence) index. `find_each`
       # would order by primary key, and the primary key here is a ULID: close to
       # chain order, but "close to" is not the property a chain walk can rely on.
-      def each_event(chain_scope)
+      def each_event(chain_scope, &block)
         cursor = nil
 
         loop do
@@ -144,7 +144,7 @@ module Clickwrap
           batch = relation.to_a
           break if batch.empty?
 
-          batch.each { |event| yield event }
+          batch.each(&block)
           cursor = batch.last.chain_sequence
           break if cursor.nil?
         end

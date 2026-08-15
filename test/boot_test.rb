@@ -63,7 +63,7 @@ class BootTest < ActiveSupport::TestCase
     assert_includes Clickwrap.policies.keys, "signup"
     assert_includes Clickwrap.policies.keys, "withdrawal_authorization"
     assert_includes Clickwrap.retention_classes.keys, "ordinary_agreement_evidence"
-    assert Clickwrap.documents.values.any? { |definition| definition.key == "terms" }
+    assert(Clickwrap.documents.values.any? { |definition| definition.key == "terms" })
   end
 
   test "the events table has no updated_at column" do

@@ -256,13 +256,13 @@ module Clickwrap
 
       def actions_for(kind)
         ACTIONS_FOR_KIND.fetch(kind.to_s) do
-          raise UnknownStatementError, "#{kind.inspect} is not one of: #{KINDS.join(', ')}"
+          raise UnknownStatementError, "#{kind.inspect} is not one of: #{KINDS.join(", ")}"
         end
       end
 
       def initial_action_for(kind)
         INITIAL_ACTION_FOR_KIND.fetch(kind.to_s) do
-          raise UnknownStatementError, "#{kind.inspect} is not one of: #{KINDS.join(', ')}"
+          raise UnknownStatementError, "#{kind.inspect} is not one of: #{KINDS.join(", ")}"
         end
       end
 

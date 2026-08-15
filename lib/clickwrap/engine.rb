@@ -99,6 +99,11 @@ module Clickwrap
     initializer "clickwrap.action_controller" do
       ActiveSupport.on_load(:action_controller) do
         include Clickwrap::ControllerHelpers
+
+        # `clickwraps_registration_with :signup` for Devise controllers. The
+        # macro is available everywhere; nothing happens unless a controller
+        # actually calls it, and Devise is never required.
+        include Clickwrap::Registration
       end
     end
 
@@ -110,9 +115,7 @@ module Clickwrap
     end
 
     initializer "clickwrap.assets" do |app|
-      if app.config.respond_to?(:assets)
-        app.config.assets.paths << root.join("app/assets/stylesheets")
-      end
+      app.config.assets.paths << root.join("app/assets/stylesheets") if app.config.respond_to?(:assets)
     end
 
     # Load the host's document, policy, and retention declarations. They live in

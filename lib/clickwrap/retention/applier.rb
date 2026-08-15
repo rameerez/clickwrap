@@ -105,12 +105,12 @@ module Clickwrap
         else
           record_changed(item, "#{item.part} is not something this version of Clickwrap disposes of.")
         end
-      rescue LegalHoldInEffect => e
+      rescue LegalHoldInEffect => error
         # Belt and braces: the hold was already checked above, so reaching here
         # means one was placed between the check and the write. The hold wins.
-        record_held(item, e.message)
-      rescue StandardError => e
-        @errors << outcome_for(item, "#{e.class}: #{e.message}")
+        record_held(item, error.message)
+      rescue StandardError => error
+        @errors << outcome_for(item, "#{error.class}: #{error.message}")
       end
 
       # --- The core event -------------------------------------------------------

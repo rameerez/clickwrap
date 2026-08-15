@@ -29,7 +29,7 @@ module Clickwrap
       def warning? = status == :warning
       def problem? = status == :problem
 
-      def to_s = "#{SYMBOLS.fetch(status, '?')} #{message}"
+      def to_s = "#{SYMBOLS.fetch(status, "?")} #{message}"
     end
 
     SYMBOLS = { ok: "✓", warning: "!", problem: "✗" }.freeze
@@ -86,7 +86,7 @@ module Clickwrap
                         "conventionally in config/clickwrap.rb.")]
       end
 
-      [ok("#{count} #{pluralize(count, 'policy', 'policies')} compiled")]
+      [ok("#{count} #{pluralize(count, "policy", "policies")} compiled")]
     end
 
     # Every document a policy references has to exist, be published, and still
@@ -101,7 +101,7 @@ module Clickwrap
       return problems if problems.any?
 
       [ok("all referenced documents are published and digest-verified " \
-          "(#{referenced.length} #{pluralize(referenced.length, 'document', 'documents')})")]
+          "(#{referenced.length} #{pluralize(referenced.length, "document", "documents")})")]
     end
 
     def document_problems(referenced)
@@ -154,7 +154,7 @@ module Clickwrap
 
       if config.records_any_request_evidence_by_default?
         return [warning("request-derived personal data is recorded by default for every policy " \
-                        "(#{default_categories.join(', ')}). That is a decision worth re-reading: " \
+                        "(#{default_categories.join(", ")}). That is a decision worth re-reading: " \
                         "a policy that does not need an IP address still gets one.")]
       end
 
@@ -167,7 +167,7 @@ module Clickwrap
       categories << "ip_address" if config.record_ip_address_by_default
       categories << "browser_user_agent" if config.record_browser_user_agent_by_default
       geolocation = config.enabled_default_ip_geolocation_fields
-      categories << "ip_geolocation #{geolocation.join('/')}" if geolocation.any?
+      categories << "ip_geolocation #{geolocation.join("/")}" if geolocation.any?
       categories
     end
 
@@ -219,7 +219,7 @@ module Clickwrap
         # A warning rather than a problem: capture still succeeds and the field
         # is recorded as unavailable with a reason, which is the honest outcome.
         # What it is not is what the policy asked for, so somebody should know.
-        return [warning("#{wanted.map(&:key).join(', ')} records IP geolocation but no " \
+        return [warning("#{wanted.map(&:key).join(", ")} records IP geolocation but no " \
                         "`ip_geolocation_resolver` is configured, so every capture will record it " \
                         "as unavailable")]
       end
@@ -257,7 +257,7 @@ module Clickwrap
 
       return [ok("no overdue disposition")] if overdue.zero?
 
-      [warning("#{overdue} #{pluralize(overdue, 'record is', 'records are')} past a retention rule " \
+      [warning("#{overdue} #{pluralize(overdue, "record is", "records are")} past a retention rule " \
                "and still here. Run `bin/rails clickwrap:retention:plan`, review it, then " \
                "`bin/rails clickwrap:retention:apply PLAN=...`.")]
     end
@@ -269,10 +269,10 @@ module Clickwrap
       return [ok("no legal holds are in effect")] if in_effect.zero?
 
       if due.zero?
-        return [ok("#{in_effect} legal #{pluralize(in_effect, 'hold', 'holds')} in effect, none past review")]
+        return [ok("#{in_effect} legal #{pluralize(in_effect, "hold", "holds")} in effect, none past review")]
       end
 
-      [warning("#{due} legal #{pluralize(due, 'hold is', 'holds are')} past the review date they " \
+      [warning("#{due} legal #{pluralize(due, "hold is", "holds are")} past the review date they " \
                "were placed with. A hold nobody revisits is how everything gets kept forever.")]
     end
 
@@ -294,7 +294,7 @@ module Clickwrap
 
       stale = ExternalAction.needing_reconciliation.count
 
-      [warning("#{unresolved} external #{pluralize(unresolved, 'action is', 'actions are')} still " \
+      [warning("#{unresolved} external #{pluralize(unresolved, "action is", "actions are")} still " \
                "pending or unknown (#{stale} older than 15 minutes). Run " \
                "`bin/rails clickwrap:reconcile_external_actions` to list them.")]
     end
@@ -307,8 +307,8 @@ module Clickwrap
     # down with it.
     def with_database(what)
       yield
-    rescue StandardError => e
-      [warning("could not check #{what}: #{e.class}. #{e.message}")]
+    rescue StandardError => error
+      [warning("could not check #{what}: #{error.class}. #{error.message}")]
     end
 
     def past?(date)

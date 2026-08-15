@@ -131,20 +131,18 @@ module Clickwrap
       end
 
       def write_string(string, buffer)
-        unless string.valid_encoding?
-          raise SerializationError, "Canonical JSON strings must be valid UTF-8"
-        end
+        raise SerializationError, "Canonical JSON strings must be valid UTF-8" unless string.valid_encoding?
 
         buffer << '"'
         string.each_char do |char|
           escape = ESCAPES[char]
-          if escape
-            buffer << escape
-          elsif char.ord < 0x20
-            buffer << format('\\u%04x', char.ord)
-          else
-            buffer << char
-          end
+          buffer << if escape
+                      escape
+                    elsif char.ord < 0x20
+                      format('\\u%04x', char.ord)
+                    else
+                      char
+                    end
         end
         buffer << '"'
       end
@@ -164,9 +162,7 @@ module Clickwrap
       # writes 1, and 1.0e-05 where ECMAScript writes 0.00001. This rebuilds
       # the ECMAScript form from Ruby's shortest round-trip digits.
       def format_number(value)
-        if value.nan? || value.infinite?
-          raise SerializationError, "Canonical JSON cannot represent #{value}"
-        end
+        raise SerializationError, "Canonical JSON cannot represent #{value}" if value.nan? || value.infinite?
         return "0" if value.zero?
 
         sign = value.negative? ? "-" : ""
@@ -206,7 +202,7 @@ module Clickwrap
         elsif position.positive? && position <= 21
           "#{digits[0, position]}.#{digits[position..]}"
         elsif position > -6 && position <= 0
-          "0.#{'0' * -position}#{digits}"
+          "0.#{"0" * -position}#{digits}"
         else
           exponent = position - 1
           exponent_sign = exponent.negative? ? "-" : "+"

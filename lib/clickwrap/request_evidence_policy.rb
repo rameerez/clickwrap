@@ -165,7 +165,7 @@ module Clickwrap
       return if ip_geolocation.record? || enabled.empty?
 
       raise DefinitionError,
-            "Policy #{policy_key} enables the IP-geolocation fields #{enabled.join(', ')} " \
+            "Policy #{policy_key} enables the IP-geolocation fields #{enabled.join(", ")} " \
             "without recording IP geolocation."
     end
   end

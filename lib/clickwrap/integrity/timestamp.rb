@@ -104,7 +104,7 @@ module Clickwrap
 
       # Checks a stored token against the digest it was issued over, and reports
       # what the provider said. A token nobody re-checks is a stored blob.
-      def verify(token, digest)
+      def verify(_token, _digest)
         Verification.new(
           checked: false,
           verified: false,

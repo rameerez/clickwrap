@@ -66,7 +66,7 @@ module Clickwrap
       return if encryption.primary_key.present? && encryption.key_derivation_salt.present?
 
       raise ConfigurationError,
-            "Clickwrap is configured to encrypt #{columns.join(' and ')}, but this application " \
+            "Clickwrap is configured to encrypt #{columns.join(" and ")}, but this application " \
             "has no Active Record encryption keys. Generate them with " \
             "`bin/rails db:encryption:init` and add them to your credentials, or — if storing " \
             "these values in plain text is a reviewed decision — say so explicitly with " \
@@ -76,17 +76,17 @@ module Clickwrap
 
     scope :with_ip_address_due, lambda { |at = Clickwrap.now|
       where(ip_address_deleted_at: nil).where.not(ip_address_delete_after: nil)
-        .where(ip_address_delete_after: ...at)
+                                       .where(ip_address_delete_after: ...at)
     }
 
     scope :with_browser_user_agent_due, lambda { |at = Clickwrap.now|
       where(browser_user_agent_deleted_at: nil).where.not(browser_user_agent_delete_after: nil)
-        .where(browser_user_agent_delete_after: ...at)
+                                               .where(browser_user_agent_delete_after: ...at)
     }
 
     scope :with_ip_geolocation_due, lambda { |at = Clickwrap.now|
       where(ip_geolocation_deleted_at: nil).where.not(ip_geolocation_delete_after: nil)
-        .where(ip_geolocation_delete_after: ...at)
+                                           .where(ip_geolocation_delete_after: ...at)
     }
 
     # --- What was actually recorded ------------------------------------------
