@@ -66,9 +66,9 @@ module Clickwrap
 
       class << self
         # Reads everything, writes nothing.
-        def plan(**options) = new(dry_run: true, **options).call
+        def plan(**) = new(dry_run: true, **).call
 
-        def import!(**options) = new(**options).call
+        def import!(**) = new(**).call
       end
 
       # `map_contract_with` receives a contract row (a plain Hash of column name
@@ -146,7 +146,7 @@ module Clickwrap
       end
 
       def load_signatures
-        sql = +"SELECT * FROM #{quoted(SIGNATURES_TABLE)}"
+        sql = "SELECT * FROM #{quoted(SIGNATURES_TABLE)}"
         sql << " ORDER BY #{quoted_column("id")}" if signature_columns.include?("id")
         sql << " LIMIT #{limit.to_i}" if limit
 
@@ -259,7 +259,7 @@ module Clickwrap
       end
 
       def published_version(document_key, label)
-        document = ::Clickwrap::Document.find_by(key: document_key, tenant_key: nil)
+        document = ::Clickwrap::Document.find_by(document_key: document_key, tenant_key: nil)
         return nil unless document
 
         document.versions.find_by(version_label: label)
@@ -277,8 +277,8 @@ module Clickwrap
             nil
           else
             "No published Clickwrap document version matches: " \
-                                               "#{unpublished.join(", ")}. Those imports record the label " \
-                                               "only, not document bytes."
+              "#{unpublished.join(", ")}. Those imports record the label " \
+              "only, not document bytes."
           end
         ].compact.join(" ")
       end

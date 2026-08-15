@@ -1,12 +1,12 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # One act inside one event: what was asserted, in the words actually shown,
-  # and what the person did about it.
+  # One act inside one event: the assertion in the server-generated offer and
+  # what the submitted answer said about it.
   #
   # `assertion_text` is the resolved sentence, not an I18n key. Storing the key
   # would be a false economy — its meaning can change in a later deploy, and
-  # then the receipt no longer says what the person was asked.
+  # then the receipt no longer says what assertion the application recorded.
   class EventStatement < ApplicationRecord
     self.table_name = "clickwrap_event_statements"
     self.record_timestamps = false
@@ -46,12 +46,19 @@ module Clickwrap
         "action" => action,
         "assertion" => assertion_text,
         "locale" => assertion_locale,
+        "label" => label_text,
+        "link_labels" => link_labels.presence,
+        "choices" => choices.presence,
         "required" => required?,
+        "optional" => optional?,
         "answered" => answered?,
         "answer" => answer.presence,
         "purpose" => purpose_key,
+        "withdrawal_path" => withdrawal_path,
+        "valid_from" => Receipt.format_time(valid_from),
         "expires_at" => Receipt.format_time(expires_at),
         "one_time" => one_time? || nil,
+        "requires" => Array(requires).presence,
         "subject_fingerprint" => subject_fingerprint
       }.compact
     end
@@ -74,7 +81,7 @@ module Clickwrap
     def refuse_change
       raise EventWriteFailed,
             "Statement #{statement_key} on event #{event_id} is an immutable snapshot of what " \
-            "was shown and answered. Record a correction, withdrawal, or supersession instead."
+            "was offered and answered. Record a correction, withdrawal, or supersession instead."
     end
 
     def refuse_destroy

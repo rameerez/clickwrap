@@ -56,6 +56,32 @@ module Clickwrap
   # check rather than a mock standing in for it.
   # ===========================================================================
   module TestHelpers
+    # Opt-in class macro for integration tests that must reach real commit
+    # callbacks instead of Rails' normal transactional-test rollback boundary.
+    module ClassMethods
+      # Sensitive exports deliberately refuse to reveal data from inside an
+      # outer transaction: their access audit must commit before bytes leave
+      # the process. Rails wraps tests in transactions by default, so tests of
+      # that production contract can opt into real commits explicitly.
+      #
+      # This also installs deterministic cleanup around each such test. It is a
+      # test-only facility; production code never truncates host tables.
+      def use_real_database_commits!
+        self.use_transactional_tests = false
+
+        setup do
+          reset_clickwrap_test_database!
+          publish_clickwrap_documents!
+        end
+
+        teardown { reset_clickwrap_test_database! }
+      end
+    end
+
+    def self.included(base)
+      base.extend(ClassMethods)
+    end
+
     # --- Presenting and capturing ---------------------------------------------
 
     # Presents a policy server-side and returns the Presenter::Result, whose
@@ -67,13 +93,17 @@ module Clickwrap
     # @return [Clickwrap::Presenter::Result]
     def present_clickwrap(policy_key, actor: nil, subject: nil, tenant: nil, locale: nil,
                           submit_button_text: "Continue", capture_channel: :web_browser,
-                          prospective_actor: nil)
+                          prospective_actor: nil, registration_flow_id: nil, acting_for: nil)
+      registration_flow_id ||= SecureRandom.uuid if prospective_actor
+
       Presenter.new(
         policy: Clickwrap.policy!(policy_key),
         actor: actor,
         prospective_actor: prospective_actor,
+        registration_flow_id: registration_flow_id,
         subject: subject,
         tenant: tenant,
+        acting_for: acting_for,
         locale: locale,
         submit_button_text: submit_button_text,
         capture_channel: capture_channel
@@ -110,20 +140,24 @@ module Clickwrap
     #
     # @return [Clickwrap::Receipt]
     def capture_clickwrap(policy_key, actor:, answers: {}, subject: nil, tenant: nil, locale: nil,
-                          capture_channel: :web_browser, http_request: nil)
+                          capture_channel: :web_browser, http_request: nil, acting_for: nil)
       presentation = present_clickwrap(policy_key, actor: actor, subject: subject,
                                                    tenant: tenant, locale: locale,
+                                                   acting_for: acting_for,
                                                    capture_channel: capture_channel)
 
-      Clickwrap.capture!(
+      result = Clickwrap.capture!(
         policy_key,
         actor: actor,
         subject: subject,
         tenant: tenant,
+        acting_for: acting_for,
         http_request: http_request,
         capture_channel: capture_channel,
         submission: submission_for(presentation, default_clickwrap_answers(policy_key, answers))
       )
+
+      committed_test_receipt(result)
     end
     module_function :capture_clickwrap
     public :capture_clickwrap
@@ -133,23 +167,51 @@ module Clickwrap
     #
     # @return [Clickwrap::Receipt]
     def capture_clickwrap_and(policy_key, actor:, answers: {}, subject: nil, tenant: nil,
-                              capture_channel: :web_browser, http_request: nil, &block)
+                              capture_channel: :web_browser, http_request: nil, acting_for: nil, &)
       presentation = present_clickwrap(policy_key, actor: actor, subject: subject, tenant: tenant,
+                                                   acting_for: acting_for,
                                                    capture_channel: capture_channel)
 
-      Clickwrap.capture_and!(
+      result = Clickwrap.capture_and!(
         policy_key,
         actor: actor,
         subject: subject,
         tenant: tenant,
+        acting_for: acting_for,
         http_request: http_request,
         capture_channel: capture_channel,
         submission: submission_for(presentation, default_clickwrap_answers(policy_key, answers)),
-        &block
+        &
       )
+
+      committed_test_receipt(result)
     end
     module_function :capture_clickwrap_and
     public :capture_clickwrap_and
+
+    # Transactional test wrappers intentionally never commit. The production
+    # API therefore returns PendingReceipt inside them, correctly, while tests
+    # still need to inspect the rows they just created. This test-only adapter
+    # exposes a Receipt projection without changing the pending object's
+    # `committed?` answer or weakening the production finality contract.
+    def committed_test_receipt(result)
+      return result unless result.is_a?(PendingReceipt)
+
+      Receipt.new(result.event)
+    end
+    module_function :committed_test_receipt
+    private :committed_test_receipt
+
+    def reset_clickwrap_test_database!
+      connection = ::ActiveRecord::Base.connection
+      protected_tables = %w[ar_internal_metadata schema_migrations]
+      tables = connection.tables - protected_tables
+
+      connection.disable_referential_integrity do
+        tables.each { |table| connection.execute("DELETE FROM #{connection.quote_table_name(table)}") }
+      end
+    end
+    private :reset_clickwrap_test_database!
 
     # --- The harder cases -----------------------------------------------------
 
@@ -169,8 +231,8 @@ module Clickwrap
     # `PresentationExpired` path. Real check, not a mocked one.
     #
     # @return [Clickwrap::Presenter::Result] whose token is expired
-    def expired_clickwrap_presentation_for(policy_key, **options)
-      presentation = present_clickwrap(policy_key, **options)
+    def expired_clickwrap_presentation_for(policy_key, **)
+      presentation = present_clickwrap(policy_key, **)
       window = Clickwrap.config.presentation_valid_for
       now = Clickwrap.now
 
@@ -195,8 +257,8 @@ module Clickwrap
     # survives. Capture rejects it with `:stale_policy_revision`.
     #
     # @return [String] a signed presentation token
-    def stale_clickwrap_token_for(policy_key, **options)
-      presentation = present_clickwrap(policy_key, **options)
+    def stale_clickwrap_token_for(policy_key, **)
+      presentation = present_clickwrap(policy_key, **)
       attributes = presentation.manifest.to_h
       superseded = Digest.digest("superseded:#{attributes.dig("policy", "revision")}")
 
@@ -213,8 +275,7 @@ module Clickwrap
     #
     # @return [String] a signed presentation token bound to `other_actor`
     def other_actors_clickwrap_token_for(policy_key, actor:, other_actor:)
-      if Clickwrap.config.identify_actor_with.call(actor) ==
-         Clickwrap.config.identify_actor_with.call(other_actor)
+      if Reference.actor(actor) == Reference.actor(other_actor)
         raise ArgumentError,
               "other_actors_clickwrap_token_for was given the same actor twice, so the token it " \
               "returned would be the actor's own and the mismatch it exists to trigger could " \
@@ -344,9 +405,9 @@ module Clickwrap
     # injection test, where the point is that nothing was recorded.
     def assert_no_clickwrap_event(policy_key, actor: nil)
       scope = Event.for_policy(policy_key)
-      scope = scope.for_actor(Clickwrap.config.identify_actor_with.call(actor)) if actor
+      scope = scope.for_actor(Reference.actor(actor)) if actor
       found = scope.chronological.to_a
-      listed = found.map(&:to_s).join("; ")
+      listed = found.join("; ")
       whose = actor ? " and #{clickwrap_actor_label(actor)}" : ""
 
       assert found.empty?,
@@ -406,7 +467,7 @@ module Clickwrap
     def clickwrap_actor_label(actor)
       return "(no actor)" if actor.nil?
 
-      Clickwrap.config.identify_actor_with.call(actor)
+      Reference.actor(actor)
     rescue StandardError
       actor.inspect
     end

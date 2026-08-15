@@ -30,9 +30,10 @@ module Clickwrap
   # reason attached. Nothing here silently substitutes a blank, a zero, or the
   # word "Unknown" for an answer nobody gave.
   #
-  # Nothing is collected unless the merged configuration says so by name. The
-  # initializer supplies defaults; a policy overrides them for the categories it
-  # declares. Neither can turn on a category as a side effect of another.
+  # Nothing is collected unless the COMPILED policy says so by name. Application
+  # defaults are merged into that policy at boot, not here at capture time, so a
+  # configuration change necessarily produces a different policy revision and a
+  # policy can explicitly narrow an application default.
   class RequestEvidenceExtractor
     # What one extraction produced.
     #
@@ -107,14 +108,6 @@ module Clickwrap
       "metro_code" => { ip_geolocation_metro_code: :metro_code }
     }.freeze
 
-    # Named here so the error message can tell a host exactly which initializer
-    # setting would fix the problem.
-    DEFAULT_RETENTION_SETTING_NAMES = {
-      ip_address: "delete_recorded_ip_addresses_after",
-      browser_user_agent: "delete_recorded_browser_user_agents_after",
-      ip_geolocation: "delete_recorded_ip_geolocation_after"
-    }.freeze
-
     class << self
       # The source location of a freshly built Configuration's default IP-address
       # reader. See `#ip_address_reader_name` for why this is a comparison
@@ -164,123 +157,13 @@ module Clickwrap
     # this capture shares one recorded-at and one retention deadline.
     def now = @now ||= Clickwrap.now
 
-    # --- The merged decision --------------------------------------------------
+    # --- The compiled decision ------------------------------------------------
 
-    # The initializer says what every policy records; a policy overrides it for
-    # the categories it declares. A policy that says nothing about a category
-    # inherits the default, which is how a host turns a field on application-wide
-    # after reviewing it once. Neither layer can enable a category as a side
-    # effect of enabling another one — there is one switch per category, and the
-    # manifest below states exactly which ones were on.
-    def ip_address_setting
-      @ip_address_setting ||=
-        if policy.records_ip_address?
-          policy.ip_address
-        else
-          default_setting_for(:ip_address)
-        end
-    end
+    def ip_address_setting = policy.ip_address
+    def browser_user_agent_setting = policy.browser_user_agent
+    def ip_geolocation_setting = policy.ip_geolocation
 
-    def browser_user_agent_setting
-      @browser_user_agent_setting ||=
-        if policy.records_browser_user_agent?
-          policy.browser_user_agent
-        else
-          default_setting_for(:browser_user_agent)
-        end
-    end
-
-    def ip_geolocation_setting
-      @ip_geolocation_setting ||=
-        if policy.records_ip_geolocation?
-          policy.ip_geolocation
-        else
-          default_setting_for(:ip_geolocation)
-        end
-    end
-
-    def default_setting_for(category)
-      return RequestEvidencePolicy::NOT_RECORDED unless default_enabled?(category)
-
-      RequestEvidencePolicy::Setting.new(
-        record: true,
-        encrypted: default_encryption_for(category),
-        delete_after: config.public_send(DEFAULT_RETENTION_SETTING_NAMES.fetch(category)),
-        fail_if_unavailable: category == :ip_geolocation && config.fail_capture_when_ip_geolocation_is_unavailable,
-        because: default_reason_for(category),
-        legal_basis_reference: default_legal_basis_reference_for(category)
-      )
-    end
-
-    def default_enabled?(category)
-      case category
-      when :ip_address then config.record_ip_address_by_default
-      when :browser_user_agent then config.record_browser_user_agent_by_default
-      else config.enabled_default_ip_geolocation_fields.any?
-      end
-    end
-
-    def default_encryption_for(category)
-      case category
-      when :ip_address then config.encrypt_recorded_ip_addresses
-      when :browser_user_agent then config.encrypt_recorded_browser_user_agents
-      else config.encrypt_recorded_ip_geolocation
-      end
-    end
-
-    def default_reason_for(category)
-      case category
-      when :ip_address then config.reason_for_recording_ip_addresses_by_default
-      when :browser_user_agent then config.reason_for_recording_browser_user_agents_by_default
-      else config.reason_for_recording_ip_geolocation_by_default
-      end
-    end
-
-    def default_legal_basis_reference_for(category)
-      case category
-      when :ip_address then config.legal_basis_reference_for_recording_ip_addresses_by_default
-      when :browser_user_agent then config.legal_basis_reference_for_recording_browser_user_agents_by_default
-      else config.legal_basis_reference_for_recording_ip_geolocation_by_default
-      end
-    end
-
-    # A policy that declares `record_ip_geolocation` owns the whole field list,
-    # including the fields it turned off. That is the only way a consequential
-    # policy can be NARROWER than the application default, and being able to
-    # narrow it matters more than being able to widen it.
-    def declared_ip_geolocation_fields
-      @declared_ip_geolocation_fields ||=
-        if policy.records_ip_geolocation?
-          normalize_ip_geolocation_fields(policy.ip_geolocation_fields)
-        else
-          normalize_ip_geolocation_fields(default_ip_geolocation_fields)
-        end
-    end
-
-    def default_ip_geolocation_fields
-      Vocabulary::IP_GEOLOCATION_DATA_FIELDS.to_h do |field|
-        [field, config.public_send(:"record_ip_geolocation_#{field}_by_default")]
-      end
-    end
-
-    # One coupling, and it runs in this direction only: authorizing coordinates
-    # also authorizes the accuracy radius that makes them readable.
-    #
-    # Every other field here is independent, and this one is not an exception
-    # smuggled in — it is the rule that provider-derived coordinates may not be
-    # kept while the uncertainty needed to interpret them is stripped away. A
-    # point with no radius beside it reads like a doorstep; MaxMind's own
-    # documentation is explicit that a city result can describe a wide radius
-    # rather than anyone's position. Storing the radius makes the estimate look
-    # LESS certain, which is the honest direction, and the manifest records the
-    # coupling openly rather than storing a field it did not admit to.
-    def normalize_ip_geolocation_fields(declaration)
-      fields = declaration.to_h.transform_keys(&:to_s)
-      authorized = Vocabulary::IP_GEOLOCATION_DATA_FIELDS.to_h { |field| [field, fields[field] == true] }
-      authorized["accuracy_radius_in_kilometers"] = true if authorized["latitude_and_longitude"]
-
-      authorized.freeze
-    end
+    def declared_ip_geolocation_fields = policy.ip_geolocation_fields
 
     def enabled_ip_geolocation_fields
       @enabled_ip_geolocation_fields ||= declared_ip_geolocation_fields.select { |_, on| on }.keys.freeze
@@ -364,7 +247,7 @@ module Clickwrap
       # later reader how much the address is worth.
       provenance = {
         ip_address_reader_name: ip_address_reader_name,
-        trusted_proxy_configuration_digest: config.trusted_proxy_configuration_digest
+        trusted_proxy_configuration_digest: policy.trusted_proxy_configuration_digest
       }
 
       if observed_ip_address.nil?
@@ -455,7 +338,8 @@ module Clickwrap
     # --- The IP geolocation estimate ------------------------------------------
 
     def resolver
-      @resolver ||= config.ip_geolocation_resolver || IpGeolocation::NullResolver.new
+      @resolver ||= config.ip_geolocation_resolver_for(policy.ip_geolocation_resolver_name) ||
+                    IpGeolocation::NullResolver.new
     end
 
     def resolved_location
@@ -539,7 +423,7 @@ module Clickwrap
       capabilities = resolver_capabilities
       return true if capabilities.nil?
 
-      enabled_ip_geolocation_fields.any? { |field| capabilities.include?(field) }
+      enabled_ip_geolocation_fields.intersect?(capabilities)
     end
 
     def resolver_capabilities
@@ -612,18 +496,25 @@ module Clickwrap
       return { "#{category}_delete_after": now + setting.delete_after } if setting.delete_after
       return { "#{category}_retain_until_rule": setting.retain_until.to_s } if setting.retain_until
 
-      default_duration = config.public_send(DEFAULT_RETENTION_SETTING_NAMES.fetch(category))
-      return { "#{category}_delete_after": now + default_duration } if default_duration
+      class_rule = retention_class_rule_for(category)
+      return { "#{category}_delete_after": now + class_rule.duration } if class_rule&.duration?
+      return { "#{category}_retain_until_rule": class_rule.host_event_name.to_s } if class_rule&.host_event?
 
       raise ConfigurationError, missing_retention_message(category)
+    end
+
+    def retention_class_rule_for(category)
+      return nil if policy.retention_class_key.nil?
+
+      Clickwrap.retention_class!(policy.retention_class_key).rule_for(category)
     end
 
     def missing_retention_message(category)
       "Clickwrap is about to record #{category} for policy #{policy_key} and nothing says when " \
         "to delete it. Give the policy a rule — `delete_after:` with a reviewed period, or " \
-        "`retain_until:` naming a host retention calculation — or set " \
-        "`config.#{DEFAULT_RETENTION_SETTING_NAMES.fetch(category)}` for every policy. Clickwrap " \
-        "has no keep-forever default and will not choose a period for you."
+        "`retain_until:` naming a host retention calculation — or add a #{category} rule to " \
+        "retention class #{policy.retention_class_key.inspect}. Clickwrap has no keep-forever " \
+        "default and will not choose a period for you."
     end
 
     # --- Failing closed -------------------------------------------------------
@@ -647,12 +538,8 @@ module Clickwrap
             "an explicit unavailable state on the receipt."
     end
 
-    def requirement_for(category, setting)
+    def requirement_for(_category, setting)
       return "the policy sets `fail_if_unavailable: true`" if setting.fail_if_unavailable?
-
-      if category == :ip_geolocation && config.fail_capture_when_ip_geolocation_is_unavailable
-        return "`config.fail_capture_when_ip_geolocation_is_unavailable` is true"
-      end
 
       nil
     end

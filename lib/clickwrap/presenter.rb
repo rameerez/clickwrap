@@ -21,11 +21,13 @@ module Clickwrap
       def checkbox? = choices.nil?
     end
 
-    Document = Data.define(:key, :label, :version_label, :locale, :media_type,
-                           :content_digest, :version_id, :path)
+    Document = Data.define(:key, :label, :version_label, :locale, :source_media_type,
+                           :source_content_digest, :rendered_media_type,
+                           :rendered_content_digest, :renderer_name, :renderer_version,
+                           :sanitizer_name, :sanitizer_version, :version_id, :path)
 
     Result = Data.define(:policy, :manifest, :token, :statements, :submit_button_text,
-                         :locale, :actor, :subject, :tenant_key) do
+                         :locale, :actor, :subject, :represented_party, :tenant_key) do
       def statement(key) = statements.find { |candidate| candidate.key == key.to_s }
       def policy_key = policy.key
       def revision = manifest.revision_digest
@@ -35,7 +37,7 @@ module Clickwrap
 
     def initialize(policy:, actor: nil, subject: nil, tenant: nil, locale: nil,
                    submit_button_text: nil, capture_channel: :web_browser,
-                   registration_flow_id: nil, prospective_actor: nil)
+                   registration_flow_id: nil, prospective_actor: nil, acting_for: nil)
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
@@ -45,11 +47,15 @@ module Clickwrap
       @submit_button_text = submit_button_text
       @capture_channel = capture_channel.to_s
       @registration_flow_id = registration_flow_id
+      @acting_for = acting_for
     end
 
     attr_reader :policy, :actor, :subject, :tenant, :locale, :capture_channel
 
     def present
+      validate_actor_binding!
+      validate_subject_binding!
+      validate_represented_party_binding!
       validate_channel!
       validate_locale!
 
@@ -68,6 +74,10 @@ module Clickwrap
         subject_key: subject_key,
         subject_fingerprint: subject_fingerprint,
         registration_flow_id: @registration_flow_id,
+        prospective_actor_type: @prospective_actor&.class&.name,
+        represented_party_reference: represented_party_reference,
+        represented_party_type: @acting_for&.class&.name,
+        authority_rule: policy.authority_rule&.to_snapshot,
         capture_channel: capture_channel
       )
 
@@ -82,6 +92,7 @@ module Clickwrap
         locale: locale,
         actor: actor,
         subject: subject,
+        represented_party: @acting_for,
         tenant_key: tenant_key
       )
     end
@@ -91,32 +102,70 @@ module Clickwrap
     # one, and how a declaration about one set of rides stops covering a changed
     # set.
     def subject_fingerprint
-      return nil if subject.nil?
-
-      fingerprinting = policy.statements.find(&:subject_bound?)
-      return nil unless fingerprinting
-
-      value = fingerprinting.subject_fingerprint_with.call(subject)
-      value.nil? ? nil : Digest.digest(value.to_s)
+      SubjectFingerprint.for(policy, subject)
     end
 
     def subject_key = StatementState.subject_key_for(subject)
 
-    def tenant_key
-      return nil if tenant.nil?
-      return tenant.to_s if tenant.is_a?(String) || tenant.is_a?(Symbol)
-      return tenant.to_gid.to_s if tenant.respond_to?(:to_gid)
-
-      "#{tenant.class.name}/#{tenant.id}"
-    end
+    def tenant_key = Reference.tenant(tenant)
 
     def actor_reference
       return nil if actor.nil?
 
-      Clickwrap.config.identify_actor_with.call(actor)
+      Reference.actor(actor)
+    end
+
+    def represented_party_reference
+      return nil if @acting_for.nil?
+
+      Reference.represented_party(@acting_for)
     end
 
     private
+
+    def validate_subject_binding!
+      return unless policy.subject_bound? && subject.nil?
+
+      raise DefinitionError,
+            "Policy #{policy.key} binds evidence to a subject fingerprint, so presenting it " \
+            "requires `subject:`. A subject-bound policy cannot be completed from a generic " \
+            "URL with no server-owned resource context."
+    end
+
+    def validate_actor_binding!
+      return if actor
+
+      unless @prospective_actor
+        raise DefinitionError,
+              "Presenting policy #{policy.key} without an actor requires `prospective_actor:`. " \
+              "Use it only for a new account registration flow; anonymous users need an " \
+              "explicit `Clickwrap.anonymous_actor(...)` reference."
+      end
+
+      return if @registration_flow_id.present?
+
+      raise DefinitionError,
+            "A prospective-actor presentation needs `registration_flow_id:` from server-owned " \
+            "session state, so a token from another signup flow cannot create evidence for this account."
+    end
+
+    def validate_represented_party_binding!
+      if @acting_for.nil?
+        return unless policy.permits_acting_for?
+
+        # A policy may support represented-party actions and ordinary personal
+        # actions. No represented party on this particular presentation is a
+        # valid, explicitly bound state.
+        return
+      end
+
+      return if policy.permits_acting_for_party?(@acting_for)
+
+      allowed = policy.authority_rule&.represented_party_types
+      raise DefinitionError,
+            "Policy #{policy.key} does not permit acting for #{@acting_for.class.name}. " \
+            "Allowed represented-party types: #{allowed&.join(", ").presence || "(none)"}."
+    end
 
     def default_locale
       defined?(::I18n) ? ::I18n.locale : :en
@@ -184,8 +233,14 @@ module Clickwrap
           label: label || document_key.humanize,
           version_label: version.version_label,
           locale: version.locale,
-          media_type: version.media_type,
-          content_digest: version.content_digest,
+          source_media_type: version.media_type,
+          source_content_digest: version.content_digest,
+          rendered_media_type: version.rendered_media_type.presence || version.media_type,
+          rendered_content_digest: version.rendered_content_digest.presence || version.content_digest,
+          renderer_name: version.renderer_name,
+          renderer_version: version.renderer_version,
+          sanitizer_name: version.sanitizer_name,
+          sanitizer_version: version.sanitizer_version,
           version_id: version.id,
           path: document_path(version)
         )
@@ -193,8 +248,8 @@ module Clickwrap
     end
 
     def current_document_version(document_key)
-      document = ::Clickwrap::Document.for_tenant(tenant_key).find_by(key: document_key)
-      document ||= ::Clickwrap::Document.find_by(key: document_key, tenant_key: nil)
+      document = ::Clickwrap::Document.for_tenant(tenant_key).find_by(document_key: document_key)
+      document ||= ::Clickwrap::Document.find_by(document_key: document_key, tenant_key: nil)
 
       document&.current_version(locale: locale)
     end
@@ -208,6 +263,8 @@ module Clickwrap
     end
 
     def manifest_fragment(statement)
+      declared = policy.statement!(statement.key)
+
       {
         "key" => statement.key,
         "kind" => statement.kind,
@@ -218,6 +275,14 @@ module Clickwrap
         "choices" => statement.choices,
         "requires_an_explicit_choice" => statement.requires_an_explicit_choice?,
         "purpose" => statement.purpose_key,
+        "withdrawal_path" => statement.withdrawal_path,
+        "valid_for_seconds" => declared.valid_for&.to_i,
+        "one_time" => declared.one_time?,
+        "requires" => declared.requires,
+        "requires_current_version" => declared.requires_current_version?,
+        "subject_fingerprint" => subject_fingerprint_for(declared),
+        "subject_fingerprint_version" => declared.subject_fingerprint_version,
+        "protected_outcome_version" => declared.protected_outcome_version,
         "control_name" => statement.control_name,
         "documents" => statement.documents.map do |document|
           {
@@ -225,12 +290,26 @@ module Clickwrap
             "label" => document.label,
             "version" => document.version_label,
             "locale" => document.locale,
-            "media_type" => document.media_type,
-            "digest" => document.content_digest,
+            "source_media_type" => document.source_media_type,
+            "source_digest" => document.source_content_digest,
+            "rendered_media_type" => document.rendered_media_type,
+            "rendered_digest" => document.rendered_content_digest,
+            "renderer" => {
+              "name" => document.renderer_name,
+              "version" => document.renderer_version,
+              "sanitizer_name" => document.sanitizer_name,
+              "sanitizer_version" => document.sanitizer_version
+            }.compact.presence,
             "version_id" => document.version_id.to_s
           }
         end
       }.compact
+    end
+
+    def subject_fingerprint_for(statement)
+      return nil unless statement.subject_bound?
+
+      SubjectFingerprint.for_statement(statement, subject)
     end
 
     # Only written when a policy asked for it. The state is `presented_by_server`
@@ -246,6 +325,9 @@ module Clickwrap
         actor: actor.is_a?(::ActiveRecord::Base) ? actor : nil,
         actor_reference: actor_reference,
         registration_flow_id: @registration_flow_id,
+        represented_party_type: @acting_for.is_a?(::ActiveRecord::Base) ? @acting_for.class.name : nil,
+        represented_party_id: @acting_for.is_a?(::ActiveRecord::Base) ? @acting_for.id : nil,
+        represented_party_reference: represented_party_reference.presence,
         tenant_key: tenant_key,
         subject: subject.is_a?(::ActiveRecord::Base) ? subject : nil,
         subject_fingerprint: subject_fingerprint,

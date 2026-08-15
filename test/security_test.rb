@@ -43,6 +43,22 @@ class SecurityTest < ActiveSupport::TestCase
     end
   end
 
+  test "public capture methods do not expose lifecycle event or action overrides" do
+    presentation = present_clickwrap(:signup, actor: @user)
+    submission = submission_for(presentation, { terms: "1", privacy_notice: "1" })
+
+    %i[event_type root_event_id predecessor_event_id statement_action_overrides].each do |keyword|
+      assert_raises(ArgumentError) do
+        Clickwrap.capture!(
+          :signup,
+          **{ actor: @user, submission: submission, keyword => "forged" }
+        )
+      end
+    end
+
+    assert_no_clickwrap_event :signup, actor: @user
+  end
+
   test "the presenter never renders a hidden field carrying a server-owned decision" do
     presentation = present_clickwrap(:regulated_authorization, actor: @user,
                                                                subject: create_withdrawal(user: @user))
@@ -110,6 +126,33 @@ class SecurityTest < ActiveSupport::TestCase
     end
   end
 
+  test "a non-string host actor reference is normalized before it enters the signed presentation" do
+    Clickwrap.config.identify_actor_with = ->(_actor) { :host_owned_reference }
+    presentation = present_clickwrap(:signup, actor: @user)
+
+    receipt = committed_test_receipt(Clickwrap.capture!(
+                                       :signup,
+                                       actor: @user,
+                                       submission: submission_for(presentation, { terms: "1", privacy_notice: "1" })
+                                     ))
+
+    assert_equal "host_owned_reference", presentation.manifest.actor_reference
+    assert_equal "host_owned_reference", receipt.actor_reference
+  end
+
+  test "a literal reference can be the actor on both presentation and capture" do
+    actor_reference = "external/account-123"
+    presentation = present_clickwrap(:signup, actor: actor_reference)
+
+    receipt = committed_test_receipt(Clickwrap.capture!(
+                                       :signup,
+                                       actor: actor_reference,
+                                       submission: submission_for(presentation, { terms: "1", privacy_notice: "1" })
+                                     ))
+
+    assert_equal actor_reference, receipt.actor_reference
+  end
+
   test "a token issued to one tenant cannot be captured for another" do
     organization = create_organization
     other_organization = create_organization
@@ -140,8 +183,54 @@ class SecurityTest < ActiveSupport::TestCase
     end
 
     # A double-click must never produce two debits.
-    assert_equal 1, Clickwrap::Event.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::Event.for_policy("withdrawal_authorization")
+                                    .where(event_type: "consumption").count
     assert_equal 1, counter, "the protected action ran #{counter} times"
+  end
+
+  test "two presentations issued before a one-time action cannot both perform it" do
+    withdrawal = create_withdrawal(user: @user)
+    first = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    second = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    counter = 0
+
+    Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                      submission: submission_for(first, answers)) do
+      counter += 1
+    end
+
+    error = assert_raises(Clickwrap::OneTimeAuthorizationConflict) do
+      Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        submission: submission_for(second, answers)) do
+        counter += 1
+      end
+    end
+
+    assert_match(/render a new presentation/i, error.message)
+    assert_equal 1, counter
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::StatementIdentityLock.count
+  end
+
+  test "a new presentation after terminal state can create a deliberate new authorization" do
+    withdrawal = create_withdrawal(user: @user)
+    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+
+    first = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                      submission: submission_for(first, answers)) { nil }
+
+    travel 1.second do
+      second = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+      Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        submission: submission_for(second, answers)) { nil }
+    end
+
+    assert_equal 2, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
+    assert_equal 2, Clickwrap::Event.where(policy_key: "withdrawal_authorization",
+                                           event_type: "consumption").count
   end
 
   test "two genuinely concurrent submits still produce one event and one action" do
@@ -182,14 +271,18 @@ class SecurityTest < ActiveSupport::TestCase
     2.times { start_line << true }
     threads.each(&:join)
 
-    assert_equal 1, Clickwrap::Event.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
     assert_equal 1, counter, "the protected action ran #{counter} times"
   end
 
   test "the same actor cannot hold two live grants for one statement and subject" do
     withdrawal = create_withdrawal(user: @user)
 
-    2.times do
+    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                 answers: { withdrawal_requirements: "1",
+                                                            ride_exclusivity: "1", withdrawal: "1" })
+
+    assert_raises(Clickwrap::OneTimeAuthorizationConflict) do
       capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                    answers: { withdrawal_requirements: "1",
                                                               ride_exclusivity: "1", withdrawal: "1" })
@@ -198,6 +291,7 @@ class SecurityTest < ActiveSupport::TestCase
     states = Clickwrap::StatementState.for_actor(@user.clickwrap_actor_reference)
                                       .for_statement("withdrawal")
     assert_equal 1, states.count, "the unique index must keep one projection row per identity"
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
   end
 
   # --- Evidence integrity -----------------------------------------------------
@@ -214,17 +308,77 @@ class SecurityTest < ActiveSupport::TestCase
     assert_equal :integrity_check_failed, Clickwrap.verify(receipt.event_id).error
   end
 
-  test "an ordinary retention run does not look like tampering" do
+  test "an ordinary retention run leaves a verifiable documented tombstone" do
     receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
-    # The event's canonical body deliberately excludes the mutable columns —
-    # legal-hold state and disposition are facts about today, not about what was
-    # recorded. Otherwise a lawful deletion would break every digest it touched.
+    # A hold is current control state rather than historical payload, so it does
+    # not rewrite the event digest.
     receipt.event.set_legal_hold!(true)
     assert receipt.event.reload.digest_verified?
 
-    receipt.event.mark_core_event_disposed!
-    assert receipt.event.reload.digest_verified?
+    receipt.event.set_legal_hold!(false)
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      receipt.event,
+      because: "The reviewed retention period ended"
+    )
+
+    event = receipt.event.reload
+    assert_not event.digest_verified?, "the removed payload is no longer available to re-derive"
+    assert event.documented_core_disposition?
+    assert_equal :core_event_disposed, Clickwrap.verify(event.id).error
+  end
+
+  test "a raw disposition marker cannot hide intact or altered evidence from verification" do
+    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+
+    # The marker is deliberately outside the historical digest because a real
+    # retention run writes it later. That makes the linked disposition event the
+    # required proof. A privileged update that writes only the marker must fail
+    # closed, even though the original payload still hashes correctly.
+    Clickwrap::Event.where(id: receipt.event_id).update_all(core_event_disposed_at: Clickwrap.now)
+    event = receipt.event.reload
+
+    assert event.digest_verified?
+    assert_not event.documented_core_disposition?
+    assert_equal :unaccounted_mismatch, event.digest_integrity_status
+
+    event_result = Clickwrap.verify(event.id)
+    policy_result = Clickwrap.verify(:signup, actor: @user)
+
+    assert_equal :integrity_check_failed, event_result.error
+    assert_equal "not_documented", event_result.details["disposition"]
+    assert_equal :integrity_check_failed, policy_result.error
+    assert_equal "not_documented", policy_result.details["disposition"]
+  end
+
+  test "a digest-valid non-disposition event cannot be used as a disposition proof" do
+    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    disposed_at = Clickwrap.now
+    fake = Clickwrap::Lifecycle.append_lifecycle_event!(
+      event: receipt.event,
+      event_type: "legal_hold_placed",
+      reason: "A legitimate hold event carrying hostile host metadata",
+      extra: {
+        protected_outcome: {
+          "core_event_disposition" => {
+            "event_id" => receipt.event_id,
+            "original_event_digest" => receipt.event.event_digest,
+            "disposed_at" => Clickwrap::Receipt.format_time(disposed_at)
+          }
+        }
+      }
+    )
+    assert fake.digest_verified?
+
+    Clickwrap::Event.where(id: receipt.event_id).update_all(
+      core_event_disposed_at: disposed_at,
+      core_event_disposition_event_id: fake.id
+    )
+    event = receipt.event.reload
+
+    assert_not event.documented_core_disposition?
+    assert_equal :unaccounted_mismatch, event.digest_integrity_status
+    assert_equal :integrity_check_failed, Clickwrap.verify(event.id).error
   end
 
   test "an actor deletion never cascades evidence away" do

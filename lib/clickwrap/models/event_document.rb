@@ -17,7 +17,7 @@ module Clickwrap
                optional: true,
                inverse_of: :event_documents
 
-    validates :statement_key, :document_key, :version_label, :locale, :content_digest,
+    validates :statement_key, :document_key, :version_label, :locale, :source_content_digest,
               presence: true
 
     before_update :refuse_change
@@ -30,7 +30,16 @@ module Clickwrap
     def still_matches_stored_version?
       return false if document_version.nil?
 
-      Digest.secure_compare?(document_version.content_digest, content_digest)
+      Digest.secure_compare?(document_version.content_digest, source_content_digest) &&
+        Digest.secure_compare?(
+          document_version.rendered_content_digest.presence || document_version.content_digest,
+          rendered_content_digest
+        ) && document_version.media_type == source_media_type &&
+        (document_version.rendered_media_type.presence || document_version.media_type) == rendered_media_type &&
+        document_version.renderer_name.to_s == renderer_name.to_s &&
+        document_version.renderer_version.to_s == renderer_version.to_s &&
+        document_version.sanitizer_name.to_s == sanitizer_name.to_s &&
+        document_version.sanitizer_version.to_s == sanitizer_version.to_s
     end
 
     def canonical_fragment
@@ -39,9 +48,17 @@ module Clickwrap
         "key" => document_key,
         "version" => version_label,
         "locale" => locale,
-        "media_type" => media_type,
-        "digest" => content_digest,
-        "rendered_digest" => rendered_content_digest
+        "source_media_type" => source_media_type,
+        "source_digest" => source_content_digest,
+        "rendered_media_type" => rendered_media_type,
+        "rendered_digest" => rendered_content_digest,
+        "renderer" => {
+          "name" => renderer_name,
+          "version" => renderer_version,
+          "sanitizer_name" => sanitizer_name,
+          "sanitizer_version" => sanitizer_version
+        }.compact.presence,
+        "ordinal" => ordinal
       }.compact
     end
 

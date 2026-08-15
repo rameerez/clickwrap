@@ -11,10 +11,18 @@ require_relative "clickwrap/vocabulary"
 require_relative "clickwrap/canonical_json"
 require_relative "clickwrap/digest"
 require_relative "clickwrap/identifier"
+require_relative "clickwrap/reference"
+require_relative "clickwrap/reviewed_text"
+require_relative "clickwrap/authority"
+require_relative "clickwrap/integrations/organizations_authority"
+require_relative "clickwrap/subject_fingerprint"
+require_relative "clickwrap/remediation_token"
+require_relative "clickwrap/durable_commit_callback"
+require_relative "clickwrap/document_renderer"
 require_relative "clickwrap/configuration"
 require_relative "clickwrap/macros"
 
-require_relative "clickwrap/engine" if defined?(::Rails::Engine)
+require_relative "clickwrap/engine" if defined?(Rails::Engine)
 
 # == Clickwrap
 #
@@ -44,6 +52,10 @@ require_relative "clickwrap/engine" if defined?(::Rails::Engine)
 # long you must keep anything. Those belong to the application and its counsel,
 # and no configuration flag here can stand in for them.
 module Clickwrap
+  DOCUMENT_OPTIONS = %i[
+    version locale media_type effective_at tenant from content resolver renderer
+  ].freeze
+
   # The Minitest helpers hosts include in their own suite. Autoloaded rather
   # than required at boot: a test helper has no business being resident in a
   # production process, and a host that never writes a Clickwrap test never
@@ -76,6 +88,7 @@ module Clickwrap
       @documents = nil
       @policies = nil
       @retention_classes = nil
+      RemediationToken.reset_verifier! if defined?(RemediationToken)
       self
     end
 
@@ -91,6 +104,15 @@ module Clickwrap
     # what will be published, and a policy that references an unpublished
     # document fails loudly rather than presenting nothing.
     def document(key, **options)
+      unknown = options.keys.map(&:to_sym) - DOCUMENT_OPTIONS
+      unless unknown.empty?
+        raise DefinitionError,
+              "Document #{key.inspect} has unknown option#{"s" if unknown.many?} " \
+              "#{unknown.map { |option| "`#{option}:`" }.join(", ")}. Supported options are: " \
+              "#{DOCUMENT_OPTIONS.map { |option| "`#{option}:`" }.join(", ")}. Clickwrap never " \
+              "ignores document options."
+      end
+
       definition = DocumentDefinition.new(key: key, **options)
       documents.register(definition.identity, definition)
       definition
@@ -149,83 +171,121 @@ module Clickwrap
 
     # --- Presentation and capture --------------------------------------------
 
-    def present(policy_key, **options)
-      Presenter.new(policy: policy!(policy_key), **options).present
+    def present(policy_key, **)
+      Presenter.new(policy: policy!(policy_key), **).present
     end
 
-    def capture!(policy_key, **options)
-      Capture.new(policy: policy!(policy_key), **options).capture!
+    def capture!(policy_key, actor:, subject: nil, tenant: nil, http_request: nil,
+                 submission: nil, answers: nil, locale: nil, capture_channel: nil,
+                 acting_for: nil, authentication_context: nil, attribution_method: nil,
+                 idempotency_key: nil)
+      Capture.new(
+        policy: policy!(policy_key), actor: actor, subject: subject, tenant: tenant,
+        http_request: http_request, submission: submission, answers: answers, locale: locale,
+        capture_channel: capture_channel, acting_for: acting_for,
+        authentication_context: authentication_context, attribution_method: attribution_method,
+        idempotency_key: idempotency_key
+      ).capture!
     end
 
-    def capture_and!(policy_key, **options, &block)
-      Capture.new(policy: policy!(policy_key), **options).capture_and!(&block)
+    def capture_and!(policy_key, actor:, subject: nil, tenant: nil, http_request: nil,
+                     submission: nil, answers: nil, locale: nil, capture_channel: nil,
+                     acting_for: nil, authentication_context: nil, attribution_method: nil,
+                     idempotency_key: nil, &)
+      Capture.new(
+        policy: policy!(policy_key), actor: actor, subject: subject, tenant: tenant,
+        http_request: http_request, submission: submission, answers: answers, locale: locale,
+        capture_channel: capture_channel, acting_for: acting_for,
+        authentication_context: authentication_context, attribution_method: attribution_method,
+        idempotency_key: idempotency_key
+      ).capture_and!(&)
     end
 
     # Signup, modeled honestly: at first render there is no persisted actor, so
     # the presentation binds to a short-lived registration flow, and the account
     # and its evidence commit together. The receipt records account-registration
     # attribution rather than pretending someone was already authenticated.
-    def register!(policy_key, prospective_actor:, **options, &block)
-      Capture.new(policy: policy!(policy_key), actor: nil, prospective_actor:, **options)
-             .register!(&block)
+    def register!(policy_key, prospective_actor:, subject: nil, tenant: nil, http_request: nil,
+                  submission: nil, answers: nil, locale: nil, capture_channel: nil,
+                  acting_for: nil, authentication_context: nil, idempotency_key: nil,
+                  registration_flow_id: nil, &)
+      Capture.new(
+        policy: policy!(policy_key), actor: nil, prospective_actor: prospective_actor,
+        subject: subject, tenant: tenant, http_request: http_request, submission: submission,
+        answers: answers, locale: locale, capture_channel: capture_channel,
+        acting_for: acting_for, authentication_context: authentication_context,
+        idempotency_key: idempotency_key, registration_flow_id: registration_flow_id
+      ).register!(&)
     end
 
     def submission_from(params, ...) = Submission.from_params(params, ...)
 
     # --- Lifecycle ------------------------------------------------------------
 
-    def withdraw!(purpose_key, **options) = Lifecycle.withdraw!(purpose_key, **options)
-    def correct_declaration!(statement_key, **options) = Lifecycle.correct!(statement_key, **options)
-    def renew!(statement_key, **options) = Lifecycle.renew!(statement_key, **options)
-    def revoke!(statement_key, **options) = Lifecycle.revoke!(statement_key, **options)
-    def supersede!(statement_key, **options) = Lifecycle.supersede!(statement_key, **options)
+    def withdraw!(purpose_key, **) = Lifecycle.withdraw!(purpose_key, **)
+    def correct_declaration!(statement_key, **) = Lifecycle.correct!(statement_key, **)
+    def renew!(statement_key, **) = Lifecycle.renew!(statement_key, **)
+    def change_consent_scope!(statement_key, **) = Lifecycle.change_consent_scope!(statement_key, **)
+    def revoke!(statement_key, **) = Lifecycle.revoke!(statement_key, **)
+    def supersede!(statement_key, **) = Lifecycle.supersede!(statement_key, **)
 
     # An explicitly recorded system exemption. Seeds, imports, invitations, and
     # service accounts must never "accept" by omitting a browser parameter or by
     # fabricating a human click. An exemption says plainly that no human action
     # occurred, records who created it and why, and never satisfies
     # `agreed_to?` — it answers the separate `exempted_from?` question.
-    def exempt!(policy_key, **options) = Lifecycle.exempt!(policy_key, **options)
+    def exempt!(policy_key, **) = Lifecycle.exempt!(policy_key, **)
 
     # Captures evidence and commits a pending outbox row in one local
     # transaction, for an action that has to cross a system boundary. This is a
     # distributed reliability protocol, not a cross-system ACID transaction —
     # see Clickwrap::Services::AuthorizeExternalAction for exactly what it does
     # and does not promise.
-    def authorize_external_action!(policy_key, **options)
-      Services::AuthorizeExternalAction.new(policy: policy!(policy_key), **options).call
+    def authorize_external_action!(policy_key, **)
+      Services::AuthorizeExternalAction.new(policy: policy!(policy_key), **).call
     end
 
-    def import_external_receipt!(policy_key, **options)
-      Import::ExternalReceipt.new(policy: policy!(policy_key), **options).import!
+    def import_external_receipt!(policy_key, **)
+      Import::ExternalReceipt.new(policy: policy!(policy_key), **).import!
     end
 
-    def import_legacy!(policy_key, **options)
-      Import::Legacy.new(policy: policy!(policy_key), **options).import!
+    def import_legacy!(policy_key, **)
+      Import::Legacy.new(policy: policy!(policy_key), **).import!
     end
 
     # --- Verification and gating ---------------------------------------------
 
-    def verify(policy_or_event, **options) = Verification.verify(policy_or_event, **options)
+    def verify(policy_or_event, **) = Verification.verify(policy_or_event, **)
 
-    def require!(policy_key, **options)
-      result = verify(policy_key, **options)
+    def require!(policy_key, **)
+      result = verify(policy_key, **)
       raise VerificationFailed, result unless result.success?
 
       result
     end
 
-    def current?(policy_key, **options) = verify(policy_key, **options).success?
+    def current?(policy_key, **) = verify(policy_key, **).success?
 
     # True when the actor needs to complete this policy: either they have no
     # current evidence, or a newer required document version has published since
     # they last acted. The application decides which change is material;
     # Clickwrap enforces the rule it is given.
-    def required?(policy_key, **options) = !current?(policy_key, **options)
+    def required?(policy_key, **) = !current?(policy_key, **)
 
     def receipt(event_id) = Receipt.find(event_id)
 
-    def export_receipt(receipt, **options) = Receipt.export(receipt, **options)
+    def export_receipt(receipt, **) = Receipt.export(receipt, **)
+
+    # Retry optional timestamp/anchor work that left no immutable result after a
+    # committed event. This is intentionally explicit: it can call external
+    # providers, so applications normally run it from a scheduled job or the
+    # matching rake task rather than hiding it in a read path.
+    def reconcile_missing_integrity_attestations!(scope: Event.all, retry_failed_attestations: false)
+      Integrity::AttestationReconciler.new(
+        scope: scope,
+        retry_failed_attestations: retry_failed_attestations
+      ).call
+    end
 
     # --- Disposition ----------------------------------------------------------
 

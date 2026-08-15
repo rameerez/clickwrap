@@ -15,30 +15,30 @@ module Clickwrap
     #
     # Any extra options become query parameters, which is how a caller passes
     # `return_to:` for a flow that should resume where it left off.
-    def clickwrap_capture_path(policy_key, **options)
-      clickwrap_routes.capture_path(policy_key, **options)
+    def clickwrap_capture_path(policy_key, **)
+      clickwrap_routes.capture_path(policy_key, **)
     end
 
     # A receipt, addressed by the event it belongs to. Takes a receipt, an
     # event, or a bare event id, because all three turn up in host code.
-    def clickwrap_receipt_path(receipt, **options)
-      clickwrap_routes.receipt_path(clickwrap_event_id_for(receipt), **options)
+    def clickwrap_receipt_path(receipt, **)
+      clickwrap_routes.receipt_path(clickwrap_event_id_for(receipt), **)
     end
 
     # Where someone withdraws one consent purpose. Withdrawal is a first-class
     # screen and not a buried mailto: link, because consent that cannot be
     # withdrawn as easily as it was given is not something this gem will keep
     # calling consent.
-    def clickwrap_withdrawal_path(purpose_key, **options)
-      clickwrap_routes.withdrawal_path(purpose_key, **options)
+    def clickwrap_withdrawal_path(purpose_key, **)
+      clickwrap_routes.withdrawal_path(purpose_key, **)
     end
 
     # The exact published bytes of one document version — what the presentation
     # links to, and what an auditor reads later.
-    def clickwrap_document_version_path(version, **options)
+    def clickwrap_document_version_path(version, **)
       identifier = version.respond_to?(:id) ? version.id : version
 
-      clickwrap_routes.document_version_path(identifier, **options)
+      clickwrap_routes.document_version_path(identifier, **)
     end
 
     # The gem's bundled stylesheet. Called from the engine's own views; hosts

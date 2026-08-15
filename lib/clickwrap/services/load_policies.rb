@@ -29,6 +29,7 @@ module Clickwrap
 
         reset_registries!
         files.each { |file| load_file(file) }
+        ValidatePolicyReferences.call
         files
       end
 

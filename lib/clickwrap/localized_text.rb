@@ -12,7 +12,7 @@ module Clickwrap
   # the presentation is built, and stores the resolved text and locale in the
   # evidence. Storing only an I18n key would be a false economy: the key's
   # meaning can change in a later deploy, and then the receipt no longer says
-  # what the person was shown.
+  # what the server bound to the presentation.
   #
   # A missing translation fails closed. Presenting a required legal statement
   # as a raw key, a blank string, or an unexpected fallback language would put

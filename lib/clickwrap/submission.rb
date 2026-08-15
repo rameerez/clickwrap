@@ -23,12 +23,11 @@ module Clickwrap
       server_observed_ip_address capture_channel authentication_method
     ].freeze
 
-    attr_reader :presentation_token, :answers, :client_reported_context
+    attr_reader :presentation_token, :answers
 
-    def initialize(presentation_token:, answers: {}, client_reported_context: nil)
+    def initialize(presentation_token:, answers: {})
       @presentation_token = presentation_token
       @answers = normalize_answers(answers)
-      @client_reported_context = client_reported_context
       freeze
     end
 
@@ -47,7 +46,7 @@ module Clickwrap
 
       def missing_envelope_message(key)
         "The request contains no #{key} parameter. The form helper renders it; a custom form " \
-        "must include the signed presentation token from Clickwrap.present."
+          "must include the signed presentation token from Clickwrap.present."
       end
 
       private
@@ -58,8 +57,13 @@ module Clickwrap
 
         if envelope.respond_to?(:permit!)
           envelope.permit(:presentation_token, answers: {}).to_h
-        else
+        elsif envelope.is_a?(Hash)
           envelope.to_h
+        else
+          raise SubmissionInvalid,
+                "The #{key} parameter must be an object containing a presentation_token and " \
+                "an answers object. It was #{envelope.class}; Clickwrap did not try to guess " \
+                "how to reinterpret it."
         end
       end
     end
@@ -75,7 +79,10 @@ module Clickwrap
     def answer_for(statement_key) = answers[statement_key.to_s]
 
     def answered?(statement_key)
-      value = answer_for(statement_key)
+      self.class.affirmative?(answer_for(statement_key))
+    end
+
+    def self.affirmative?(value)
       return false if value.nil?
 
       !%w[0 false off no].include?(value.to_s.downcase) && value.to_s != ""
@@ -90,7 +97,15 @@ module Clickwrap
     # Answers are scalars keyed by statement. A nested structure would be a way
     # to smuggle something structured past a check that expected a checkbox.
     def normalize_answers(raw)
-      hash = raw.respond_to?(:to_unsafe_h) ? raw.to_unsafe_h : raw.to_h
+      hash = if raw.respond_to?(:to_unsafe_h)
+               raw.to_unsafe_h
+             elsif raw.is_a?(Hash)
+               raw.to_h
+             else
+               raise SubmissionInvalid,
+                     "The clickwrap answers parameter must be an object keyed by statement. It " \
+                     "was #{raw.class}; each answer must be a single checkbox state or declared choice."
+             end
 
       hash.to_h do |key, value|
         name = key.to_s

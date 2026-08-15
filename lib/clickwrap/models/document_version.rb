@@ -10,8 +10,8 @@ module Clickwrap
   # `content_digest` covers the original source bytes. `rendered_content_digest`
   # covers the representation actually offered when a source format was
   # transformed for display. Keeping both is what lets a receipt distinguish
-  # "this Markdown file existed" from "this rendered HTML was on screen" instead
-  # of letting one claim borrow the other's credibility.
+  # "this Markdown file existed" from "the server offered this rendered HTML"
+  # instead of letting one claim borrow the other's credibility.
   class DocumentVersion < ApplicationRecord
     self.table_name = "clickwrap_document_versions"
 
@@ -37,7 +37,8 @@ module Clickwrap
     # Publishing freezes content. Editing a published version is refused here
     # rather than in a code review, because the whole promise of this table is
     # that its rows do not change.
-    before_update :refuse_to_change_published_content
+    before_update :refuse_to_change_published_version
+    before_destroy :refuse_to_destroy_published_version, prepend: true
 
     def published? = published_at.present?
     def retired? = retired_at.present?
@@ -74,27 +75,35 @@ module Clickwrap
     end
 
     def rendered_bytes
-      rendered_content.presence || content_bytes
+      return content_bytes if rendered_content.nil?
+
+      unless rendered_content_digest.present? && Digest.matches?(rendered_content, rendered_content_digest)
+        raise DocumentDigestMismatchError,
+              "The rendered bytes for document version #{self} no longer match the digest " \
+              "recorded when they were published."
+      end
+
+      rendered_content
+    end
+
+    def verify_rendered_content_digest
+      rendered_bytes
+      true
+    rescue DocumentDigestMismatchError, DocumentNotPublishedError
+      false
+    end
+
+    def retire!(because:, at: Clickwrap.now)
+      raise DocumentVersionConflictError, "Retiring a document version needs a `because:`." if because.to_s.strip.empty?
+      raise DocumentVersionConflictError, "Document version #{self} is already retired." if retired?
+
+      update_columns(retired_at: at, retired_reason: because)
+      self
     end
 
     def prefixed_content_digest = content_digest
 
-    def to_s = "#{document&.key} #{version_label} (#{locale})"
-
-    def to_receipt_fragment
-      {
-        "key" => document&.key,
-        "version" => version_label,
-        "locale" => locale,
-        "media_type" => media_type,
-        content_digest_algorithm => bare_digest(content_digest)
-      }.tap do |fragment|
-        if rendered_content_digest
-          fragment["rendered_#{content_digest_algorithm}"] =
-            bare_digest(rendered_content_digest)
-        end
-      end
-    end
+    def to_s = "#{document&.document_key} #{version_label} (#{locale})"
 
     private
 
@@ -132,18 +141,23 @@ module Clickwrap
       value.to_s.split(":").last
     end
 
-    def refuse_to_change_published_content
+    def refuse_to_change_published_version
       return unless published_at_was.present?
 
-      frozen_columns = %w[content content_digest content_digest_algorithm version_label locale
-                          rendered_content rendered_content_digest]
-      changed_frozen = changed & frozen_columns
-      return if changed_frozen.empty?
+      changed_frozen = changed - %w[retired_at retired_reason]
+      return if changed_frozen.empty? && !will_save_change_to_retired_at? && !will_save_change_to_retired_reason?
 
       raise DocumentVersionConflictError,
-            "Document version #{self} is published, so #{changed_frozen.join(", ")} cannot " \
-            "change. Publish a new version instead — receipts already point at this one, and " \
-            "editing it would silently change what they say the person was shown."
+            "Document version #{self} has frozen published content. Use `retire!(because:)` to " \
+            "record the named retirement metadata and stop future presentation, or publish a new " \
+            "version; ordinary updates are refused."
+    end
+
+    def refuse_to_destroy_published_version
+      return unless published?
+
+      raise DocumentVersionConflictError,
+            "Published document version #{self} cannot be destroyed because receipts may cite it."
     end
   end
 end

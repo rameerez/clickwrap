@@ -23,13 +23,6 @@ module Clickwrap
 
     private
 
-    # The actor these screens belong to, through the host's configured method.
-    # A missing method is a configuration mistake explained in a full sentence,
-    # not a NoMethodError three frames deep.
-    def clickwrap_current_actor
-      @clickwrap_current_actor ||= ControllerHelpers.resolve_current_actor(self)
-    end
-
     # The host's authentication filters run INSIDE these engine controllers —
     # that is the entire point of inheriting from the host's parent controller —
     # and those filters reference the HOST's own route helpers
@@ -39,9 +32,9 @@ module Clickwrap
     # lets the host's code work in here unmodified. It is the standard engine
     # idiom, and the alternative is asking every host to special-case its own
     # authentication for these four screens.
-    def method_missing(method, *args, &block)
+    def method_missing(method, *, &)
       if method.to_s.end_with?("_path", "_url") && main_app.respond_to?(method)
-        main_app.public_send(method, *args, &block)
+        main_app.public_send(method, *, &)
       else
         super
       end

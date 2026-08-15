@@ -1,0 +1,484 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+# Test-only public-API double for the optional organizations gem. It uses a
+# real Active Record represented party so the presentation/event/receipt path
+# is exercised end to end, while keeping organizations out of Clickwrap's
+# dependency graph.
+module Organizations
+  module Roles
+  end
+
+  class Membership
+    attr_reader :id, :user_id, :role
+
+    def initialize(id:, user_id:, role:, permissions: [])
+      @id = id
+      @user_id = user_id
+      @role = role.to_s
+      @permissions = permissions.map(&:to_sym)
+    end
+
+    def role_sym = role.to_sym
+
+    # These names intentionally mirror the organizations gem's public API.
+    # Renaming the double would stop testing the adapter we actually ship.
+    # rubocop:disable Naming/PredicatePrefix
+    def is_at_least?(minimum_role)
+      hierarchy = %i[owner admin member viewer]
+      hierarchy.index(role_sym) <= hierarchy.index(minimum_role.to_sym)
+    end
+
+    def has_permission_to?(permission) = @permissions.include?(permission.to_sym)
+    # rubocop:enable Naming/PredicatePrefix
+  end
+
+  class MembershipRelation
+    attr_reader :locked
+
+    def initialize(memberships)
+      @memberships = memberships
+      @locked = false
+    end
+
+    def lock
+      @locked = true
+      self
+    end
+
+    def find_by(user_id:)
+      @memberships.find { |membership| membership.user_id == user_id }
+    end
+  end
+
+  class Organization < ApplicationRecord
+    self.table_name = "organizations"
+
+    def clickwrap_memberships=(memberships)
+      @memberships = memberships
+    end
+
+    def memberships
+      @memberships ||= MembershipRelation.new([])
+    end
+  end
+
+  # Host applications sometimes expose a domain-specific subclass while the
+  # organizations gem keeps Organizations::Organization as its base class.
+  class EnterpriseOrganization < Organization
+  end
+end
+
+class OrganizationsAuthorityTest < ActiveSupport::TestCase
+  def setup
+    super
+    define_organization_policy
+  end
+
+  test "an authorized admin binds their organization while remaining the human actor" do
+    actor = create_user
+    organization = create_test_organization
+    membership = membership_for(actor, role: :admin)
+    organization.clickwrap_memberships = relation = Organizations::MembershipRelation.new([membership])
+
+    receipt = capture_for(actor, organization)
+    event = receipt.event.reload
+
+    assert relation.locked
+    assert_equal actor.to_gid.to_s, event.actor_reference
+    assert_equal organization.to_gid.to_s, event.represented_party_reference
+    assert_equal "Organizations::Organization", event.represented_party_type
+    assert_equal "organizations.membership", event.authority_source
+    assert_equal "admin", event.authority_role
+    assert event.authority_verified_at
+    assert_equal "1", event.authority_details.fetch("adapter_version")
+    assert_equal "admin", event.authority_details.fetch("minimum_role")
+    assert event.digest_verified?
+
+    acting_for = receipt.to_h.dig("actor", "acting_for")
+    assert_equal organization.to_gid.to_s, acting_for.fetch("reference")
+    assert_equal "admin", acting_for.fetch("authority_role")
+  end
+
+  test "owner inherits an admin minimum role" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :owner)
+                                                                               ])
+
+    assert capture_for(actor, organization).digest_verified?
+  end
+
+  test "a host subclass of Organizations::Organization is accepted as the represented party" do
+    actor = create_user
+    organization = Organizations::EnterpriseOrganization.create!(name: "Enterprise")
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+
+    receipt = capture_for(actor, organization)
+
+    # Active Record polymorphic associations intentionally persist the base
+    # class so GlobalID/polymorphic lookup keeps working across STI subclasses.
+    assert_equal "Organizations::Organization", receipt.event.represented_party_type
+    assert receipt.digest_verified?
+  end
+
+  test "organizational acceptance never satisfies the actor's personal-capacity requirement" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+
+    capture_for(actor, organization)
+
+    assert Clickwrap.current?(:organization_terms, actor: actor, tenant: organization,
+                                                   acting_for: organization)
+    refute Clickwrap.current?(:organization_terms, actor: actor, tenant: organization)
+    assert_equal 1, actor.clickwraps.statement_states.count
+    assert_equal organization.to_gid.to_s,
+                 actor.clickwraps.statement_states.first.represented_party_reference
+  end
+
+  test "ordinary members, strangers, and removed admins are denied" do
+    actor = create_user
+    organization = create_test_organization
+
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :member)
+                                                                               ])
+    assert_raises(Clickwrap::AuthorityNotVerified) { capture_for(actor, organization) }
+
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([])
+    assert_raises(Clickwrap::AuthorityNotVerified) { capture_for(actor, organization) }
+  end
+
+  test "authority is checked at submit so a role removed after presentation is denied" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+    presentation = present_for(actor, organization)
+
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([])
+
+    assert_raises(Clickwrap::AuthorityNotVerified) do
+      capture_presentation(actor, organization, presentation)
+    end
+  end
+
+  test "a represented organization deleted after presentation is denied even if an association object is stale" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+    presentation = present_for(actor, organization)
+
+    organization.destroy!
+
+    assert_raises(Clickwrap::AuthorityNotVerified) do
+      capture_presentation(actor, organization, presentation)
+    end
+  end
+
+  test "a signed presentation cannot be moved to another represented party" do
+    actor = create_user
+    first = create_test_organization
+    second = create_test_organization
+    first.clickwrap_memberships = Organizations::MembershipRelation.new([membership_for(actor, role: :admin)])
+    second.clickwrap_memberships = Organizations::MembershipRelation.new([membership_for(actor, role: :admin)])
+    presentation = present_clickwrap(
+      :organization_terms,
+      actor: actor,
+      acting_for: first
+    )
+
+    error = assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.capture!(
+        :organization_terms,
+        actor: actor,
+        acting_for: second,
+        submission: submission_for(presentation, "terms" => "1")
+      )
+    end
+
+    assert_equal :represented_party_mismatch, error.result.error
+    assert_equal 0, Clickwrap::Event.where(policy_key: "organization_terms").count
+  end
+
+  test "an organizations authority presentation cannot cross tenant context" do
+    actor = create_user
+    organization = create_test_organization
+    another_tenant = create_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+    presentation = present_for(actor, organization)
+
+    error = assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.capture!(
+        :organization_terms,
+        actor: actor,
+        acting_for: organization,
+        tenant: another_tenant,
+        submission: submission_for(presentation, "terms" => "1")
+      )
+    end
+
+    assert_equal :presentation_tenant_mismatch, error.result.error
+  end
+
+  test "a policy must explicitly choose organization role or permission authority" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :unsafe_organization_terms do
+        agree_to :terms
+        permit_acting_for_organization
+        retain_with :ordinary_agreement_evidence
+      end
+    end
+
+    assert_match(/membership alone does not establish legal authority/, error.message)
+  end
+
+  test "generic represented-party authority must name the permitted record types" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :unsafe_generic_authority do
+        agree_to :terms
+        permit_acting_for using: :host
+        retain_with :ordinary_agreement_evidence
+      end
+    end
+
+    assert_match(/at least one represented-party class name/, error.message)
+  end
+
+  test "a directly constructed authority rule cannot authorize every record type" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap::AuthorityRule.new(represented_party_types: [])
+    end
+
+    assert_match(/must name at least one represented-party class/, error.message)
+  end
+
+  test "an authority callback cannot return a bare boolean instead of evidence facts" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap::AuthorityDecision.from(true)
+    end
+
+    assert_match(/returned bare true/, error.message)
+    assert_match(/source.*role.*verified_at/, error.message)
+    refute Clickwrap::AuthorityDecision.from(false).authorized?
+  end
+
+  test "an authority callback cannot silently misspell an evidence attribute" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap::AuthorityDecision.from(authorized: true, soruce: "membership")
+    end
+
+    assert_match(/unknown attribute `soruce:`/, error.message)
+  end
+
+  test "a policy can require an organizations permission instead of a role" do
+    Clickwrap.policy :organization_export do
+      agree_to :terms
+      permit_acting_for_organization when_actor_has_permission: :export_data
+      retain_with :ordinary_agreement_evidence
+    end
+
+    actor = create_user
+    organization = create_test_organization
+    membership = membership_for(actor, role: :member, permissions: [:export_data])
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([membership])
+    presentation = present_clickwrap(
+      :organization_export,
+      actor: actor,
+      tenant: organization,
+      acting_for: organization
+    )
+
+    receipt = committed_test_receipt(Clickwrap.capture!(
+                                       :organization_export,
+                                       actor: actor,
+                                       tenant: organization,
+                                       acting_for: organization,
+                                       submission: submission_for(presentation, "terms" => "1")
+                                     ))
+
+    assert_equal "export_data", receipt.event.authority_details.fetch("required_permission")
+  end
+
+  test "a remediation route preserves the exact organization and tenant selected by the server" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+    policy = Clickwrap.policy!(:organization_terms)
+    token = Clickwrap::RemediationToken.issue(
+      policy: policy,
+      actor: actor,
+      tenant: organization,
+      represented_party: organization,
+      return_to: "/organization/settings"
+    )
+
+    context = Clickwrap::RemediationToken.resolve!(
+      token,
+      policy: policy,
+      actor: actor,
+      tenant: organization
+    )
+
+    assert_equal organization, context.represented_party
+    assert_equal organization.to_gid.to_s, context.tenant_reference
+    assert_equal "/organization/settings", context.return_to
+  end
+
+  test "a remediation route cannot be moved to another actor or tenant" do
+    actor = create_user
+    another_actor = create_user
+    organization = create_test_organization
+    another_organization = create_test_organization
+    policy = Clickwrap.policy!(:organization_terms)
+    token = Clickwrap::RemediationToken.issue(
+      policy: policy,
+      actor: actor,
+      tenant: organization,
+      represented_party: organization
+    )
+
+    actor_error = assert_raises(Clickwrap::RemediationInvalid) do
+      Clickwrap::RemediationToken.resolve!(
+        token,
+        policy: policy,
+        actor: another_actor,
+        tenant: organization
+      )
+    end
+    assert_match(/different actor/, actor_error.message)
+
+    tenant_error = assert_raises(Clickwrap::RemediationInvalid) do
+      Clickwrap::RemediationToken.resolve!(
+        token,
+        policy: policy,
+        actor: actor,
+        tenant: another_organization
+      )
+    end
+    assert_match(/different tenant/, tenant_error.message)
+  end
+
+  test "a represented organization that disappears cannot be recovered from an old remediation route" do
+    actor = create_user
+    organization = create_test_organization
+    policy = Clickwrap.policy!(:organization_terms)
+    token = Clickwrap::RemediationToken.issue(
+      policy: policy,
+      actor: actor,
+      tenant: organization,
+      represented_party: organization
+    )
+
+    organization.destroy!
+
+    error = assert_raises(Clickwrap::RemediationInvalid) do
+      Clickwrap::RemediationToken.resolve!(
+        token,
+        policy: policy,
+        actor: actor,
+        tenant: organization
+      )
+    end
+    assert_match(/represented party no longer exists/, error.message)
+  end
+
+  test "tampered and expired organization remediation routes are refused" do
+    actor = create_user
+    organization = create_test_organization
+    policy = Clickwrap.policy!(:organization_terms)
+    token = Clickwrap::RemediationToken.issue(
+      policy: policy,
+      actor: actor,
+      tenant: organization,
+      represented_party: organization
+    )
+    tampered = token.dup
+    tampered.setbyte(tampered.bytesize / 2, tampered.getbyte(tampered.bytesize / 2) ^ 1)
+
+    assert_raises(Clickwrap::RemediationInvalid) do
+      Clickwrap::RemediationToken.resolve!(
+        tampered,
+        policy: policy,
+        actor: actor,
+        tenant: organization
+      )
+    end
+
+    expired = Clickwrap::RemediationToken.issue(
+      policy: policy,
+      actor: actor,
+      tenant: organization,
+      represented_party: organization,
+      issued_at: 1.day.ago
+    )
+    assert_raises(Clickwrap::RemediationInvalid) do
+      Clickwrap::RemediationToken.resolve!(
+        expired,
+        policy: policy,
+        actor: actor,
+        tenant: organization
+      )
+    end
+  end
+
+  private
+
+  def define_organization_policy
+    Clickwrap.policy :organization_terms do
+      agree_to :terms
+      permit_acting_for_organization when_actor_is_at_least: :admin
+      retain_with :ordinary_agreement_evidence
+    end
+  end
+
+  def create_test_organization
+    Organizations::Organization.create!(name: "Represented #{SecureRandom.hex(3)}")
+  end
+
+  def membership_for(actor, role:, permissions: [])
+    Organizations::Membership.new(
+      id: SecureRandom.random_number(100_000),
+      user_id: actor.id,
+      role: role,
+      permissions: permissions
+    )
+  end
+
+  def present_for(actor, organization)
+    present_clickwrap(
+      :organization_terms,
+      actor: actor,
+      tenant: organization,
+      acting_for: organization
+    )
+  end
+
+  def capture_for(actor, organization)
+    capture_presentation(actor, organization, present_for(actor, organization))
+  end
+
+  def capture_presentation(actor, organization, presentation)
+    committed_test_receipt(Clickwrap.capture!(
+                             :organization_terms,
+                             actor: actor,
+                             tenant: organization,
+                             acting_for: organization,
+                             submission: submission_for(presentation, "terms" => "1")
+                           ))
+  end
+end

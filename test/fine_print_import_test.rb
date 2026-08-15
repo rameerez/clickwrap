@@ -69,7 +69,7 @@ class FinePrintImportTest < ActiveSupport::TestCase
     assert_operator event.recorded_at_by_server, :>, event.occurred_at
 
     # The gap between when it happened and when we wrote it down stays visible.
-    # FinePrint recorded a signature; it did not record what was on screen, so
+    # FinePrint recorded a signature; it did not record the server's offer, so
     # nothing here pretends otherwise.
     assert_nil event.presentation_manifest_digest
     assert_equal "fine_print", event.provider_verification["source"]

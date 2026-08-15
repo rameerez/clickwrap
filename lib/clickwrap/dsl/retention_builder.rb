@@ -24,7 +24,7 @@ module Clickwrap
       # --- The core event -------------------------------------------------------
 
       def retain_core_event_for(duration)
-        @rules[:core_event] = RetentionClass::Rule.new(part: :core_event, duration:)
+        assign_rule!(:core_event, duration:)
       end
 
       # For obligations a duration cannot express — "five years, or three years
@@ -33,36 +33,57 @@ module Clickwrap
       # it may legitimately return nil while the triggering event has not
       # happened, in which case the record is simply not due yet.
       def retain_core_event_until(host_event_name)
-        @rules[:core_event] = RetentionClass::Rule.new(part: :core_event, host_event_name:)
+        assign_rule!(:core_event, host_event_name:)
       end
 
       # --- Optional request evidence -------------------------------------------
 
       def delete_recorded_ip_address_after(duration)
-        @rules[:ip_address] = RetentionClass::Rule.new(part: :ip_address, duration:)
+        assign_rule!(:ip_address, duration:)
       end
 
       def delete_recorded_browser_user_agent_after(duration)
-        @rules[:browser_user_agent] = RetentionClass::Rule.new(part: :browser_user_agent, duration:)
+        assign_rule!(:browser_user_agent, duration:)
       end
 
       def delete_recorded_ip_geolocation_after(duration)
-        @rules[:ip_geolocation] = RetentionClass::Rule.new(part: :ip_geolocation, duration:)
+        assign_rule!(:ip_geolocation, duration:)
       end
 
       def retain_recorded_ip_address_until(host_event_name)
-        @rules[:ip_address] = RetentionClass::Rule.new(part: :ip_address, host_event_name:)
+        assign_rule!(:ip_address, host_event_name:)
       end
 
       def retain_recorded_browser_user_agent_until(host_event_name)
-        @rules[:browser_user_agent] = RetentionClass::Rule.new(part: :browser_user_agent, host_event_name:)
+        assign_rule!(:browser_user_agent, host_event_name:)
       end
 
       def retain_recorded_ip_geolocation_until(host_event_name)
-        @rules[:ip_geolocation] = RetentionClass::Rule.new(part: :ip_geolocation, host_event_name:)
+        assign_rule!(:ip_geolocation, host_event_name:)
       end
 
       def compile = RetentionClass.new(key: @key, rules: @rules)
+
+      private
+
+      def assign_rule!(part, duration: nil, host_event_name: nil)
+        if @rules.key?(part)
+          raise DefinitionError,
+                "Retention class #{@key} declares #{part} more than once. Keep one reviewed " \
+                "rule for each part; Clickwrap will not let line order silently replace a " \
+                "deletion deadline."
+        end
+
+        @rules[part] = RetentionClass::Rule.new(part:, duration:, host_event_name:)
+      end
+
+      def method_missing(name, *_arguments, **_options)
+        raise DefinitionError,
+              "Retention class #{@key} calls unknown DSL method `#{name}`. Check the spelling; " \
+              "Clickwrap never ignores retention declarations."
+      end
+
+      def respond_to_missing?(_name, _include_private = false) = false
     end
   end
 end

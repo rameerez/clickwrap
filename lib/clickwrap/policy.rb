@@ -20,11 +20,12 @@ module Clickwrap
   # over.
   class Policy
     attr_reader :key, :statements, :retention_class_key, :request_evidence, :persist_presentations_for,
-                :persist_presentations_because, :capture_channels, :locales, :options, :snapshot, :revision
+                :persist_presentations_because, :capture_channels, :locales, :authority_rule,
+                :options, :snapshot, :revision
 
     def initialize(key:, statements:, retention_class_key: nil, request_evidence: nil,
                    persist_presentations_for: nil, persist_presentations_because: nil,
-                   capture_channels: nil, locales: nil, options: {})
+                   capture_channels: nil, locales: nil, authority_rule: nil, options: {})
       @key = key.to_s
       @statements = statements.freeze
       @retention_class_key = retention_class_key&.to_s
@@ -33,6 +34,7 @@ module Clickwrap
       @persist_presentations_because = persist_presentations_because
       @capture_channels = (capture_channels || Vocabulary::CAPTURE_CHANNELS).map(&:to_s).freeze
       @locales = locales&.map(&:to_s)&.freeze
+      @authority_rule = authority_rule
       @options = options.freeze
 
       validate!
@@ -84,6 +86,10 @@ module Clickwrap
     # whether that authority is sufficient.
     def permits_acting_for? = options.fetch(:permit_acting_for, false) == true
 
+    def permits_acting_for_party?(represented_party)
+      permits_acting_for? && authority_rule&.permits?(represented_party)
+    end
+
     def to_s = "Clickwrap policy #{key} (#{revision})"
 
     private
@@ -100,7 +106,8 @@ module Clickwrap
         "capture_channels" => capture_channels,
         "locales" => locales,
         "permit_exemptions" => permits_exemptions?,
-        "permit_acting_for" => permits_acting_for?
+        "permit_acting_for" => permits_acting_for?,
+        "represented_party_authority" => authority_rule&.to_snapshot
       }.compact
     end
 
@@ -111,6 +118,30 @@ module Clickwrap
       validate_retention!
       validate_persisted_presentations!
       validate_capture_channels!
+      validate_authority_rule!
+    end
+
+    def validate_authority_rule!
+      if permits_acting_for? && authority_rule.nil?
+        raise DefinitionError,
+              "Policy #{key} permits represented-party action without a compiled authority rule."
+      end
+
+      return unless authority_rule
+
+      unless permits_acting_for?
+        raise DefinitionError,
+              "Policy #{key} has a represented-party authority rule but does not permit acting for another party."
+      end
+
+      return if authority_rule.adapter_name == "host"
+      return if Clickwrap.config.represented_party_authority_adapter(authority_rule.adapter_name)
+
+      raise DefinitionError,
+            "Policy #{key} uses represented-party authority adapter " \
+            "#{authority_rule.adapter_name.inspect}, but it is not registered. Register it with " \
+            "`config.register_represented_party_authority`. Registered adapters: " \
+            "#{Clickwrap.config.represented_party_authority_adapter_names.join(", ").presence || "(none)"}."
     end
 
     def validate_statements_present!

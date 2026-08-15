@@ -21,6 +21,9 @@
         method: :post,
         class: "clickwrap-screen__form" do %>
     <%= hidden_field_tag :return_to, @return_to, id: nil %>
+    <% if @remediation_token.present? %>
+      <%= hidden_field_tag :remediation_token, @remediation_token, id: nil %>
+    <% end %>
 
     <%= render "clickwrap/shared/fields",
           presentation: @presentation,

@@ -5,11 +5,10 @@ module Clickwrap
   # classes.
   #
   # Definitions are declared once at boot and read on every request, so writes
-  # take a lock and reads do not. Re-registering the same key replaces the
-  # definition, which is what makes `config.to_prepare` reloading work in
-  # development: the file is re-evaluated and the new compiled definition wins.
-  # Persisted evidence is unaffected — an event references the frozen policy
-  # revision it was captured under, not whatever is in this registry today.
+  # take a lock and reads do not. A reload clears the complete registry before
+  # loading the declaration files again. Seeing the same key twice inside one
+  # load is therefore always ambiguous and is refused instead of letting file
+  # order silently decide which policy governs a production action.
   class Registry
     def initialize(kind)
       @kind = kind
@@ -20,7 +19,16 @@ module Clickwrap
     attr_reader :kind
 
     def register(key, definition)
-      @mutex.synchronize { @entries[key] = definition }
+      @mutex.synchronize do
+        if @entries.key?(key)
+          raise DefinitionError,
+                "The #{kind} key #{key.inspect} is declared more than once. Give every " \
+                "#{kind} one stable key; Clickwrap will not let load order silently replace " \
+                "a server-owned definition."
+        end
+
+        @entries[key] = definition
+      end
       definition
     end
 

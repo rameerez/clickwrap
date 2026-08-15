@@ -57,7 +57,7 @@ module Dummy
     config.eager_load = true
 
     # Quiet, deterministic test output.
-    config.consider_all_requests_local = true
+    config.consider_all_requests_local = Rails.env.test?
     config.action_controller.perform_caching = false
     config.active_support.deprecation = :stderr
 
@@ -67,6 +67,13 @@ module Dummy
     # PostgreSQL/MySQL. Disabling the dump keeps the migrations the single source
     # of truth for the schema across the DB matrix.
     config.active_record.dump_schema_after_migration = false
+
+    # test/test_helper.rb runs the real migrations before loading
+    # rails/test_help. Disable Rails' second schema-maintenance pass so a stale,
+    # gitignored local schema.rb cannot silently replace that freshly migrated
+    # cross-adapter schema. CI and local development exercise the same
+    # migration-only path.
+    config.active_record.maintain_test_schema = false
 
     # :test adapters so the suite can assert on enqueued jobs and deliveries
     # without external services.

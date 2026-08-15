@@ -4,9 +4,9 @@ require "test_helper"
 
 # The backward-compatibility promise, made executable.
 #
-# `test/fixtures/receipts/` holds real receipts, byte for byte, exactly as some
-# earlier version of this gem exported them. They are never regenerated. Every
-# release runs the CURRENT verifier against them, so the day someone changes
+# `test/fixtures/receipts/` holds real receipts, byte for byte, frozen before
+# the first release of each schema. They are never regenerated after that
+# schema ships. Every release runs the CURRENT verifier against them, so the day someone changes
 # canonicalization, a digest rule, a field name, or a schema meaning, this file
 # fails — which is the only mechanism that makes "we still verify receipts you
 # exported years ago" a fact rather than an intention.
@@ -17,9 +17,40 @@ require "test_helper"
 class GoldenReceiptsTest < ActiveSupport::TestCase
   FIXTURE_DIR = File.expand_path("fixtures/receipts", __dir__)
   DOCUMENT_DIR = File.join(FIXTURE_DIR, "documents")
+  EXPECTED_VERIFICATION_STATUS = {
+    "disposed_core.clickwrap.receipt.v1.json" => "incomplete"
+  }.freeze
+
+  REQUEST_EVIDENCE_STATES = {
+    "request_evidence_recorded.clickwrap.receipt.v1.json" => {
+      "browser_user_agent" => "recorded",
+      "ip_address" => "recorded",
+      "ip_geolocation" => "recorded"
+    },
+    "request_evidence_redacted.clickwrap.receipt.v1.json" => {
+      "browser_user_agent" => "redacted_for_this_viewer",
+      "ip_address" => "redacted_for_this_viewer",
+      "ip_geolocation" => "redacted_for_this_viewer"
+    },
+    "request_evidence_deleted_after_retention.clickwrap.receipt.v1.json" => {
+      "browser_user_agent" => "deleted_after_retention",
+      "ip_address" => "deleted_after_retention",
+      "ip_geolocation" => "deleted_after_retention"
+    },
+    "request_evidence_held.clickwrap.receipt.v1.json" => {
+      "browser_user_agent" => "held",
+      "ip_address" => "held",
+      "ip_geolocation" => "held"
+    },
+    "request_evidence_unavailable.clickwrap.receipt.v1.json" => {
+      "browser_user_agent" => "redacted_for_this_viewer",
+      "ip_address" => "redacted_for_this_viewer",
+      "ip_geolocation" => "unavailable"
+    }
+  }.freeze
 
   def self.fixtures_on_disk
-    Dir[File.join(FIXTURE_DIR, "*.json")].sort
+    Dir[File.join(FIXTURE_DIR, "*.json")]
   end
 
   test "there is at least one golden receipt to check against" do
@@ -28,14 +59,24 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
     assert_operator self.class.fixtures_on_disk.length, :>=, 3
   end
 
+  test "every schema the verifier advertises has a frozen fixture" do
+    schemas_on_disk = self.class.fixtures_on_disk.map do |path|
+      JSON.parse(File.read(path)).fetch("schema")
+    end.uniq
+
+    assert_empty Clickwrap::ReceiptVerifier::KNOWN_SCHEMAS - schemas_on_disk,
+                 "KNOWN_SCHEMAS must not grow until a receipt from the new schema is frozen here"
+  end
+
   fixtures_on_disk.each do |path|
     name = File.basename(path, ".json")
 
-    test "the current verifier still verifies the golden receipt #{name}" do
+    test "the current verifier preserves the expected status of golden receipt #{name}" do
       json = File.read(path)
       result = Clickwrap::ReceiptVerifier.verify(json, documents: golden_documents)
+      expected = EXPECTED_VERIFICATION_STATUS.fetch(File.basename(path), "verified")
 
-      assert result.success?, "#{name} no longer verifies:\n#{result}"
+      assert_equal expected, result.status, "#{name} changed verification status:\n#{result}"
     end
 
     test "the golden receipt #{name} is still canonical under the current rules" do
@@ -60,12 +101,13 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
 
     # These are the load-bearing names. Renaming one is not a refactor: it is a
     # change to a published format that other people's tooling reads.
-    %w[schema event_id event_type policy actor acts documents presentation
+    %w[schema event_id event_type event policy actor acts documents presentation
        integrity retention recorded_at_by_server system verifier_instructions].each do |key|
       assert body.key?(key), "the receipt format lost the #{key.inspect} key"
     end
 
     assert body.dig("integrity", "receipt_digest").to_s.start_with?("sha256:")
+    assert body.dig("integrity", "event_digest").to_s.start_with?("sha256:")
     assert body.dig("integrity", "detects").present?
     assert body.dig("presentation", "proves").present?
   end
@@ -82,6 +124,26 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
     request_evidence.each_value { |fragment| assert fragment.key?("state") }
   end
 
+  test "every request-evidence state has an explicit frozen fixture" do
+    REQUEST_EVIDENCE_STATES.each do |filename, expected_states|
+      body = JSON.parse(File.read(File.join(FIXTURE_DIR, filename)))
+      actual_states = body.fetch("request_evidence").transform_values { |fragment| fragment.fetch("state") }
+
+      assert_equal expected_states, actual_states, filename
+    end
+  end
+
+  test "the disposed-core fixture is a documented incomplete verification, not a failure" do
+    path = File.join(FIXTURE_DIR, "disposed_core.clickwrap.receipt.v1.json")
+    result = Clickwrap::ReceiptVerifier.verify(File.read(path), documents: golden_documents)
+
+    assert result.incomplete?, result.to_s
+    assert_empty result.failures
+    event_check = result.checks.find { |check| check.name == "event_digest" }
+    assert event_check.skipped?
+    assert_match(/lawfully disposed/, event_check.detail)
+  end
+
   test "the golden receipts contain no prohibited claim" do
     self.class.fixtures_on_disk.each do |path|
       contents = File.read(path).downcase
@@ -95,9 +157,11 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
 
   test "a golden receipt fails verification if a document's bytes are not the ones it cites" do
     json = File.read(File.join(FIXTURE_DIR, "signup.clickwrap.receipt.v1.json"))
+    documents = golden_documents
+    documents.fetch("terms@2026-08-15@en")["source"] = "not the source bytes the receipt bound"
 
     result = Clickwrap::ReceiptVerifier.verify(
-      json, documents: golden_documents.merge("terms" => "not the bytes that were presented")
+      json, documents: documents
     )
 
     assert_not result.success?
@@ -107,8 +171,21 @@ class GoldenReceiptsTest < ActiveSupport::TestCase
   private
 
   def golden_documents
-    Dir[File.join(DOCUMENT_DIR, "*")].to_h do |path|
-      [File.basename(path, File.extname(path)), File.binread(path)]
+    document_bindings = self.class.fixtures_on_disk.flat_map do |path|
+      Array(JSON.parse(File.read(path))["documents"])
+    end
+
+    document_bindings.each_with_object({}) do |binding, artifacts|
+      identity = [binding.fetch("key"), binding.fetch("version"), binding.fetch("locale")].join("@")
+      next if artifacts.key?(identity)
+
+      stem = [binding.fetch("key"), binding.fetch("version"), binding.fetch("locale")].join("-")
+      artifacts[identity] = %w[source rendered].to_h do |kind|
+        paths = Dir[File.join(DOCUMENT_DIR, "#{stem}.#{kind}.*")]
+        assert_equal 1, paths.length,
+                     "golden document #{identity} needs exactly one #{kind} artifact"
+        [kind, File.binread(paths.fetch(0))]
+      end
     end
   end
 end

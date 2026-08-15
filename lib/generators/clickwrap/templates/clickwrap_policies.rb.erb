@@ -11,7 +11,7 @@
 #
 # Three kinds of declaration live here:
 #
-#   Clickwrap.document   what was on screen, frozen byte for byte
+#   Clickwrap.document   versioned source and rendered bytes used in offers
 #   Clickwrap.policy     what the server offers and will accept
 #   Clickwrap.retention  how long each part of the evidence lives
 #
@@ -44,8 +44,8 @@ Clickwrap.document :privacy_notice,
   from: Rails.root.join("app/content/legal/privacy.md")
 
 # Several locales are several versions of the same logical document. Each is
-# published and digested separately, and the receipt records which one was
-# actually shown:
+# published and digested separately, and the receipt records which one the
+# accepted server offer bound:
 #
 # Clickwrap.document :terms,
 #   version: "<%= Date.today.iso8601 %>",
@@ -96,8 +96,8 @@ end
 
 # --- Policies -----------------------------------------------------------------
 #
-# A policy is a server-owned offer: exactly what will be presented, and exactly
-# what will be accepted back. One submitted policy produces one event and one
+# A policy is a server-owned offer: exactly what the server will generate, and
+# exactly what it will accept back. One submitted policy produces one event and one
 # receipt, but each act inside it keeps its own kind, documents, wording,
 # answer, and lifecycle — "agreed to the Terms" and "acknowledged the Privacy
 # Notice" never flatten into one meaning.
@@ -116,11 +116,11 @@ Clickwrap.policy :signup do
   # to "agree" to misdescribes it, and treating the acknowledgment as blanket
   # consent would let a checkbox stand in for permissions nobody asked for.
   #
-  # So the receipt says what actually happened: this exact version of this
-  # notice was presented, and the person affirmatively acknowledged receiving
-  # it. Anything you genuinely need consent for gets its own `consent_to`, its
-  # own purpose, its own unselected control, and its own withdrawal path — see
-  # the marketing example below.
+  # So the receipt says what the application recorded: the server offered this
+  # exact notice version, and the person submitted an affirmative acknowledgment
+  # of receiving it. Anything you genuinely need consent for gets its own
+  # `consent_to`, its own purpose, its own unselected control, and its own
+  # withdrawal path — see the marketing example below.
   acknowledge :privacy_notice
 
   retain_with :ordinary_agreement_evidence

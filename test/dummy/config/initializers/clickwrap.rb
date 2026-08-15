@@ -1,5 +1,10 @@
 # frozen_string_literal: true
 
+class DummyIpGeolocationResolver
+  def resolve(_ip_address) = nil
+  def capabilities = Clickwrap::Vocabulary::IP_GEOLOCATION_DATA_FIELDS.map(&:to_sym)
+end
+
 # Minimal host wiring, close to what the install generator writes. Tests that
 # exercise other configurations set them per-test (Clickwrap.reset! plus a
 # re-configure in setup/teardown keeps this from leaking).
@@ -21,5 +26,32 @@ Clickwrap.configure do |config|
     requested_by.respond_to?(:security_operator?) && requested_by.security_operator? && because.present?
   end
 
+  config.authorize_clickwrap_remediation_subject_with = lambda do |actor:, subject:, policy:, controller:|
+    subject.nil? || (subject.respond_to?(:user_id) && subject.user_id == actor&.id)
+  end
+
+  config.authorize_clickwrap_remediation_represented_party_with =
+    lambda do |actor:, represented_party:, policy:, controller:|
+      represented_party.nil? || controller.current_organization == represented_party
+    end
+
   config.application_version = -> { "dummy-test" }
+
+  # The dummy's request-evidence policy is compiled at boot, so its reviewed
+  # network provenance and deterministic test resolver are real configuration,
+  # not test-time patches applied after the revision was frozen.
+  config.trusted_proxy_configuration_digest =
+    Clickwrap::Digest.digest("dummy-host-reviewed-trusted-proxy-configuration-v1")
+  config.ip_geolocation_resolver = DummyIpGeolocationResolver.new
+
+  config.calculate_retention_time_for :regulated_evidence_retention_ends do |event|
+    [
+      event.recorded_at_by_server + 5.years,
+      event.subject.respond_to?(:liquidated_at) ? event.subject.liquidated_at&.+(3.years) : nil
+    ].compact.max
+  end
+
+  config.calculate_retention_time_for :security_evidence_retention_ends do |event|
+    event.recorded_at_by_server + 2.years
+  end
 end

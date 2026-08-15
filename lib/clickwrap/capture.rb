@@ -20,11 +20,25 @@ module Clickwrap
   # would be worse than useless. Use `Clickwrap.authorize_external_action!` and
   # its outbox instead. This class will not claim atomicity it cannot deliver.
   class Capture
+    # Internal control flow carrying the already-committed event for an
+    # idempotent replay. It never escapes Capture's public API.
+    class IdempotentReplay < StandardError
+      attr_reader :event
+
+      def initialize(event)
+        @event = event
+        super()
+      end
+    end
+    private_constant :IdempotentReplay
+
     def initialize(policy:, actor: nil, subject: nil, tenant: nil, http_request: nil,
                    submission: nil, answers: nil, locale: nil, capture_channel: nil,
                    acting_for: nil, authentication_context: nil, attribution_method: nil,
-                   idempotency_key: nil, prospective_actor: nil, client_reported_context: nil,
-                   reason: nil)
+                   idempotency_key: nil, prospective_actor: nil,
+                   registration_flow_id: nil, consume_one_time_authorizations: true,
+                   reason: nil, event_type: "capture", root_event_id: nil,
+                   predecessor_event_id: nil, statement_action_overrides: {})
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
@@ -34,20 +48,26 @@ module Clickwrap
       @submission = submission
       @explicit_answers = answers
       @locale = locale
-      @capture_channel = (capture_channel || infer_capture_channel).to_s
+      @explicit_capture_channel = capture_channel&.to_s
+      @capture_channel = @explicit_capture_channel
       @acting_for = acting_for
       @authentication_context = authentication_context
       @attribution_method = attribution_method
       @explicit_idempotency_key = idempotency_key
-      @client_reported_context = client_reported_context
+      @registration_flow_id = registration_flow_id
+      @consume_one_time_authorizations = consume_one_time_authorizations
       @reason = reason
+      @event_type = event_type.to_s
+      @root_event_id = root_event_id
+      @predecessor_event_id = predecessor_event_id
+      @statement_action_overrides = statement_action_overrides.to_h.transform_keys(&:to_s)
     end
 
     attr_reader :policy, :actor, :subject, :tenant, :http_request, :submission, :capture_channel
 
     # Records evidence with no protected action attached.
     def capture!
-      perform { |_pending| nil }
+      perform(protected_action: false) { |_pending| nil }
     end
 
     # Records evidence and runs the protected action inside the same
@@ -58,7 +78,7 @@ module Clickwrap
     def capture_and!(&block)
       raise ArgumentError, "capture_and! needs a block containing the protected action" unless block
 
-      perform(&block)
+      perform(protected_action: true, &block)
     end
 
     # Signup. At first render there is no persisted actor, so the presentation
@@ -72,10 +92,17 @@ module Clickwrap
 
       @attribution_method = "account_registration"
 
-      perform do |pending|
-        block.call(pending)
+      perform(protected_action: true) do |pending|
+        result = block.call(pending)
+
+        unless @prospective_actor&.persisted?
+          raise RegistrationFailed,
+                "The registration block did not persist the prospective actor. Use `save!`, or " \
+                "raise when validation fails, so Clickwrap can roll the evidence back with it."
+        end
+
         rebind_actor_after_registration!(pending)
-        nil
+        result
       end
     end
 
@@ -86,30 +113,57 @@ module Clickwrap
     # resolved before it opens. A transaction that stays open across a network
     # call to a geolocation provider is a transaction holding locks on evidence
     # rows while waiting for someone else's DNS.
-    def perform(&block)
-      manifest = verify_presentation!
-      revision = load_revision(manifest)
-      answers = collect_answers(manifest)
-      validate_answers!(manifest, answers)
+    def perform(protected_action:, &block)
+      @protected_action = protected_action
+      @joined_existing_transaction = ::ActiveRecord::Base.connection.transaction_open?
+      verified = PresentationVerifier.new(
+        policy: policy,
+        submission: submission,
+        explicit_answers: @explicit_answers,
+        actor_reference: actor_reference,
+        tenant_key: tenant_key,
+        subject_key: subject_key,
+        subject_fingerprint: subject_fingerprint,
+        represented_party: @acting_for,
+        prospective_actor: @prospective_actor,
+        registration_flow_id: @registration_flow_id,
+        explicit_capture_channel: @explicit_capture_channel
+      ).verify!
+      manifest = verified.manifest
+      revision = verified.revision
+      answers = verified.answers
+      @capture_channel = verified.capture_channel
+      @frozen_statement_snapshots = verified.statement_snapshots
+      @verified_document_versions_by_id = verified.document_versions_by_id
 
       request_evidence = resolve_request_evidence
 
       existing = find_existing_event(idempotency_key_for(manifest))
-      return replay(existing, answers) if existing
+      return replay(existing, answers, manifest) if existing
 
       event = nil
+      pending = nil
 
-      run_in_transaction do
-        lock_one_time_statements!
+      begin
+        run_in_transaction do
+          verify_represented_party_authority!
+          lock_one_time_statements!(manifest)
 
-        event = append_event!(manifest, revision, answers, request_evidence)
-        pending = PendingReceipt.new(event)
+          event = append_event!(manifest, revision, answers, request_evidence)
+          pending = event.track_pending_receipt(
+            PendingReceipt.new(event, wait_for_outer_transaction: @joined_existing_transaction)
+          )
 
-        block.call(pending)
+          block.call(pending)
 
-        record_protected_outcome!(event)
-        update_projections!(event)
-        mark_presentation_accepted!(manifest)
+          record_protected_outcome!(event)
+          event.finalize_integrity!
+          update_projections!(event)
+          consume_one_time_authorizations!(event)
+          mark_presentation_accepted!(manifest)
+        end
+      rescue IdempotentReplay => error
+        return replay(error.event, answers, manifest)
       end
 
       # The after-commit hook is NOT invoked here. When this capture joined a
@@ -117,7 +171,7 @@ module Clickwrap
       # from inside a transaction that later rolls back announces something that
       # never happened. The hook is registered as an `after_commit` callback on
       # the event instead, so Rails fires it on the real outermost commit.
-      Receipt.new(event.reload)
+      pending.committed? ? pending.receipt : pending
     end
 
     # Joins the caller's transaction when there is one. `requires_new: false` is
@@ -131,178 +185,6 @@ module Clickwrap
             "The capture hit a #{error.class.name.demodulize.underscore.humanize.downcase}. Clickwrap " \
             "does not retry automatically here because it cannot prove your protected action is " \
             "safe to run twice. Retry the whole operation if it is."
-    end
-
-    # --- Presentation ---------------------------------------------------------
-
-    def verify_presentation!
-      manifest = submission&.manifest
-
-      unless manifest
-        raise PresentationInvalid,
-              "This capture has no presentation. Render the policy with `form.clickwrap` or " \
-              "`Clickwrap.present`, and submit the token it produced."
-      end
-
-      if manifest.policy_key != policy.key
-        raise PresentationInvalid.new(
-          "The submitted presentation is for policy #{manifest.policy_key.inspect}, " \
-          "not #{policy.key.inspect}.",
-          result: Verification::Result.failure(:presentation_policy_mismatch, policy_key: policy.key)
-        )
-      end
-
-      if manifest.expired?
-        raise PresentationExpired.new(
-          "The presentation expired at #{manifest.expires_at}. Re-render the form so the person " \
-          "acts on something current.",
-          result: Verification::Result.failure(:presentation_expired, policy_key: policy.key)
-        )
-      end
-
-      verify_bindings!(manifest)
-      verify_document_digests!(manifest)
-
-      manifest
-    end
-
-    # A token is bound to who it was issued to. Swapping in another account's
-    # token, another tenant's, or another subject's is the attack this check
-    # exists for, and each one gets its own stable error so a host can tell them
-    # apart in logs.
-    def verify_bindings!(manifest)
-      if manifest.actor_reference.present? && actor_reference.present? &&
-         manifest.actor_reference != actor_reference
-        raise PresentationInvalid.new(
-          "This presentation was issued to a different actor.",
-          result: Verification::Result.failure(:presentation_actor_mismatch, policy_key: policy.key)
-        )
-      end
-
-      if manifest.tenant_key.to_s != tenant_key.to_s
-        raise PresentationInvalid.new(
-          "This presentation was issued for a different tenant.",
-          result: Verification::Result.failure(:presentation_tenant_mismatch, policy_key: policy.key)
-        )
-      end
-
-      return unless manifest.subject_key.to_s != subject_key.to_s
-
-      raise PresentationInvalid.new(
-        "This presentation was issued for a different subject.",
-        result: Verification::Result.failure(:presentation_subject_mismatch, policy_key: policy.key)
-      )
-    end
-
-    # A deploy between GET and POST must never cause the server to record a
-    # version the person was not offered. So the digests in the token are
-    # checked against the rows now: if they still match, the presentation is
-    # honored even though a newer version has published; if they do not, the
-    # capture is refused and the host re-renders rather than silently recording
-    # content nobody saw.
-    def verify_document_digests!(manifest)
-      manifest.statements.each do |statement|
-        Array(statement["documents"]).each do |document|
-          version = DocumentVersion.find_by(id: document["version_id"])
-
-          # Two checks, not one. The recorded digest must still match what the
-          # presentation offered, AND the stored bytes must still hash to that
-          # digest — otherwise a version row edited in place would keep its
-          # digest column and quietly pass, which is the exact substitution this
-          # whole mechanism exists to prevent.
-          next if version && Digest.secure_compare?(version.content_digest, document["digest"]) &&
-                  version.verify_content_digest
-
-          raise PresentationInvalid.new(
-            "The document #{document["key"]} version #{document["version"]} no longer matches " \
-            "what this presentation offered. Re-render the form so the person sees the current " \
-            "version before acting on it.",
-            result: Verification::Result.failure(
-              :document_digest_mismatch, policy_key: policy.key,
-                                         details: { "document" => document["key"] }
-            )
-          )
-        end
-      end
-    end
-
-    def load_revision(manifest)
-      revision = PolicyRevision.find_by(policy_key: policy.key, revision_digest: manifest.revision_digest)
-
-      unless revision
-        raise PresentationInvalid.new(
-          "The policy revision this presentation was issued under is no longer on file.",
-          result: Verification::Result.failure(:stale_policy_revision, policy_key: policy.key)
-        )
-      end
-
-      revision
-    end
-
-    # --- Answers --------------------------------------------------------------
-
-    def collect_answers(manifest)
-      return @explicit_answers.transform_keys(&:to_s) if @explicit_answers
-
-      manifest.statements.to_h do |statement|
-        [statement["key"], submission.answer_for(statement["key"])]
-      end
-    end
-
-    def validate_answers!(manifest, answers)
-      # Checked against what the CLIENT actually sent, not against what we
-      # collected from the manifest — otherwise an unexpected key would be
-      # quietly dropped during collection and the submission would look clean.
-      # An attempt to answer a statement nobody offered is worth failing.
-      submitted_keys = submission ? submission.answers.keys : answers.keys
-      unknown = submitted_keys - manifest.statements.map { |statement| statement["key"] }
-
-      unless unknown.empty?
-        raise SubmissionInvalid,
-              "The submission answers #{unknown.join(", ")}, which this presentation never " \
-              "offered. Answers are only accepted for the statements the server declared."
-      end
-
-      policy.statements.each do |statement|
-        value = answers[statement.key]
-        validate_answer!(statement, value)
-      end
-    end
-
-    def validate_answer!(statement, value)
-      if statement.choices
-        validate_choice!(statement, value)
-      elsif statement.required? && !truthy?(value)
-        raise AnswerInvalid.new(
-          "#{statement.key} is required and was not answered.",
-          statement_key: statement.key, reason: :missing_answer
-        )
-      end
-    end
-
-    def validate_choice!(statement, value)
-      if value.blank?
-        return unless statement.requires_an_explicit_choice? || statement.required?
-
-        raise AnswerInvalid.new(
-          "#{statement.key} needs an explicit choice; none was submitted.",
-          statement_key: statement.key, reason: :missing_answer
-        )
-      end
-
-      return if statement.choices.key?(value.to_s)
-
-      raise AnswerInvalid.new(
-        "#{value.inspect} is not one of the choices offered for #{statement.key} " \
-        "(#{statement.choices.keys.join(", ")}).",
-        statement_key: statement.key, reason: :missing_answer
-      )
-    end
-
-    def truthy?(value)
-      return false if value.nil?
-
-      !%w[0 false off no].include?(value.to_s.downcase) && value.to_s != ""
     end
 
     # --- Idempotency ----------------------------------------------------------
@@ -323,7 +205,9 @@ module Clickwrap
     # the protected action again. A repeat with different answers is a replay
     # attempt, not a retry, and gets a stable failure rather than a second
     # event.
-    def replay(event, answers)
+    def replay(event, answers, manifest)
+      verify_replay_context!(event, manifest)
+
       recorded = event.statements.to_h { |statement| [statement.statement_key, statement.answer] }
       submitted = answers.transform_values { |value| value&.to_s }
       comparable = recorded.transform_values { |value| value&.to_s }
@@ -337,234 +221,123 @@ module Clickwrap
       Receipt.new(event)
     end
 
+    def verify_replay_context!(event, manifest)
+      expected_actor = manifest.registration_flow_id.present? ? event.actor_reference : actor_reference
+      matches = event.policy_revision&.revision_digest == manifest.revision_digest &&
+                event.presentation_manifest_digest == manifest.digest &&
+                event.actor_reference == expected_actor &&
+                event.tenant_key.to_s == tenant_key.to_s &&
+                event.subject_key.to_s == subject_key.to_s &&
+                event.capture_channel == capture_channel &&
+                event.represented_party_reference.to_s == Reference.represented_party(@acting_for).to_s
+
+      return if matches && event.digest_verified?
+
+      raise ReplayRejected,
+            "This idempotency key was already used with a different actor, tenant, subject, " \
+            "policy revision, presentation, or capture channel. Render a new presentation."
+    end
+
     # --- Locking --------------------------------------------------------------
 
     # A one-time authorization is consumed inside the transaction that uses it,
     # so the row is locked before anything else happens. Without this, two
     # concurrent submits could both read an unconsumed authorization and both
     # proceed — which for a withdrawal means two debits.
-    def lock_one_time_statements!
-      return if policy.one_time_statements.empty?
+    def lock_one_time_statements!(manifest)
+      one_time = @frozen_statement_snapshots.values.select { |statement| statement["one_time"] }
+      return if one_time.empty?
 
-      policy.one_time_statements.each do |statement|
-        StatementState
-          .lock
-          .find_by(StatementState.identity_for(
-                     policy_key: policy.key,
-                     statement_key: statement.key,
-                     actor_reference: actor_reference,
-                     tenant_key: tenant_key,
-                     subject_key: subject_key
-                   ))
+      identities = one_time.map do |statement|
+        StatementState.identity_for(
+          policy_key: policy.key,
+          statement_key: statement["key"],
+          actor_reference: actor_reference,
+          tenant_key: tenant_key,
+          subject_key: subject_key,
+          represented_party_reference: Reference.represented_party(@acting_for)
+        )
       end
+
+      identities.sort_by { |identity| identity.fetch(:identity_digest) }.each do |identity|
+        StatementIdentityLock.acquire!(identity.fetch(:identity_digest))
+        verify_one_time_statement_is_available!(StatementState.find_by(identity), manifest)
+      end
+    end
+
+    def verify_one_time_statement_is_available!(state, manifest)
+      return if state.nil? || !state.one_time?
+
+      current_event = state.current_event
+      presentation_is_newer = current_event && manifest.issued_at > current_event.recorded_at_by_server
+
+      # A terminal authorization may be deliberately recreated only from a
+      # presentation rendered after that terminal state existed. The outbox
+      # path has one additional, equally deliberate case: a newer presentation
+      # may supersede an authorization whose provider outcome is still pending.
+      # That is how a host can abandon attempt A and create attempt B without a
+      # late success for A ever consuming B. Distinct presentations rendered
+      # before either write still serialize on the identity lock and the loser
+      # is rejected, so this exception does not reopen the first-capture race.
+      return if presentation_is_newer &&
+                (!state.satisfies? || !@consume_one_time_authorizations)
+
+      raise OneTimeAuthorizationConflict,
+            "This presentation can no longer create a one-time authorization because " \
+            "#{state.statement_key} is already #{state.state} for the same actor, tenant, subject, " \
+            "and represented party. Recheck the protected action and render a new presentation " \
+            "after the current authorization state is known."
     end
 
     # --- Writing --------------------------------------------------------------
 
     def append_event!(manifest, revision, answers, request_evidence)
-      now = Clickwrap.now
-
-      # The identifier is generated here rather than left to the model, because
-      # the request-evidence annex is bound to it and that binding digest has to
-      # be part of the event's canonical body BEFORE the event's own digest is
-      # computed. Writing the binding afterwards would leave every event with
-      # request evidence failing its own verification.
-      event_id = Identifier.generate(now)
-      annex = build_request_evidence(event_id, request_evidence)
-
-      event = Event.new(
-        id: event_id,
-        request_evidence_digest: annex&.binding_digest,
-        request_evidence_digest_algorithm: annex&.binding_digest_algorithm,
-        request_evidence_key_id: annex&.binding_key_id,
-        event_type: "capture",
-        policy_key: policy.key,
-        policy_revision: revision,
-        actor: persisted_actor,
+      built = EventBuilder.new(
+        policy: policy,
+        manifest: manifest,
+        revision: revision,
+        statement_snapshots: @frozen_statement_snapshots,
+        answers: answers,
+        document_versions_by_id: @verified_document_versions_by_id,
+        request_evidence: request_evidence,
+        event_type: @event_type,
+        root_event_id: @root_event_id,
+        predecessor_event_id: @predecessor_event_id,
+        actor: actor,
         actor_reference: actor_reference,
         actor_snapshot: actor_snapshot,
-        represented_party: @acting_for.is_a?(::ActiveRecord::Base) ? @acting_for : nil,
-        tenant_key: tenant_key.presence,
-        subject: subject.is_a?(::ActiveRecord::Base) ? subject : nil,
+        represented_party: @acting_for,
+        authority_decision: @authority_decision,
+        tenant_key: tenant_key,
+        subject: subject,
         subject_key: subject_key,
         subject_fingerprint: subject_fingerprint,
         capture_channel: capture_channel,
-        authentication_method: authentication_context[:method]&.to_s,
         authentication_context: authentication_context,
         attribution_method: attribution_method,
-        recorded_at_by_server: now,
         idempotency_key: idempotency_key_for(manifest),
         http_request_id: http_request_id,
-        presentation: persisted_presentation(manifest),
-        presentation_manifest: manifest.to_h,
-        presentation_manifest_digest: manifest.digest,
-        retention_class_key: policy.retention_class_key,
+        http_route_name: http_route_name,
         reason: @reason,
-        canonical_schema_version: Clickwrap::CANONICAL_SCHEMA_VERSION,
-        gem_version: Clickwrap::VERSION,
-        application_version: Clickwrap.config.resolved_application_version,
-        template_version: Clickwrap.config.resolved_template_version,
-        created_at: now
-      )
+        statement_action_overrides: @statement_action_overrides
+      ).build
 
-      build_statements(event, manifest, answers, now)
-      build_documents(event, manifest)
-      assign_retention(event)
-      assign_chain_position(event)
-
-      save_event_with_idempotency(event, answers)
-      attach_request_evidence(event, annex)
-      record_chain_head(event)
-
-      event
+      save_event_with_idempotency(built.event)
+      attach_request_evidence(built.event, built.request_evidence_annex)
+      built.event
     end
 
     # The unique index on (policy_key, idempotency_key) is the guarantee, not
     # this rescue — but the rescue has to run inside its own savepoint, because
     # PostgreSQL aborts the entire transaction on a unique violation and the
     # caller's domain work is in that transaction too.
-    def save_event_with_idempotency(event, answers)
+    def save_event_with_idempotency(event)
       ::ActiveRecord::Base.transaction(requires_new: true) { event.save! }
     rescue ::ActiveRecord::RecordNotUnique
       existing = find_existing_event(event.idempotency_key)
       raise EventWriteFailed, "The evidence event could not be written." unless existing
 
-      replay(existing, answers)
-      raise ReplayRejected,
-            "Another request recorded this presentation as event #{existing.id} while this one " \
-            "was in flight. The protected action was not run twice."
-    end
-
-    def build_statements(event, manifest, answers, now)
-      policy.statements.each_with_index do |statement, index|
-        fragment = manifest.statement(statement.key) || {}
-        answer = answers[statement.key]
-        answered = statement.choices ? answer.present? : truthy?(answer)
-
-        # An optional control left unselected creates no grant at all. The
-        # receipt can show the option was offered and not taken, but silence is
-        # not an affirmative refusal and this gem will not record it as one.
-        next if statement.optional? && !answered
-
-        event.statements.build(
-          ordinal: index,
-          statement_key: statement.key,
-          kind: statement.kind,
-          action: action_for(statement, answer, answered),
-          assertion_text: fragment["assertion"],
-          assertion_locale: manifest.locale,
-          label_text: fragment["label"],
-          link_labels: Array(fragment["documents"]).to_h { |d| [d["key"], d["label"]] },
-          choices: statement.choices,
-          required: statement.required?,
-          optional: statement.optional?,
-          answer: answer,
-          answered: answered,
-          purpose_key: statement.purpose_key,
-          withdrawal_path: statement.withdrawal_path,
-          valid_from: now,
-          expires_at: statement.expires_after(now),
-          one_time: statement.one_time?,
-          requires: statement.requires,
-          subject_fingerprint: statement.subject_bound? ? subject_fingerprint : nil,
-          created_at: now
-        )
-      end
-    end
-
-    def action_for(statement, answer, answered)
-      return statement.initial_action unless statement.choices && answered
-
-      meaning = statement.choices[answer.to_s]
-
-      case meaning
-      when "grant" then statement.initial_action
-      when "decline" then "declined"
-      else meaning
-      end
-    end
-
-    def build_documents(event, manifest)
-      ordinal = 0
-
-      manifest.statements.each do |statement|
-        Array(statement["documents"]).each do |document|
-          version = DocumentVersion.find_by(id: document["version_id"])
-
-          event.documents.build(
-            statement_key: statement["key"],
-            document_key: document["key"],
-            document_version_id: version&.id,
-            version_label: document["version"],
-            locale: document["locale"],
-            media_type: document["media_type"],
-            content_digest: document["digest"],
-            rendered_content_digest: version&.rendered_content_digest,
-            ordinal: ordinal,
-            created_at: event.recorded_at_by_server
-          )
-
-          ordinal += 1
-        end
-      end
-    end
-
-    def assign_retention(event)
-      return if policy.retention_class_key.nil?
-
-      retention = Clickwrap.retention_class!(policy.retention_class_key)
-      rule = retention.rule_for(:core_event)
-      return if rule.nil?
-
-      if rule.duration?
-        event.retain_core_event_until = event.recorded_at_by_server + rule.duration
-      else
-        event.retention_rule_name = rule.host_event_name.to_s
-      end
-    end
-
-    # Chaining is off unless configured. When it is on, the scope is per tenant
-    # or per policy aggregate, never one global chain: a single chain across
-    # unrelated tenants makes every capture queue behind every other one.
-    def assign_chain_position(event)
-      return unless Clickwrap.config.chain_event_history_with
-
-      previous_digest, sequence = ChainHead.reserve!(chain_scope: chain_scope_for(event))
-
-      event.chain_scope = chain_scope_for(event)
-      event.chain_sequence = sequence
-      event.previous_event_digest = previous_digest
-    end
-
-    # Phase two: the head learns the digest the event was actually written with,
-    # so the next event in this scope links to something real rather than to the
-    # nil the digest had not become yet.
-    def record_chain_head(event)
-      return unless Clickwrap.config.chain_event_history_with
-
-      ChainHead.record!(
-        chain_scope: event.chain_scope,
-        event_id: event.id,
-        event_digest: event.event_digest
-      )
-    end
-
-    # Per tenant and policy, never one global chain. A single chain across
-    # unrelated tenants makes every capture queue behind every other capture and
-    # buys assurance nobody asked for at a cost everybody pays.
-    def chain_scope_for(_event)
-      [tenant_key.presence || "global", policy.key].join("/")
-    end
-
-    # Builds the annex record in memory, so its binding digest can go into the
-    # event's canonical body before that body is digested. Nothing is written
-    # here; the row is saved once the event exists to hang it from.
-    def build_request_evidence(event_id, resolved)
-      return nil if resolved.nil? || !resolved.records_anything?
-
-      RequestEvidence.new(
-        resolved.attributes.merge(event_id: event_id, created_at: Clickwrap.now)
-      )
+      raise IdempotentReplay, existing
     end
 
     def attach_request_evidence(event, annex)
@@ -584,6 +357,51 @@ module Clickwrap
       ).extract
     end
 
+    def verify_represented_party_authority!
+      return if @acting_for.nil?
+
+      unless policy.permits_acting_for_party?(@acting_for)
+        raise AuthorityNotVerified,
+              "Policy #{policy.key} does not permit an actor to act for #{@acting_for.class.name}. " \
+              "Declare the represented-party type and a reviewed server-side authority rule."
+      end
+
+      rule = policy.authority_rule
+      adapter = Clickwrap.config.represented_party_authority_adapter(rule.adapter_name)
+      raw = if adapter
+              adapter.verify(
+                actor: actor,
+                represented_party: @acting_for,
+                authority_rule: rule,
+                tenant: tenant,
+                authentication_context: authentication_context
+              )
+            else
+              Clickwrap.config.verify_actor_can_act_for_represented_party_with.call(
+                actor: actor,
+                represented_party: @acting_for,
+                policy: policy,
+                tenant: tenant,
+                authentication_context: authentication_context
+              )
+            end
+      @authority_decision = AuthorityDecision.from(raw)
+
+      unless @authority_decision.authorized?
+        raise AuthorityNotVerified,
+              "The host authority check did not authorize this actor to act for the represented party."
+      end
+
+      missing = %i[source role verified_at].select do |attribute|
+        @authority_decision.public_send(attribute).blank?
+      end
+      return if missing.empty?
+
+      raise AuthorityNotVerified,
+            "An authorized represented-party action must record #{missing.join(", ")}. Return " \
+            "those facts from `verify_actor_can_act_for_represented_party_with`."
+    end
+
     # --- After the write ------------------------------------------------------
 
     # An exact post-action reference is host-configured, never inferred. A block
@@ -593,6 +411,13 @@ module Clickwrap
     def record_protected_outcome!(event)
       statement = policy.statements.find(&:record_protected_outcome_with)
       return unless statement && subject
+
+      frozen = @frozen_statement_snapshots.fetch(statement.key)
+      unless frozen["protected_outcome_version"] == statement.protected_outcome_version
+        raise PresentationInvalid,
+              "The protected-outcome recorder changed after this presentation was issued. " \
+              "Re-render it against the current policy revision."
+      end
 
       outcome = statement.record_protected_outcome_with.call(subject)
       return if outcome.nil?
@@ -604,44 +429,34 @@ module Clickwrap
       CurrentState.apply!(event)
     end
 
+    def consume_one_time_authorizations!(event)
+      return unless @protected_action && @consume_one_time_authorizations
+      return unless event.statements.any?(&:one_time?)
+
+      Lifecycle.consume_authorization!(event: event, because: "Consumed by the protected action")
+    end
+
     def mark_presentation_accepted!(manifest)
       Presentation.find_by(nonce: manifest.nonce)&.mark_accepted!
     end
 
-    # The persisted presentation row this capture accepted, for the policies
-    # that keep one. Linking it to the event is what makes
-    # `Presentation.where.missing(:events)` mean "nobody ever submitted this":
-    # without the link, a retention run reads the manifest a receipt cites as an
-    # abandoned offer and deletes it. Only looked up for a policy that persists
-    # presentations, because for every other policy there is no row to find.
-    def persisted_presentation(manifest)
-      return nil unless policy.persist_presentations?
-
-      Presentation.find_by(nonce: manifest.nonce)
-    end
-
     def rebind_actor_after_registration!(pending)
       @actor = @prospective_actor
-      return if actor.nil?
+      @actor_reference = nil
+      return if actor.nil? || !actor.persisted?
 
       pending.event.update_columns(
         actor_type: actor.class.name,
         actor_id: actor.id,
-        actor_reference: actor_reference
+        actor_reference: actor_reference,
+        actor_snapshot: actor_snapshot
       )
     end
 
     # --- Derived values -------------------------------------------------------
 
-    def persisted_actor = actor.is_a?(::ActiveRecord::Base) ? actor : nil
-
     def actor_reference
-      @actor_reference ||=
-        if actor
-          Clickwrap.config.identify_actor_with.call(actor)
-        elsif @prospective_actor
-          "pending_registration"
-        end
+      @actor_reference ||= actor ? Reference.actor(actor) : "registration/#{@registration_flow_id}"
     end
 
     def actor_snapshot
@@ -650,25 +465,14 @@ module Clickwrap
       Clickwrap.config.snapshot_actor_with.call(actor) || {}
     end
 
-    def tenant_key
-      return "" if tenant.nil?
-      return tenant.to_s if tenant.is_a?(String) || tenant.is_a?(Symbol)
-      return tenant.to_gid.to_s if tenant.respond_to?(:to_gid)
-
-      "#{tenant.class.name}/#{tenant.id}"
-    end
+    def tenant_key = Reference.tenant(tenant)
 
     def subject_key = StatementState.subject_key_for(subject)
 
     def subject_fingerprint
       return @subject_fingerprint if defined?(@subject_fingerprint)
 
-      statement = policy.statements.find(&:subject_bound?)
-      @subject_fingerprint =
-        if statement && subject
-          value = statement.subject_fingerprint_with.call(subject)
-          value.nil? ? nil : Digest.digest(value.to_s)
-        end
+      @subject_fingerprint = SubjectFingerprint.for(policy, subject)
     end
 
     def authentication_context
@@ -691,8 +495,12 @@ module Clickwrap
       http_request.request_id
     end
 
-    def infer_capture_channel
-      http_request ? "web_browser" : "background_job"
+    def http_route_name
+      return nil unless http_request.respond_to?(:path_parameters)
+
+      controller = http_request.path_parameters[:controller]
+      action = http_request.path_parameters[:action]
+      [controller, action].compact.join("#").presence
     end
   end
 end

@@ -12,7 +12,7 @@ module Clickwrap
              inverse_of: :document,
              dependent: :restrict_with_error
 
-    validates :key, presence: true, uniqueness: { scope: :tenant_key }
+    validates :document_key, presence: true, uniqueness: { scope: :tenant_key }
 
     scope :for_tenant, ->(tenant_key) { where(tenant_key: tenant_key.presence) }
 
@@ -26,7 +26,7 @@ module Clickwrap
     # The ordering is by effective time, then by publication time as a
     # tie-breaker for two versions scheduled for the same instant. Publishing
     # always writes an `effective_at`, so no NULL reaches this comparison and
-    # PostgreSQL and SQLite agree about which document a person was shown.
+    # PostgreSQL and SQLite agree about which document the server offered.
     def current_version(locale: I18n.locale, at: Clickwrap.now)
       versions
         .published
@@ -41,6 +41,6 @@ module Clickwrap
       versions.for_locale(locale).find_by(version_label: label)
     end
 
-    def to_s = key
+    def to_s = document_key
   end
 end

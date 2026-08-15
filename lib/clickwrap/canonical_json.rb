@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "json"
+require_relative "errors"
 
 module Clickwrap
   # Canonical JSON serialization, implementing the JSON Canonicalization Scheme
@@ -197,7 +198,7 @@ module Clickwrap
       def place_decimal_point(digits, position)
         length = digits.length
 
-        if length <= position && position <= 21
+        if position.between?(length, 21)
           digits + ("0" * (position - length))
         elsif position.positive? && position <= 21
           "#{digits[0, position]}.#{digits[position..]}"

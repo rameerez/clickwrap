@@ -7,48 +7,72 @@ require "generators/clickwrap/document_generator"
 require "generators/clickwrap/views_generator"
 require "generators/clickwrap/hardening_generator"
 require "generators/clickwrap/upgrade_generator"
+require "tmpdir"
 
 # The four generators a host reaches for after installing, plus the upgrade one
 # it will reach for later. Each is tested for the thing that would hurt if it
 # regressed rather than for the fact that it wrote a file.
 class PolicyGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::PolicyGenerator
-  destination File.expand_path("../../tmp/generators/policy", __dir__)
+  destination Dir.mktmpdir("clickwrap-generator-policy-")
   setup :prepare_destination
 
   teardown do
     FileUtils.rm_rf(destination_root)
   end
 
-  test "generating a policy creates a documented skeleton and the test that goes with it" do
-    run_generator %w[driver_declaration]
+  test "generating a policy writes one explicit statement that compiles immediately" do
+    run_generator [
+      "generated_declaration", "declare",
+      "--statement-text=I declare that the supplied information is accurate."
+    ]
 
-    assert_file "config/clickwrap/driver_declaration.rb" do |policy|
-      assert_match(/Clickwrap\.policy :driver_declaration do/, policy)
+    assert_file "config/clickwrap/generated_declaration.rb" do |policy|
+      assert_match(/Clickwrap\.policy :generated_declaration do/, policy)
+      assert_match(/^\s*declare :generated_declaration,/, policy)
+      assert_match(/document: nil/, policy)
+      assert_match(/statement: "I declare that the supplied information is accurate\."/, policy)
       assert_match(/retain_with :ordinary_agreement_evidence/, policy)
-
-      # The skeleton is COMMENTED rather than filled in. Which of the six verbs
-      # an act actually is decides its lifecycle, and a generator that guessed
-      # `agree_to` for everything would teach the exact mistake this gem exists
-      # to fix — so all six are explained and none is chosen.
-      %w[agree_to acknowledge consent_to declare attest authorize].each do |verb|
-        assert_match(/#\s+#{verb}\b/, policy, "the skeleton should explain #{verb} without choosing it")
-      end
-      refute_match(/^\s*agree_to :/, policy, "no verb may be uncommented for the author")
     end
+
+    load File.join(destination_root, "config/clickwrap/generated_declaration.rb")
+    generated = Clickwrap.policy!(:generated_declaration)
+    assert_equal ["generated_declaration"], generated.statements.map(&:key)
+    assert_equal ["declaration"], generated.statements.map(&:kind)
 
     # A policy is executable meaning, so it ships with a test the same way a
     # model does.
-    assert_file "test/clickwrap/driver_declaration_policy_test.rb" do |policy_test|
-      assert_match(/class DriverDeclarationPolicyTest < ActiveSupport::TestCase/, policy_test)
+    assert_file "test/clickwrap/generated_declaration_policy_test.rb" do |policy_test|
+      assert_match(/class GeneratedDeclarationPolicyTest < ActiveSupport::TestCase/, policy_test)
       assert_match(/include Clickwrap::TestHelpers/, policy_test)
       assert_match(/it refuses an incomplete submission/, policy_test)
       assert_match(/a failed evidence write rolls the protected action back/, policy_test)
     end
   end
 
+  test "the generator refuses to guess the verb, statement copy, or consent withdrawal path" do
+    missing_verb = capture(:stderr) do
+      run_generator ["missing_verb", "--statement-text=I declare this."]
+    end
+    assert_match(/No value provided for required arguments? ['`]verb['`]/, missing_verb)
+    assert_no_file "config/clickwrap/missing_verb.rb"
+
+    missing_copy = capture(:stderr) { run_generator %w[missing_copy declare] }
+    assert_match(/required options? ['`].*statement[_-]text/i, missing_copy)
+    assert_no_file "config/clickwrap/missing_copy.rb"
+
+    missing_withdrawal = capture(:stderr) do
+      run_generator ["marketing", "consent_to", "--statement-text=I want product updates."]
+    end
+    assert_match(/needs --withdrawal-path/, missing_withdrawal)
+    assert_no_file "config/clickwrap/marketing.rb"
+  end
+
   test "a dashed or namespaced policy name becomes one underscored policy key" do
-    run_generator %w[Billing/manual-transfer]
+    run_generator [
+      "Billing/manual-transfer", "authorize",
+      "--statement-text=I authorize this manual transfer."
+    ]
 
     assert_file "config/clickwrap/billing_manual_transfer.rb", /Clickwrap\.policy :billing_manual_transfer do/
     assert_file "test/clickwrap/billing_manual_transfer_policy_test.rb",
@@ -58,7 +82,7 @@ end
 
 class DocumentGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::DocumentGenerator
-  destination File.expand_path("../../tmp/generators/document", __dir__)
+  destination Dir.mktmpdir("clickwrap-generator-document-")
   setup :prepare_destination
 
   teardown do
@@ -89,11 +113,11 @@ class DocumentGeneratorTest < Rails::Generators::TestCase
 
     assert_file "config/clickwrap.rb" do |declarations|
       # The old declaration still describes the bytes everyone who has already
-      # agreed was actually shown. Nothing about their evidence changes because
+      # agreed was bound into the accepted offer. Nothing about their evidence changes because
       # a new version was written.
       assert_match(/version: "2026-01-01",/, declarations)
       assert_match(/version: "2026-08-15",/, declarations)
-      assert_equal 2, declarations.scan(/Clickwrap\.document :terms,/).length
+      assert_equal 2, declarations.scan("Clickwrap.document :terms,").length
     end
   end
 
@@ -107,7 +131,7 @@ end
 
 class ViewsGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::ViewsGenerator
-  destination File.expand_path("../../tmp/generators/views", __dir__)
+  destination Dir.mktmpdir("clickwrap-generator-views-")
   setup :prepare_destination
 
   teardown do
@@ -147,7 +171,7 @@ end
 
 class HardeningGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::HardeningGenerator
-  destination File.expand_path("../../tmp/generators/hardening", __dir__)
+  destination Dir.mktmpdir("clickwrap-generator-hardening-")
   setup :prepare_destination
 
   teardown do
@@ -171,17 +195,24 @@ class HardeningGeneratorTest < Rails::Generators::TestCase
       # Reversible in the literal sense: `db:rollback` drops what it created and
       # touches no data. A one-way hardening migration would be a trap.
       assert_match(/def down/, migration)
-      assert_match(/DROP TRIGGER IF EXISTS clickwrap_events_reject_update ON clickwrap_events;/, migration)
-      assert_match(/MUTABLE_EVENT_COLUMNS = %w\[ core_event_disposed_at on_legal_hold request_evidence_id \]/,
-                   migration)
+      assert_match(/DROP TRIGGER IF EXISTS clickwrap_events_guard_update ON clickwrap_events;/, migration)
+      assert_match(/EVENT_WRITE_SETS = \{/, migration)
+      assert_match(/"pointer_nullification" => %w\[/, migration)
+      assert_match(/"disposition" => %w\[/, migration)
+      namespace = Module.new
+      namespace.module_eval(migration, "generated_clickwrap_database_hardening.rb", 1)
+      generated_class = namespace.const_get(:ClickwrapDatabaseHardening)
+      assert_equal Clickwrap::Event::DATABASE_HARDENING_WRITE_SETS,
+                   generated_class::EVENT_WRITE_SETS
+      assert_match(/Evidence children may be deleted only by a documented core disposition/, migration)
 
       # The optional personal annex stays deletable on its retention schedule —
       # that is the entire reason it is a separate table.
-      assert_match(/WHAT IS DELIBERATELY NOT PROTECTED/, migration)
+      assert_match(/Optional personal request-evidence annex values remain separately disposable/, migration)
       assert_match(/clickwrap_request_evidence/, migration)
 
       # The claim is bounded and stated as such, in the file itself.
-      assert_match(/it does not make a row impossible to change/i, migration)
+      assert_match(/does not make evidence impossible to alter/i, migration)
     end
   end
 
@@ -232,7 +263,7 @@ end
 
 class UpgradeGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::UpgradeGenerator
-  destination File.expand_path("../../tmp/generators/upgrade", __dir__)
+  destination Dir.mktmpdir("clickwrap-generator-upgrade-")
   setup :prepare_destination
 
   teardown do

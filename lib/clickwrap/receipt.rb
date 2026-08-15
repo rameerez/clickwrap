@@ -3,7 +3,7 @@
 require "json"
 
 module Clickwrap
-  # The answer to "show me exactly what happened."
+  # The answer to "show me exactly what the application recorded."
   #
   # One canonical JSON body per event, plus a human-readable projection of the
   # same facts. The canonical form is what gets digested and independently
@@ -55,23 +55,59 @@ module Clickwrap
       # makes an operator's intent unreviewable.
       def export(receipt, requested_by: nil, because: nil,
                  include_ip_address: false, include_browser_user_agent: false,
-                 include_ip_geolocation: false, channel: "export")
+                 include_ip_geolocation: false, access_channel: "export")
         receipt = find(receipt) if receipt.is_a?(String)
         requested = { ip_address: include_ip_address,
                       browser_user_agent: include_browser_user_agent,
                       ip_geolocation: include_ip_geolocation }
 
         authorize_export!(receipt, requested, requested_by, because)
+        # A redacted receipt contains no annex value and therefore performs no
+        # privileged read. It needs neither an access row nor a transaction of
+        # its own; making ordinary exports depend on commit context would make
+        # harmless rendering fail inside otherwise unrelated host work.
+        return receipt.to_h unless requested.value?(true)
 
-        ReceiptAccess.record!(
-          event: receipt.event,
-          requested_by: requested_by,
-          because: because,
-          included_fields: requested.transform_keys(&:to_s),
-          channel: channel
-        )
+        refuse_export_inside_an_outer_transaction!
 
-        receipt.to_h(reveal: requested.select { |_, wanted| wanted }.keys)
+        exported = nil
+        Event.transaction(requires_new: true) do
+          event = Event.lock.find(receipt.event.id)
+          current_receipt = new(event)
+          included = requested.transform_keys(&:to_s)
+          requested_by_reference = Reference.actor(requested_by)
+
+          ReceiptAccess.record!(
+            event: event,
+            requested_by: requested_by,
+            because: because,
+            included_fields: included,
+            access_channel: access_channel
+          )
+
+          Lifecycle.append_lifecycle_event!(
+            event: event,
+            event_type: "receipt_access",
+            reason: because.presence || "Exported a redacted receipt",
+            actor: requested_by,
+            extra: {
+              protected_outcome: {
+                "receipt_access" => {
+                  "requested_by_reference" => requested_by_reference,
+                  "included_fields" => included,
+                  "access_channel" => access_channel.to_s
+                }.compact
+              }
+            }
+          )
+
+          exported = current_receipt.send(
+            :to_h_with_revealed_request_evidence,
+            requested.select { |_, wanted| wanted }.keys
+          )
+        end
+
+        exported
       end
 
       # Verifies a receipt with no host application, no database, and no policy
@@ -100,6 +136,15 @@ module Clickwrap
               "The host's authorize_unredacted_request_evidence_access_with callback declined " \
               "this request for #{requested.select { |_, w| w }.keys.join(", ")}."
       end
+
+      def refuse_export_inside_an_outer_transaction!
+        return unless ::ActiveRecord::Base.connection.transaction_open?
+
+        raise AccessNotAuthorized,
+              "Receipt export cannot run inside an outer database transaction. Clickwrap records " \
+              "the access event before returning any export; call it after the surrounding " \
+              "transaction commits so the audit record cannot later roll back."
+      end
     end
 
     # --- Identity -------------------------------------------------------------
@@ -120,14 +165,12 @@ module Clickwrap
 
     # --- Serialization --------------------------------------------------------
 
-    # The canonical, digestible body. `reveal` names which sensitive categories
-    # the caller is authorized to see; by default none are, and each one is
-    # reported by state rather than by omission.
     # The canonical, digestible body.
     #
-    # `integrity.receipt_digest` covers this exact body with the `integrity` key
-    # removed — the digest cannot cover itself, and the exclusion has to be one
-    # a verifier in another language can reproduce without guessing. It is a
+    # `integrity.receipt_digest` covers this exact body with only the
+    # self-referential `integrity.receipt_digest` field removed — the digest
+    # cannot cover itself, and the exclusion has to be one a verifier in another
+    # language can reproduce without guessing. It is a
     # different value from `integrity.event_digest`, which the application
     # computed over the event's own canonical body when the event was written.
     # Both are reported, because they answer different questions: one says this
@@ -136,22 +179,26 @@ module Clickwrap
     # An export that reveals request evidence is a different document from a
     # redacted one, so it carries a different receipt digest. That is correct:
     # each file verifies as the file it actually is.
-    def to_h(reveal: [])
-      body = build_body(reveal: reveal)
-
-      body.merge(
-        "integrity" => body["integrity"].merge(
-          "receipt_digest" => Digest.digest_canonical(
-            body.except("integrity"),
-            algorithm: Clickwrap.config.digest_canonical_receipts_with.to_s
-          )
-        )
-      )
+    def to_h
+      build_receipt_body(revealed_request_evidence: [])
     end
 
-    def to_canonical_json(reveal: [])
-      CanonicalJson.generate(to_h(reveal: reveal))
+    def to_h_with_revealed_request_evidence(categories)
+      build_receipt_body(revealed_request_evidence: Array(categories).map(&:to_sym))
     end
+    private :to_h_with_revealed_request_evidence
+
+    def build_receipt_body(revealed_request_evidence:)
+      body = build_body(reveal: revealed_request_evidence)
+      algorithm = event.digest_algorithm.presence || "sha256"
+      covered = body.deep_dup
+
+      body["integrity"]["receipt_digest"] = Digest.digest_canonical(covered, algorithm: algorithm)
+      body
+    end
+    private :build_receipt_body
+
+    def to_canonical_json = CanonicalJson.generate(to_h)
 
     def to_json(*) = to_canonical_json
 
@@ -159,15 +206,14 @@ module Clickwrap
 
     # The human-readable projection. Same facts, rendered — never a different
     # set of facts, and never a stronger claim than the canonical body makes.
-    def to_html(reveal: [], view_context: nil)
-      ReceiptHtml.new(self, reveal: reveal, view_context: view_context).render
-    end
+    def to_html(view_context: nil) = ReceiptHtml.new(self, view_context: view_context).render
 
     def build_body(reveal:)
       {
         "schema" => SCHEMA,
         "event_id" => event.id,
         "event_type" => event.event_type,
+        "event" => event.canonical_body,
         "policy" => policy_fragment,
         "actor" => actor_fragment,
         "acts" => statements.map(&:canonical_fragment),
@@ -206,22 +252,24 @@ module Clickwrap
 
     # --- Legal holds ----------------------------------------------------------
 
-    def place_on_legal_hold!(because:, placed_by:, review_on:)
+    def place_on_legal_hold!(because:, placed_by:, review_at:)
       hold = nil
 
       ::ActiveRecord::Base.transaction do
+        locked_event = Event.lock.find(event.id)
         hold = LegalHold.create!(
-          scope: "event",
+          hold_scope: "event",
           event_id: event.id,
           reason: because,
           placed_by_reference: reference_for(placed_by),
           placed_at: Clickwrap.now,
-          review_on: review_on,
+          review_at: review_at,
           created_at: Clickwrap.now
         )
 
-        event.set_legal_hold!(true)
-        Lifecycle.append_lifecycle_event!(event: event, event_type: "legal_hold_placed", reason: because)
+        locked_event.set_legal_hold!(true)
+        Lifecycle.append_lifecycle_event!(event: locked_event, event_type: "legal_hold_placed",
+                                          reason: because, actor: placed_by)
       end
 
       hold
@@ -229,12 +277,17 @@ module Clickwrap
 
     def release_legal_hold!(because:, released_by:)
       ::ActiveRecord::Base.transaction do
-        LegalHold.for_event(event.id).in_effect.find_each do |hold|
-          hold.release!(because: because, released_by: reference_for(released_by))
+        locked_event = Event.lock.find(event.id)
+        holds = LegalHold.lock.for_event(event.id).in_effect.to_a
+        return nil if holds.empty?
+
+        holds.each do |hold|
+          hold.release!(because: because, released_by: released_by)
         end
 
-        event.set_legal_hold!(false)
-        Lifecycle.append_lifecycle_event!(event: event, event_type: "legal_hold_released", reason: because)
+        locked_event.set_legal_hold!(LegalHold.for_event(event.id).in_effect.exists?)
+        Lifecycle.append_lifecycle_event!(event: locked_event, event_type: "legal_hold_released",
+                                          reason: because, actor: released_by)
       end
     end
 
@@ -256,7 +309,6 @@ module Clickwrap
 
     def actor_fragment
       {
-        "type" => event.actor_type,
         "reference" => event.actor_reference,
         "attribution" => {
           "method" => event.attribution_method,
@@ -271,14 +323,15 @@ module Clickwrap
     end
 
     def acting_for_fragment
-      return nil if event.represented_party_type.blank?
+      return nil if event.represented_party_reference.blank?
 
       {
         "type" => event.represented_party_type,
-        "reference" => "#{event.represented_party_type}/#{event.represented_party_id}",
+        "reference" => event.represented_party_reference,
         "authority_source" => event.authority_source,
         "authority_role" => event.authority_role,
-        "authority_verified_at" => self.class.format_time(event.authority_verified_at)
+        "authority_verified_at" => self.class.format_time(event.authority_verified_at),
+        "authority_details" => event.authority_details.presence
       }.compact
     end
 
@@ -319,7 +372,13 @@ module Clickwrap
             "event_id" => successor.id,
             "event_type" => successor.event_type,
             "recorded_at_by_server" => self.class.format_time(successor.recorded_at_by_server),
-            "reason" => successor.reason
+            "reason" => successor.reason,
+            # A lifecycle summary without the successor's independently
+            # digestible body could be rewritten and covered only by the
+            # self-contained receipt digest. Embedding both lets the standalone
+            # verifier re-derive every event that changed this receipt's state.
+            "event" => successor.canonical_body,
+            "event_digest" => successor.event_digest
           }.compact
         end
       }.compact
@@ -450,15 +509,27 @@ module Clickwrap
         "previous_event_digest" => event.previous_event_digest,
         "chain_scope" => event.chain_scope,
         "chain_sequence" => event.chain_sequence,
-        "request_evidence_digest" => event.request_evidence_digest,
+        "request_evidence_category_binding_digests" =>
+          event.request_evidence_category_binding_digests.presence,
         "request_evidence_digest_algorithm" => event.request_evidence_digest_algorithm,
+        "request_evidence_key_id" => event.request_evidence_key_id,
+        "request_evidence_binding_status" => event.request_evidence_binding_status.to_s,
+        "attestations" => event.integrity_attestations.map(&:canonical_fragment).presence,
         "tier" => integrity_tier,
         "detects" => integrity_claim
       }.compact
     end
 
     def integrity_tier
-      return "independent_anchoring" if Clickwrap.config.anchor_event_history_with
+      verified = event.integrity_attestations.select { |attestation| attestation.verified_for?(event) }
+      return "third_party_timestamp" if verified.any? do |attestation|
+        attestation.kind == "third_party_timestamp" &&
+        attestation.adapter_capabilities.to_h["independently_verifiable"] == true
+      end
+      return "external_event_anchoring" if verified.any? do |attestation|
+        attestation.kind == "event_anchor" &&
+        attestation.adapter_capabilities.to_h["publishes_outside_primary_database"] == true
+      end
       return "chained_history" if event.chain_scope.present?
 
       "baseline"
@@ -466,16 +537,21 @@ module Clickwrap
 
     def integrity_claim
       case integrity_tier
-      when "independent_anchoring"
-        "Event digests are chained and their heads are recorded outside the primary database, " \
-          "which improves evidence against a rewrite by a privileged database actor."
+      when "third_party_timestamp"
+        "A configured timestamp provider returned a token over this exact event digest, and the " \
+        "configured adapter recorded a successful verification. The provider result, status, " \
+        "and capabilities are preserved so a reader can evaluate that provider's own claim."
+      when "external_event_anchoring"
+        "A configured adapter reported publishing this exact event chain position outside the " \
+        "primary database, and its verifier accepted the stored publication result. This " \
+        "improves detection only while that external publication remains available and trustworthy."
       when "chained_history"
         "Event digests are chained, which makes a rewrite of history detectable for as long as " \
-          "the chain head remains trustworthy."
+        "the chain head remains trustworthy."
       else
         "The recorded digest detects accidental or ordinary modification of the bytes it covers. " \
-          "It does not establish who produced them, when, or that a party controlling both the " \
-          "application and the database could not have written both the record and the digest."
+        "It does not establish who produced them, when, or that a party controlling both the " \
+        "application and the database could not have written both the record and the digest."
       end
     end
 
@@ -490,17 +566,26 @@ module Clickwrap
     end
 
     def verifier_instructions
-      "Canonicalize this object with RFC 8785 (JSON Canonicalization Scheme) and compare the " \
-        "result against integrity.event_digest. Verify each documents[].digest against the " \
-        "corresponding file in the bundle. Run `clickwrap verify receipt.json --documents ./dir` " \
-        "to do both without this application's source code."
+      receipt_check =
+        "Remove only integrity.receipt_digest, canonicalize the remaining object with RFC 8785 " \
+        "(JSON Canonicalization Scheme), and compare it with integrity.receipt_digest."
+
+      event_check = if event.disposed?
+                      "The original event payload was disposed of, so its event digest cannot be " \
+                        "re-derived; verify the retained tombstone and the digest-bound disposition " \
+                        "successor instead."
+                    else
+                      "Canonicalize event and compare it with integrity.event_digest."
+                    end
+
+      "#{receipt_check} #{event_check} Verify each documents[].source_digest and " \
+        "documents[].rendered_digest against the corresponding source and rendered files in the " \
+        "bundle. Run `clickwrap verify receipt.json --documents ./dir` to perform these checks " \
+        "without the host application."
     end
 
     def reference_for(actor)
-      return nil if actor.nil?
-      return actor if actor.is_a?(String)
-
-      Clickwrap.config.identify_actor_with.call(actor)
+      Reference.actor(actor)
     end
   end
 end

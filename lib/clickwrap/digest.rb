@@ -29,6 +29,11 @@ module Clickwrap
     }.freeze
 
     DEFAULT_ALGORITHM = "sha256"
+    HEX_LENGTH_BY_ALGORITHM = {
+      "sha256" => 64,
+      "sha384" => 96,
+      "sha512" => 128
+    }.freeze
 
     # Digests are written as "<algorithm>:<lowercase hex>" everywhere they
     # appear, so an auditor never has to guess which function produced a bare
@@ -80,6 +85,18 @@ module Clickwrap
 
       def supported?(algorithm)
         SUPPORTED_ALGORITHMS.key?(algorithm.to_s)
+      end
+
+      # Whether a stored digest has a supported algorithm prefix and the exact
+      # hexadecimal length that algorithm emits. This validates provenance
+      # identifiers whose source bytes are intentionally unavailable here; it
+      # does not claim the digest matches those unavailable bytes.
+      def well_formed?(prefixed)
+        match = PREFIXED_PATTERN.match(prefixed.to_s)
+        return false unless match
+
+        expected_length = HEX_LENGTH_BY_ALGORITHM[match[:algorithm]]
+        !expected_length.nil? && match[:value].length == expected_length
       end
 
       # Verifies that `bytes` still hash to `expected`, which must be a

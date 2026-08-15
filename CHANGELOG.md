@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 First implemented release. `clickwrap` turns terms acceptance, privacy notice
 acknowledgment, consent, factual declarations, operator attestations, and
 one-time authorizations into one Rails primitive: immutable versioned
-documents, server-owned policies, signed presentation manifests, append-only
-evidence events, and canonical receipts that can be verified without the
+documents, server-owned policies, signed presentation manifests, append-oriented
+evidence events with fixed named disposition transitions, and canonical receipts that can be checked without the
 application that wrote them. Required evidence and the protected database
 action commit in the same transaction, so an account, payout, or handoff cannot
 succeed without the evidence that authorized it. Request evidence — IP address,
@@ -39,7 +39,7 @@ validity, capacity, authority, and retention periods.
   would have to pretend the original statement was false. The taxonomy is
   product design, not statutory vocabulary; the host picks the kind.
 - **Signed presentation manifests.** Every rendered policy carries a signed,
-  short-lived manifest of exactly what the server presented: policy key and
+  short-lived manifest of exactly what the server generated and offered: policy key and
   revision, document versions and digests, assertion and link text, choices,
   submit-button text, and locale. Submission is validated against that manifest
   and rechecked server-side, so render-to-submit substitution — a different
@@ -62,8 +62,10 @@ validity, capacity, authority, and retention periods.
   get superseded without rewriting what was originally stated; one-time
   authorizations are locked and consumed inside the same transaction as the
   action they authorize, so a stale token, a changed subject, a wrong ordering,
-  or a concurrent replay cannot reuse one. Every transition is an append-only
-  event with its own predecessor link — nothing is edited in place.
+  or a concurrent replay cannot reuse one. Every ordinary lifecycle transition
+  appends an event with its own predecessor link; reviewed retention uses the
+  separately named, fixed disposition transition rather than masquerading as an
+  ordinary append.
 - **Canonical receipts and a standalone verifier.** Receipts use versioned
   schemas serialized with the [JSON Canonicalization Scheme (RFC 8785)](https://www.rfc-editor.org/rfc/rfc8785)
   plus a published Clickwrap profile for UTC timestamps, decimals, identifiers,
@@ -91,7 +93,8 @@ validity, capacity, authority, and retention periods.
   rechecks before touching anything, so a newly placed hold or a changed policy
   stops disposition instead of deleting more than the operator reviewed.
   `place_on_legal_hold!` / `release_legal_hold!` require a reason, an owner, and
-  a review date, and are themselves append-only evidence. Destructive methods
+  a review date; placing and releasing a hold append corresponding evidence
+  events while the hold row remains an explicit current-state record. Destructive methods
   name exactly what they remove (`delete_recorded_ip_address!`,
   `delete_recorded_browser_user_agent!`, `delete_recorded_ip_geolocation!`) and
   append a disposition event rather than rewriting history. Clickwrap does not

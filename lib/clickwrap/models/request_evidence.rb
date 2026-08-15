@@ -5,7 +5,7 @@ module Clickwrap
   # provider-estimated IP geolocation.
   #
   # None of it is recorded unless a policy names the field. It lives in its own
-  # table, apart from the immutable event, for one specific reason: personal
+  # table, apart from the core event payload, for one specific reason: personal
   # request evidence needs its own deletion schedule, and welding it into the
   # event would force a choice between ignoring a lawful deletion request and
   # destroying the historical record of an agreement. Here the annex can go away
@@ -28,11 +28,69 @@ module Clickwrap
 
     CATEGORIES = %i[ip_address browser_user_agent ip_geolocation].freeze
 
+    IP_GEOLOCATION_VALUE_COLUMNS = %w[
+      ip_geolocation_country_code
+      ip_geolocation_country_name
+      ip_geolocation_region_name
+      ip_geolocation_region_code
+      ip_geolocation_city_name
+      ip_geolocation_postal_code
+      ip_geolocation_latitude
+      ip_geolocation_longitude
+      ip_geolocation_timezone
+      ip_geolocation_continent_code
+      ip_geolocation_metro_code
+      ip_geolocation_accuracy_radius_in_kilometers
+    ].freeze
+
+    VALUE_COLUMNS_BY_CATEGORY = {
+      ip_address: %w[ip_address_ciphertext].freeze,
+      browser_user_agent: %w[browser_user_agent_ciphertext].freeze,
+      ip_geolocation: IP_GEOLOCATION_VALUE_COLUMNS
+    }.freeze
+
+    # Every category gets its own HMAC. A single whole-annex HMAC cannot be
+    # recomputed after one category is lawfully deleted; treating that expected
+    # mismatch as acceptable would also stop us detecting a later edit to a
+    # category that was *not* deleted. Independent bindings let one category be
+    # disposed of while every retained category keeps verifying.
+    COMMON_BINDING_COLUMNS = %w[event_id authorized_fields created_at].freeze
+    BINDING_COLUMNS_BY_CATEGORY = {
+      ip_address: %w[
+        ip_address_ciphertext ip_address_reader_name trusted_proxy_configuration_digest
+        ip_address_recorded_at ip_address_delete_after ip_address_retain_until_rule
+        ip_address_deleted_at ip_address_unavailable_reason
+      ],
+      browser_user_agent: %w[
+        browser_user_agent_ciphertext browser_user_agent_was_client_supplied
+        browser_user_agent_recorded_at browser_user_agent_delete_after
+        browser_user_agent_retain_until_rule browser_user_agent_deleted_at
+        browser_user_agent_unavailable_reason
+      ],
+      ip_geolocation: %w[
+        ip_geolocation_country_code ip_geolocation_country_name
+        ip_geolocation_region_name ip_geolocation_region_code ip_geolocation_city_name
+        ip_geolocation_postal_code ip_geolocation_latitude ip_geolocation_longitude
+        ip_geolocation_timezone ip_geolocation_continent_code ip_geolocation_metro_code
+        ip_geolocation_provider_name ip_geolocation_provider_source
+        ip_geolocation_database_version ip_geolocation_database_sha256
+        ip_geolocation_accuracy_radius_in_kilometers
+        ip_geolocation_accuracy_radius_confidence_percentage ip_geolocation_was_estimated
+        ip_geolocation_source_was_verified_by_host ip_geolocation_resolved_at
+        ip_geolocation_unavailable_reason ip_geolocation_recorded_at
+        ip_geolocation_delete_after ip_geolocation_retain_until_rule
+        ip_geolocation_deleted_at
+      ]
+    }.transform_values(&:freeze).freeze
+    BINDING_COLUMNS = (COMMON_BINDING_COLUMNS + BINDING_COLUMNS_BY_CATEGORY.values.flatten).uniq.freeze
+
     belongs_to :event, class_name: "Clickwrap::Event", inverse_of: :request_evidence
 
     validates :event_id, presence: true, uniqueness: true
 
     before_save :ensure_encryption_is_possible
+    before_update :refuse_ordinary_update
+    before_destroy :refuse_destroy, prepend: true
 
     # Application-layer encryption, on by default.
     #
@@ -114,17 +172,17 @@ module Clickwrap
 
     scope :with_ip_address_due, lambda { |at = Clickwrap.now|
       where(ip_address_deleted_at: nil).where.not(ip_address_delete_after: nil)
-                                       .where(ip_address_delete_after: ...at)
+                                       .where(ip_address_delete_after: ..at)
     }
 
     scope :with_browser_user_agent_due, lambda { |at = Clickwrap.now|
       where(browser_user_agent_deleted_at: nil).where.not(browser_user_agent_delete_after: nil)
-                                               .where(browser_user_agent_delete_after: ...at)
+                                               .where(browser_user_agent_delete_after: ..at)
     }
 
     scope :with_ip_geolocation_due, lambda { |at = Clickwrap.now|
       where(ip_geolocation_deleted_at: nil).where.not(ip_geolocation_delete_after: nil)
-                                           .where(ip_geolocation_delete_after: ...at)
+                                           .where(ip_geolocation_delete_after: ..at)
     }
 
     # --- What was actually recorded ------------------------------------------
@@ -201,10 +259,15 @@ module Clickwrap
     # Even keyed, the result is described as a retained linkable digest. It is
     # not automatically anonymous, and a host's privacy analysis should treat it
     # as pseudonymous data that outlives the value it covers.
-    def binding_digest
+    def category_binding_digests
+      CATEGORIES.to_h { |category| [category.to_s, binding_digest_for(category)] }
+    end
+
+    def binding_digest_for(category)
+      key_id = binding_key_id
       Digest.keyed_digest(
-        CanonicalJson.generate(binding_body),
-        key: binding_key,
+        CanonicalJson.generate(binding_body_for(category)),
+        key: binding_key_for!(key_id),
         algorithm: Clickwrap.config.digest_canonical_receipts_with.to_s
       )
     end
@@ -212,48 +275,91 @@ module Clickwrap
     def binding_digest_algorithm = "hmac-#{Clickwrap.config.digest_canonical_receipts_with}"
 
     def binding_key_id
-      key = binding_key
-      key ? Digest.hex(key)[0, 16] : nil
+      Clickwrap.config.current_request_evidence_binding_key_id.presence ||
+        raise(ConfigurationError,
+              "Clickwrap cannot name the request-evidence binding key. Configure " \
+              "`current_request_evidence_binding_key_id` and " \
+              "`find_request_evidence_binding_key_with` before recording request evidence.")
+    end
+
+    def category_binding_digest_verified?(category:, digest:, algorithm:, key_id:)
+      digest_algorithm = algorithm.to_s.delete_prefix("hmac-")
+      return false unless Digest.supported?(digest_algorithm)
+
+      key = Clickwrap.config.request_evidence_binding_key_for(key_id)
+      return false if key.nil?
+
+      computed = Digest.keyed_digest(
+        CanonicalJson.generate(binding_body_for(category)),
+        key: key,
+        algorithm: digest_algorithm
+      )
+      Digest.secure_compare?(computed, digest)
+    end
+
+    def binding_key_available?(key_id)
+      Clickwrap.config.request_evidence_binding_key_for(key_id).present?
+    end
+
+    def any_category_disposed?
+      CATEGORIES.any? { |category| deleted_for?(category) }
+    end
+
+    # The only supported mutation. The caller has already locked the root event
+    # and rechecked legal holds; this method limits the write to the one named
+    # category's value columns plus its deletion timestamp.
+    def dispose_category!(category, at: Clickwrap.now)
+      normalized = category.to_s.to_sym
+      columns = VALUE_COLUMNS_BY_CATEGORY.fetch(normalized) do
+        raise ArgumentError, "Unknown request-evidence category #{category.inspect}"
+      end
+
+      update_columns(columns.to_h { |column| [column, nil] }
+                             .merge("#{normalized}_deleted_at" => at))
     end
 
     def to_s = "request evidence for event #{event_id}"
 
     private
 
-    def binding_body
-      {
-        "event_id" => event_id,
-        "authorized_fields" => authorized_fields.to_h,
-        "ip_address" => ip_address_ciphertext.presence,
-        "browser_user_agent" => browser_user_agent_ciphertext.presence,
-        "ip_geolocation" => ip_geolocation_body.presence
-      }.compact
-    end
-
-    def ip_geolocation_body
-      {
-        "country_code" => ip_geolocation_country_code,
-        "region_code" => ip_geolocation_region_code,
-        "city_name" => ip_geolocation_city_name,
-        "postal_code" => ip_geolocation_postal_code,
-        "latitude" => ip_geolocation_latitude&.to_s,
-        "longitude" => ip_geolocation_longitude&.to_s,
-        "timezone" => ip_geolocation_timezone,
-        "continent_code" => ip_geolocation_continent_code,
-        "metro_code" => ip_geolocation_metro_code,
-        "provider_name" => ip_geolocation_provider_name,
-        "provider_source" => ip_geolocation_provider_source,
-        "database_version" => ip_geolocation_database_version,
-        "accuracy_radius_in_kilometers" => ip_geolocation_accuracy_radius_in_kilometers
-      }.compact
-    end
-
-    def binding_key
-      if defined?(::Rails) && ::Rails.application&.key_generator
-        ::Rails.application.key_generator.generate_key("clickwrap/request-evidence-binding", 32)
-      else
-        ENV.fetch("CLICKWRAP_REQUEST_EVIDENCE_BINDING_KEY", nil)
+    def binding_body_for(category)
+      normalized = category.to_s.to_sym
+      columns = COMMON_BINDING_COLUMNS + BINDING_COLUMNS_BY_CATEGORY.fetch(normalized) do
+        raise ArgumentError, "Unknown request-evidence category #{category.inspect}"
       end
+
+      columns.to_h do |column|
+        [column, canonical_binding_value(public_send(column))]
+      end
+    end
+
+    def canonical_binding_value(value)
+      case value
+      when Time, ActiveSupport::TimeWithZone then Receipt.format_time(value)
+      when Hash then value.deep_stringify_keys
+      else value
+      end
+    end
+
+    def binding_key_for!(key_id)
+      Clickwrap.config.request_evidence_binding_key_for(key_id) ||
+        raise(ConfigurationError,
+              "find_request_evidence_binding_key_with returned no key for the current " \
+              "request-evidence binding key ID #{key_id.inspect}.")
+    end
+
+    def refuse_ordinary_update
+      raise ImmutableEvidenceError,
+            "Request evidence is immutable after capture. Delete one category only through " \
+            "Clickwrap.delete_recorded_ip_address!, " \
+            "Clickwrap.delete_recorded_browser_user_agent!, or " \
+            "Clickwrap.delete_recorded_ip_geolocation!, which records the disposition."
+    end
+
+    def refuse_destroy
+      raise ImmutableEvidenceError,
+            "A request-evidence annex cannot be destroyed directly. Dispose each authorized " \
+            "category through Clickwrap's named retention methods so the deletion is recorded."
     end
   end
 end

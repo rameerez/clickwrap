@@ -43,6 +43,7 @@ require "clickwrap/digest"
 module ClickwrapCommandLine
   SUCCESS = 0
   FAILURE = 1
+  INCOMPLETE = 2
 
   # Three states, not two. A check that could not run — a document whose bytes
   # nobody supplied — is neither a pass nor a failure, and collapsing it into
@@ -58,14 +59,16 @@ module ClickwrapCommandLine
       clickwrap --version
 
     Options:
-      --documents DIR   Folder holding the document files the receipt cites. Each file is
-                        matched to a document by key, version, and locale, and its bytes are
-                        hashed against the digest recorded when the receipt was written.
+      --documents DIR   Folder holding BOTH artifacts for every cited document. Name them
+                        KEY-VERSION-LOCALE.source.EXT and
+                        KEY-VERSION-LOCALE.rendered.EXT. The source and the exact rendered
+                        representation are checked against their separate recorded digests.
       --json            Print the result as JSON instead of lines of text.
 
     Exit status:
-      0  every check passed
-      1  a check failed, or the receipt could not be read
+      0  every required check passed
+      1  a check failed or the receipt could not be read
+      2  no check failed, but at least one required artifact was not supplied
 
     What a pass means: the canonical bytes still hash to the digest recorded inside the
     receipt, and the documents supplied still hash to the digests it cites. It does not
@@ -114,7 +117,10 @@ module ClickwrapCommandLine
 
     result = verifier.verify(receipt_json, documents: documents)
     options[:json] ? report_as_json(parsed, result, sources) : report(parsed, result, sources)
-    result.success? ? SUCCESS : FAILURE
+    return FAILURE if result.failed?
+    return INCOMPLETE if result.incomplete?
+
+    SUCCESS
   rescue Clickwrap::Error => error
     warn("#{error.class.name.split("::").last}: #{error.message}")
     FAILURE
@@ -187,13 +193,36 @@ module ClickwrapCommandLine
 
     entries.each do |entry|
       key = entry["key"].to_s
-      next if key.empty? || documents.key?(key)
+      version = entry["version"].to_s
+      locale = entry["locale"].to_s
+      identity = [key, version, locale].reject(&:empty?).join("@")
+      next if key.empty? || documents.key?(identity)
 
-      name = match_file(files, key, entry["version"].to_s, entry["locale"].to_s)
+      source_name = match_artifact_file(files, key, version, locale, "source")
+      rendered_name = match_artifact_file(files, key, version, locale, "rendered")
+
+      if source_name || rendered_name
+        documents[identity] = {}
+        if source_name
+          documents[identity]["source"] = File.binread(File.join(directory, source_name))
+          sources["#{identity}:source"] = source_name
+        end
+        if rendered_name
+          documents[identity]["rendered"] = File.binread(File.join(directory, rendered_name))
+          sources["#{identity}:rendered"] = rendered_name
+        end
+        next
+      end
+
+      # A single generic file can only mean the representation the receipt
+      # records as offered. When source and rendered digests are identical the
+      # verifier can safely use those same bytes for both; otherwise callers
+      # must use the explicit .source/.rendered names above.
+      name = match_file(files, key, version, locale)
       next if name.nil?
 
-      documents[key] = File.binread(File.join(directory, name))
-      sources[key] = name
+      documents[identity] = File.binread(File.join(directory, name))
+      sources["#{identity}:rendered"] = name
     end
 
     [documents, sources]
@@ -220,6 +249,19 @@ module ClickwrapCommandLine
     prefixed = files.select { |name| basename(name).downcase.start_with?("#{key.downcase}-") }
     return prefixed.first if prefixed.length == 1
     return ambiguous(key, prefixed) if prefixed.length > 1
+
+    nil
+  end
+
+  def match_artifact_file(files, key, version, locale, artifact)
+    candidates = ["#{key}-#{version}-#{locale}", "#{key}-#{version}", "#{key}.#{locale}", key]
+
+    candidates.each do |candidate|
+      pattern = /\A#{Regexp.escape(candidate)}[.-]#{Regexp.escape(artifact)}(?:\..+)?\z/i
+      matches = files.grep(pattern)
+      return matches.first if matches.length == 1
+      return ambiguous("#{key}:#{artifact}", matches) if matches.length > 1
+    end
 
     nil
   end
@@ -251,8 +293,12 @@ module ClickwrapCommandLine
     end
 
     say
-    Array(result.failures).each { |failure| say("  #{failure}") } unless result.success?
-    say(result.success? ? summary(result) : "#{summary(result)} — see the failing checks above.")
+    Array(result.failures).each { |failure| say("  #{failure}") } if result.failed?
+    say case result.status
+        when "verified" then "VERIFIED — #{summary(result)}."
+        when "incomplete" then "INCOMPLETE — #{summary(result)}; supply the missing artifacts and run again."
+        else "FAILED — #{summary(result)}; see the failing checks above."
+        end
     say
     say("A passing digest detects modification of the bytes it covers. It does not establish who")
     say("produced them, when, or that whoever controlled the original application and its database")
@@ -265,6 +311,7 @@ module ClickwrapCommandLine
         "event_id" => receipt["event_id"],
         "schema" => result.schema || receipt["schema"],
         "success" => result.success?,
+        "status" => result.status,
         "checks" => Array(result.checks).map do |check|
           { "name" => value(check, :name), "passed" => status(check), "detail" => value(check, :detail) }
         end,

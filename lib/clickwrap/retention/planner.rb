@@ -110,8 +110,9 @@ module Clickwrap
         # The order matters. A schedule computed at capture (`retain_core_event_until`)
         # wins, because that is what the receipt already told the world. Only
         # when there is none does this fall back to the rule the class names
-        # today — which is also how a lifecycle event appended after the fact,
-        # with no schedule of its own, ages out with the capture it belongs to.
+        # today. That fallback exists for records written by an older Clickwrap
+        # version; current writers freeze a schedule onto captures, imports,
+        # exemptions, and lifecycle events when each event is written.
         def core_event_eligibility(event)
           return Eligibility.new(eligible_at: event.retain_core_event_until, rule: "recorded_schedule") if
             event.retain_core_event_until.present?
@@ -204,7 +205,7 @@ module Clickwrap
 
         DispositionPlan.create!(
           kind: KIND,
-          scope: scope_document,
+          disposition_scope: scope_document,
           summary: summary_document,
           item_count: due_items.length,
           created_by_reference: reference_for(created_by),
@@ -242,7 +243,7 @@ module Clickwrap
       end
 
       def core_event_scopes
-        scopes = [base_events.where.not(retain_core_event_until: nil).where(retain_core_event_until: ...at)]
+        scopes = [base_events.where.not(retain_core_event_until: nil).where(retain_core_event_until: ..at)]
 
         Clickwrap.retention_classes.each do |retention_class|
           rule = retention_class.rule_for(:core_event)
@@ -357,7 +358,10 @@ module Clickwrap
       # --- Assembling the plan --------------------------------------------------
 
       def base_events
-        scope = Event.not_disposed
+        # A disposition event is the retained tombstone that makes an earlier
+        # deletion explainable. Planning it for disposition would destroy that
+        # explanation and produce an endless disposition-of-disposition chain.
+        scope = Event.not_disposed.where.not(event_type: "disposition")
         scope = scope.for_policy(policy_key) if policy_key
         scope = scope.for_actor(actor_reference) if actor_reference
         scope
@@ -444,10 +448,7 @@ module Clickwrap
       end
 
       def reference_for(actor)
-        return nil if actor.nil?
-        return actor if actor.is_a?(String)
-
-        Clickwrap.config.identify_actor_with.call(actor)
+        Reference.actor(actor)
       end
 
       # Every legal hold currently in effect, loaded once.
@@ -461,9 +462,9 @@ module Clickwrap
           holds = LegalHold.in_effect.to_a
 
           new(
-            event_ids: holds.select { |hold| hold.scope == "event" }.map(&:event_id).compact.to_set,
-            actor_references: holds.select { |hold| hold.scope == "actor" }.map(&:actor_reference).compact.to_set,
-            policy_keys: holds.select { |hold| hold.scope == "policy" }.map(&:policy_key).compact.to_set
+            event_ids: holds.select { |hold| hold.hold_scope == "event" }.map(&:event_id).compact.to_set,
+            actor_references: holds.select { |hold| hold.hold_scope == "actor" }.map(&:actor_reference).compact.to_set,
+            policy_keys: holds.select { |hold| hold.hold_scope == "policy" }.map(&:policy_key).compact.to_set
           )
         end
 

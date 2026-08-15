@@ -95,12 +95,11 @@ module Clickwrap
         reference = reference_for!(actor)
 
         items = actor_items(reference)
-        due = items.reject { |item| item.status == :held }
-        held = items.select { |item| item.status == :held }
+        held, due = items.partition { |item| item.status == :held }
 
         DispositionPlan.create!(
           kind: "actor_privacy",
-          scope: {
+          disposition_scope: {
             "kind" => "actor_privacy",
             "at" => Receipt.format_time(Clickwrap.now),
             "actor_reference" => reference,
@@ -394,10 +393,7 @@ module Clickwrap
       # --- Shared ---------------------------------------------------------------
 
       def reference_for(actor)
-        return nil if actor.nil?
-        return actor if actor.is_a?(String)
-
-        Clickwrap.config.identify_actor_with.call(actor)
+        Reference.actor(actor)
       end
 
       def reference_for!(actor)

@@ -43,13 +43,13 @@ module Clickwrap
 
     # How this record is referenced in evidence.
     #
-    # A GlobalID by default, because it stays meaningful after the row it points
-    # at is gone — which is the situation this reference exists for. Override it
-    # when the host has its own stable pseudonymous identifier scheme; the
-    # configured `identify_actor_with` asks for this method first, so overriding
-    # it here is enough and no initializer change is needed.
+    # Uses GlobalID when the host loads it and a stable class/id string in a
+    # minimal Rails host. Either string remains in the evidence after the row is
+    # gone — which is the situation this reference exists for. Override this
+    # method when the host has its own stable pseudonymous identifier scheme;
+    # `identify_actor_with` asks for it first, so no initializer change is needed.
     def clickwrap_actor_reference
-      to_gid.to_s
+      Clickwrap::Reference.record(self)
     end
   end
 end

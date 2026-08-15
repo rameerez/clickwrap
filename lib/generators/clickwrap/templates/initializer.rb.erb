@@ -64,11 +64,13 @@ Clickwrap.configure do |config|
     controller.current_organization if controller.respond_to?(:current_organization)
   end
 
-  # How an actor is named in evidence. A GlobalID is the default because it
-  # survives the row being deleted: the evidence keeps a stable pseudonymous
-  # reference instead of a dangling foreign key, or a cascade that quietly
-  # destroys the record of what someone agreed to.
-  config.identify_actor_with = ->(actor) { actor.to_gid.to_s }
+  # How an actor is named in evidence. The built-in default first asks the model
+  # for `clickwrap_actor_reference`, then uses GlobalID when the host loads it,
+  # and otherwise records a stable `ClassName/id` string. All three remain in
+  # evidence after the row is deleted. Override this only when your application
+  # already has a reviewed stable identifier scheme:
+  #
+  # config.identify_actor_with = ->(actor) { "account/#{actor.public_id}" }
 
   # Add only reviewed fields your receipts truly need; never serialize the
   # model. A snapshot is permanent: an email address copied in here is still in
@@ -92,7 +94,7 @@ Clickwrap.configure do |config|
 
   # A custom renderer must return the exact bytes it offered, because Clickwrap
   # stores their digest next to the source digest. That is what keeps "this
-  # Markdown file existed" and "this rendered representation was shown" as two
+  # Markdown file existed" and "this rendered representation was offered" as two
   # separate claims instead of one borrowed from the other.
   config.document_renderer = nil
 
@@ -114,8 +116,8 @@ Clickwrap.configure do |config|
 
   # How long a signed presentation manifest stays valid between render and
   # submit. Short by design: the manifest exists to bind the exact wording,
-  # versions, and call to action that were on screen to the submission that
-  # followed, and a token good for days would weaken the substitution check it
+  # versions, and call to action in the server-generated offer to the submission
+  # that followed, and a token good for days would weaken the substitution check it
   # exists to make. Too short and a slow reader loses their form.
   config.presentation_valid_for = 2.hours
 
@@ -131,9 +133,9 @@ Clickwrap.configure do |config|
   # makes rewriting history detectable while the checkpoints stay trustworthy.
   config.chain_event_history_with = nil
 
-  # Anchoring stores chain heads outside the primary database. That is the step
-  # that starts to say something about a privileged rewrite of the primary
-  # database itself.
+  # Anchoring offers the exact scope, sequence, event id, and event digest for
+  # each committed chain position to an outside publication service. A receipt
+  # upgrades only after the adapter verifies that exact publication.
   config.anchor_event_history_with = nil
 
   # An RFC 3161 or trust-service adapter preserves exactly the assurance and
@@ -183,8 +185,8 @@ Clickwrap.configure do |config|
   # proof that anyone was physically anywhere.
 <%- if records_any_request_evidence? -%>
   #
-  # You enabled some of these during install. Read every purpose and period
-  # below and replace anything still marked TODO before relying on it.
+  # You enabled some of these during install. The generator required an explicit
+  # purpose and deletion period before writing this file; review both below.
 <%- else -%>
   #
   # Everything here is off, which is the safe default. A single policy that
@@ -293,21 +295,20 @@ Clickwrap.configure do |config|
   # recorded address. It does not make the configuration correct; it records
   # which configuration was in force when the address was observed, so a later
   # reader can tell whether the value came through a path you had verified.
-  config.trusted_proxy_configuration_digest = nil
+  config.trusted_proxy_configuration_digest = <%= trusted_proxy_configuration_digest.inspect %>
 
 <%- if any_ip_geolocation_field? -%>
-  # You enabled IP-geolocation fields, so a resolver is required — Clickwrap
+  # You enabled IP-geolocation fields and explicitly selected this resolver.
+  # Make its gem and data source available in every environment. Clickwrap
   # refuses to boot with fields it has nothing to resolve, rather than recording
-  # blanks that later read as "no result". Add the optional resolver gem:
-  #
-  #   bundle add trackdown
+  # blanks that later read as "no result".
   #
   # Only the fields authorized above are stored, never the whole result object,
   # and every stored value keeps the provider, source, estimated state,
   # resolution time, and any accuracy or database provenance the resolver
   # supplies. A policy cannot keep the coordinates and drop the uncertainty
   # needed to read them.
-  config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
+  config.ip_geolocation_resolver = <%= ip_geolocation_resolver_class_name %>.new
 <%- else -%>
   # Required before any IP-geolocation field can be enabled, here or in a
   # policy. The official optional resolver is `trackdown`:

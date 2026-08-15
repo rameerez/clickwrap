@@ -7,9 +7,13 @@ module Clickwrap
   # `config/initializers/clickwrap.rb` via `Clickwrap.configure do |config| ... end`.
   #
   # Design rules:
-  #   - Config is read AT THE POINT OF USE, not frozen at boot. Class names are
-  #     stored as strings and constantized lazily, so the initializer works no
-  #     matter when the app loads (the User model may not exist yet at boot).
+  #   - Runtime adapters and class names are read at the point of use. Policy
+  #     semantics — including merged request-evidence defaults — are copied into
+  #     the immutable compiled policy revision at boot, so changing this object
+  #     cannot mutate a form that was already rendered.
+  #   - Class names are stored as strings and constantized lazily, so the
+  #     initializer works no matter when the app loads (the User model may not
+  #     exist yet at boot).
   #   - Validating setters normalize their input and raise a plain-English
   #     ConfigurationError on a bad value — failing at the assignment line
   #     rather than at 3am with a NoMethodError. `validate!` runs once more at
@@ -47,6 +51,7 @@ module Clickwrap
 
     # --- Presentation ---------------------------------------------------------
     attr_reader :presentation_valid_for
+    attr_reader :remediation_token_valid_for
 
     # --- Integrity ------------------------------------------------------------
     attr_reader :digest_canonical_receipts_with, :chain_event_history_with
@@ -55,6 +60,9 @@ module Clickwrap
 
     # --- Authorization --------------------------------------------------------
     attr_reader :authorize_receipt_access_with, :authorize_unredacted_request_evidence_access_with
+    attr_reader :verify_actor_can_act_for_represented_party_with
+    attr_reader :authorize_clickwrap_remediation_subject_with
+    attr_reader :authorize_clickwrap_remediation_represented_party_with
 
     # --- Request evidence: what is recorded by default ------------------------
     #
@@ -88,6 +96,7 @@ module Clickwrap
     attr_reader :read_ip_address_from_http_request_with, :read_browser_user_agent_from_http_request_with
     attr_reader :ip_geolocation_resolver, :fail_capture_when_ip_geolocation_is_unavailable
     attr_reader :trusted_proxy_configuration_digest, :reason_for_storing_request_evidence_unencrypted
+    attr_reader :find_request_evidence_binding_key_with
 
     # --- Hooks ----------------------------------------------------------------
     attr_reader :after_event_is_committed, :report_after_commit_failure_with
@@ -97,13 +106,13 @@ module Clickwrap
       # it if their actor model is "Account", "Member", or something else.
       @actor_class_name = "User"
       @current_actor_method_name = :current_user
-      @parent_controller_class_name = "::ApplicationController"
-      @find_current_tenant_with = ->(_controller) { nil }
+      @parent_controller_class_name = "ApplicationController"
+      @find_current_tenant_with = ->(_controller) {}
 
-      # How an actor is referenced in evidence. A GlobalID is the default
-      # because it survives the actor row being deleted: the evidence keeps a
-      # stable pseudonymous reference instead of a dangling foreign key or a
-      # cascade that quietly destroys the record of what someone agreed to.
+      # How an actor is referenced in evidence. Prefer a host override, then a
+      # GlobalID when available, then a stable class/id string in minimal Rails.
+      # The resulting string survives row deletion instead of becoming a
+      # cascading foreign-key loss.
       @identify_actor_with = ->(actor) { default_actor_reference(actor) }
 
       # Actor snapshots contain only what the host names. Clickwrap never
@@ -115,7 +124,7 @@ module Clickwrap
 
       # Documents and policies.
       @store_document_contents_in = :database
-      @document_renderer = nil
+      @document_renderer = DocumentRenderer.new
       @document_resolver = nil
       @policy_paths = ["config/clickwrap.rb", "config/clickwrap/*.rb"]
 
@@ -127,21 +136,38 @@ module Clickwrap
       # a submit, and a token that stayed valid for days would weaken exactly
       # the substitution check it exists to make.
       @presentation_valid_for = 2.hours
+      @remediation_token_valid_for = 2.hours
 
       # Integrity. The baseline detects accidental or ordinary mutation of the
-      # verified bytes. Chains, anchors, and trusted timestamps are separate,
+      # verified bytes. Chains, anchors, and third-party timestamps are separate,
       # explicitly enabled tiers, and each one claims only what it supplies.
       @digest_canonical_receipts_with = :sha256
       @chain_event_history_with = nil
       @anchor_event_history_with = nil
       @timestamp_receipts_with = nil
-      @application_version = -> { nil }
-      @template_version = -> { nil }
+      @application_version = -> {}
+      @template_version = -> {}
 
       # Authorization. Actors can read their own receipts; anything wider is
       # the host's decision, and unredacted request evidence needs a reason.
       @authorize_receipt_access_with = ->(_controller, _receipt) { false }
       @authorize_unredacted_request_evidence_access_with = ->(_controller, _receipt, _because) { false }
+      @verify_actor_can_act_for_represented_party_with = lambda do |actor:, represented_party:, policy:,
+                                                                    authentication_context:, tenant:|
+        AuthorityDecision.new(authorized: false)
+      end
+      @authorize_clickwrap_remediation_subject_with = lambda do |actor:, subject:, policy:, controller:|
+        subject.nil?
+      end
+      @authorize_clickwrap_remediation_represented_party_with =
+        lambda do |actor:, represented_party:, policy:, controller:|
+          represented_party.nil?
+        end
+      @remediation_subject_authorization_configured = false
+      @remediation_represented_party_authorization_configured = false
+      @represented_party_authority_adapters = {
+        "organizations_membership" => Integrations::OrganizationsAuthority.new
+      }
 
       # Request evidence. Every one of these is false, and that is the whole
       # point. Recording an IP address is a decision with consequences; the
@@ -178,7 +204,20 @@ module Clickwrap
       @trusted_proxy_configuration_digest = nil
 
       @ip_geolocation_resolver = nil
+      @ip_geolocation_resolvers = {}
       @fail_capture_when_ip_geolocation_is_unavailable = false
+
+      # The keyed annex digest carries a key ID so a host can rotate keys
+      # without making old annexes unverifiable. The default derives one key
+      # from Rails' key generator and names it by a non-secret fingerprint.
+      # Production hosts with explicit key rotation can replace both settings
+      # with a credentials-backed keyring.
+      @current_request_evidence_binding_key_id = nil
+      @find_request_evidence_binding_key_with = lambda do |requested_key_id|
+        key = default_request_evidence_binding_key
+        expected_id = default_request_evidence_binding_key_id(key)
+        key if key && Digest.secure_compare?(requested_key_id.to_s, expected_id.to_s)
+      end
 
       # Hooks. These run only after required evidence and domain state have
       # committed, and a failure here is reported but can never undo the
@@ -270,6 +309,10 @@ module Clickwrap
       @presentation_valid_for = ensure_duration(value, "presentation_valid_for")
     end
 
+    def remediation_token_valid_for=(value)
+      @remediation_token_valid_for = ensure_duration(value, "remediation_token_valid_for")
+    end
+
     # --- Integrity setters ----------------------------------------------------
 
     def digest_canonical_receipts_with=(value)
@@ -282,11 +325,13 @@ module Clickwrap
     end
 
     def anchor_event_history_with=(value)
-      @anchor_event_history_with = ensure_adapter(value, "anchor_event_history_with", :anchor)
+      @anchor_event_history_with =
+        ensure_adapter(value, "anchor_event_history_with", :anchor, :verify, :capabilities)
     end
 
     def timestamp_receipts_with=(value)
-      @timestamp_receipts_with = ensure_adapter(value, "timestamp_receipts_with", :timestamp)
+      @timestamp_receipts_with =
+        ensure_adapter(value, "timestamp_receipts_with", :timestamp, :verify, :capabilities)
     end
 
     def application_version=(value)
@@ -309,6 +354,57 @@ module Clickwrap
     def authorize_unredacted_request_evidence_access_with=(value)
       @authorize_unredacted_request_evidence_access_with =
         ensure_callable(value, "authorize_unredacted_request_evidence_access_with")
+    end
+
+    def verify_actor_can_act_for_represented_party_with=(value)
+      @verify_actor_can_act_for_represented_party_with =
+        ensure_callable(value, "verify_actor_can_act_for_represented_party_with")
+    end
+
+    def authorize_clickwrap_remediation_subject_with=(value)
+      @authorize_clickwrap_remediation_subject_with =
+        ensure_callable(value, "authorize_clickwrap_remediation_subject_with")
+      @remediation_subject_authorization_configured = true
+    end
+
+    def authorize_clickwrap_remediation_represented_party_with=(value)
+      @authorize_clickwrap_remediation_represented_party_with =
+        ensure_callable(value, "authorize_clickwrap_remediation_represented_party_with")
+      @remediation_represented_party_authorization_configured = true
+    end
+
+    def remediation_subject_authorization_configured? = @remediation_subject_authorization_configured
+
+    def remediation_represented_party_authorization_configured?
+      @remediation_represented_party_authorization_configured
+    end
+
+    # Register a named, server-side authority adapter. Policies refer to the
+    # name from their compiled revision; the browser never submits it.
+    #
+    #   config.register_represented_party_authority :company_directory, MyAdapter.new
+    #
+    # The adapter receives actor:, represented_party:, authority_rule:, tenant:,
+    # and authentication_context:, and returns Clickwrap::AuthorityDecision.
+    def register_represented_party_authority(name, adapter)
+      key = ensure_present_symbol(name, "represented-party authority name").to_s
+      if @represented_party_authority_adapters.key?(key)
+        raise ConfigurationError,
+              "A represented-party authority adapter named #{key.inspect} is already registered. " \
+              "Use one stable name per adapter; Clickwrap will not silently replace an " \
+              "authorization decision because initializer order changed."
+      end
+
+      @represented_party_authority_adapters[key] =
+        ensure_adapter(adapter, "represented-party authority #{key}", :verify)
+    end
+
+    def represented_party_authority_adapter(name)
+      @represented_party_authority_adapters[name.to_s]
+    end
+
+    def represented_party_authority_adapter_names
+      @represented_party_authority_adapters.keys.sort.freeze
     end
 
     # --- Request-evidence setters --------------------------------------------
@@ -378,11 +474,83 @@ module Clickwrap
     # a later reader can tell whether the value came through a path the host had
     # actually verified.
     def trusted_proxy_configuration_digest=(value)
-      @trusted_proxy_configuration_digest = value&.to_s
+      if value.nil?
+        @trusted_proxy_configuration_digest = nil
+        return
+      end
+
+      normalized = value.to_s.strip
+      unless Digest.well_formed?(normalized)
+        raise ConfigurationError,
+              "trusted_proxy_configuration_digest must be a complete prefixed SHA-2 digest, " \
+              "such as `sha256:` followed by 64 lowercase hexadecimal characters. It records " \
+              "which reviewed proxy configuration was in force; a label or TODO is not a digest."
+      end
+
+      @trusted_proxy_configuration_digest = normalized
     end
 
     def ip_geolocation_resolver=(value)
-      @ip_geolocation_resolver = ensure_adapter(value, "ip_geolocation_resolver", :resolve)
+      @ip_geolocation_resolver =
+        ensure_adapter(value, "ip_geolocation_resolver", :resolve, :capabilities)
+    end
+
+    # Register more than one resolver and let each server-owned policy select
+    # one by name with `record_ip_geolocation ..., using: :maxmind`.
+    def register_ip_geolocation_resolver(name, resolver)
+      key = ensure_present_symbol(name, "IP-geolocation resolver name").to_s
+      if key == "application_default" || @ip_geolocation_resolvers.key?(key)
+        raise ConfigurationError,
+              "An IP-geolocation resolver named #{key.inspect} is already reserved or registered. " \
+              "Choose one stable, unique name; Clickwrap will not silently replace a resolver " \
+              "because initializer order changed."
+      end
+
+      @ip_geolocation_resolvers[key] =
+        ensure_adapter(resolver, "IP-geolocation resolver #{key}", :resolve, :capabilities)
+    end
+
+    def ip_geolocation_resolver_for(name = nil)
+      return ip_geolocation_resolver if name.blank? || name.to_s == "application_default"
+
+      @ip_geolocation_resolvers[name.to_s]
+    end
+
+    def ip_geolocation_resolver_names = @ip_geolocation_resolvers.keys.sort.freeze
+
+    # Plain-English key-rotation API. The ID is evidence and must stay stable;
+    # the callback returns key bytes for current OR historical IDs.
+    #
+    #   config.current_request_evidence_binding_key_id = "request-evidence-2026-01"
+    #   config.find_request_evidence_binding_key_with = ->(key_id) { keyring[key_id] }
+    def current_request_evidence_binding_key_id=(value)
+      @current_request_evidence_binding_key_id = ensure_present_string(
+        value, "current_request_evidence_binding_key_id"
+      )
+    end
+
+    def current_request_evidence_binding_key_id
+      @current_request_evidence_binding_key_id ||
+        default_request_evidence_binding_key_id(default_request_evidence_binding_key)
+    end
+
+    def find_request_evidence_binding_key_with=(value)
+      @find_request_evidence_binding_key_with =
+        ensure_callable(value, "find_request_evidence_binding_key_with")
+    end
+
+    def request_evidence_binding_key_for(key_id)
+      key = find_request_evidence_binding_key_with.call(key_id)
+      return nil if key.nil?
+
+      bytes = key.to_s.b
+      if bytes.bytesize < 32
+        raise ConfigurationError,
+              "find_request_evidence_binding_key_with returned only #{bytes.bytesize} bytes for " \
+              "#{key_id.inspect}. Request-evidence binding keys must be at least 32 bytes."
+      end
+
+      bytes
     end
 
     def fail_capture_when_ip_geolocation_is_unavailable=(value)
@@ -415,7 +583,38 @@ module Clickwrap
     def calculate_retention_time_for(name, &block)
       raise ConfigurationError, "calculate_retention_time_for needs a block" unless block
 
-      @retention_time_calculators[name.to_sym] = block
+      key = ensure_present_symbol(name, "retention calculation name")
+      if @retention_time_calculators.key?(key)
+        raise ConfigurationError,
+              "A retention calculation named #{key.inspect} is already registered. Use one " \
+              "stable name per calculation; Clickwrap will not silently replace a deletion " \
+              "deadline because initializer order changed."
+      end
+
+      @retention_time_calculators[key] = block
+    end
+
+    # Deliberate replacement for tests, staged migrations, or a host that is
+    # intentionally changing an existing calculation. The separate verb and
+    # required reason keep this from becoming last-initializer-wins behavior.
+    def replace_retention_time_calculation_for(name, because:, &block)
+      key = ensure_present_symbol(name, "retention calculation name")
+      unless @retention_time_calculators.key?(key)
+        raise ConfigurationError,
+              "No retention calculation named #{key.inspect} exists to replace. Register it " \
+              "first with `calculate_retention_time_for`."
+      end
+      unless block
+        raise ConfigurationError,
+              "replace_retention_time_calculation_for needs a block with the new calculation."
+      end
+      if because.to_s.strip.empty?
+        raise ConfigurationError,
+              "Replacing retention calculation #{key.inspect} needs a `because:` explaining " \
+              "the reviewed change."
+      end
+
+      @retention_time_calculators[key] = block
     end
 
     def retention_time_calculator_names = @retention_time_calculators.keys
@@ -439,6 +638,7 @@ module Clickwrap
     # caught the typos; these are the things that need the whole block resolved.
     def validate!
       validate_request_evidence_defaults!
+      validate_trusted_proxy_configuration!
       validate_ip_geolocation_resolver!
       true
     end
@@ -460,10 +660,10 @@ module Clickwrap
 
     def default_actor_reference(actor)
       return nil if actor.nil?
+      return actor.to_s if actor.is_a?(String) || actor.is_a?(Symbol)
       return actor.clickwrap_actor_reference if actor.respond_to?(:clickwrap_actor_reference)
-      return actor.to_gid.to_s if actor.respond_to?(:to_gid)
 
-      "#{actor.class.name}/#{actor.id}"
+      Reference.record(actor)
     end
 
     def validate_request_evidence_defaults!
@@ -488,6 +688,13 @@ module Clickwrap
                 "turn the default off and enable it in those policies instead."
         end
 
+        if ReviewedText.placeholder?(reason)
+          raise ConfigurationError,
+                "Clickwrap is set to record #{category} for every policy by default, but its " \
+                "reason is still scaffolding text (#{reason.inspect}). Replace it with the " \
+                "application's reviewed, present-tense reason, or turn that default off."
+        end
+
         next unless delete_after.nil?
 
         raise ConfigurationError,
@@ -504,6 +711,20 @@ module Clickwrap
       when :browser_user_agent then "browser_user_agents"
       else "ip_geolocation"
       end
+    end
+
+    def validate_trusted_proxy_configuration!
+      records_ip_derived_evidence =
+        record_ip_address_by_default || enabled_default_ip_geolocation_fields.any?
+      return unless records_ip_derived_evidence
+      return if trusted_proxy_configuration_digest.present?
+
+      raise ConfigurationError,
+            "Clickwrap is set to record an IP address or derive IP geolocation for every " \
+            "policy, but `trusted_proxy_configuration_digest` is blank. Review and test the " \
+            "deployment's trusted-proxy topology, digest that exact configuration, and set " \
+            "the complete prefixed SHA-2 digest (for example `sha256:...`). This records which " \
+            "proxy decision produced the address; it does not claim that decision was correct."
     end
 
     def validate_ip_geolocation_resolver!
@@ -535,13 +756,14 @@ module Clickwrap
       value
     end
 
-    def ensure_adapter(value, name, required_method)
+    def ensure_adapter(value, name, *required_methods)
       return nil if value.nil?
 
-      unless value.respond_to?(required_method)
+      missing = required_methods.reject { |required_method| value.respond_to?(required_method) }
+      unless missing.empty?
         raise ConfigurationError,
-              "#{name} must respond to ##{required_method}, got #{value.inspect}. See the " \
-              "adapter contract in the README."
+              "#{name} must respond to #{missing.map { |method| "##{method}" }.join(", ")}, " \
+              "but #{value.inspect} does not. See the matching adapter section in README.md."
       end
 
       value
@@ -561,6 +783,27 @@ module Clickwrap
       raise ConfigurationError, "#{name} can't be blank" if symbol.empty?
 
       symbol.to_sym
+    end
+
+    def ensure_present_string(value, name)
+      string = value.to_s.strip
+      raise ConfigurationError, "#{name} can't be blank" if string.empty?
+
+      string
+    end
+
+    def default_request_evidence_binding_key
+      if defined?(::Rails) && ::Rails.application&.key_generator
+        ::Rails.application.key_generator.generate_key("clickwrap/request-evidence-binding", 32)
+      else
+        ENV.fetch("CLICKWRAP_REQUEST_EVIDENCE_BINDING_KEY", nil)
+      end
+    end
+
+    def default_request_evidence_binding_key_id(key)
+      return nil if key.nil?
+
+      "rails_key_generator_#{Digest.hex(key)[0, 16]}"
     end
 
     def ensure_boolean(value, name)
@@ -584,10 +827,10 @@ module Clickwrap
         raise ConfigurationError,
               "#{name} = false stores this personal data in plain text in your database, where " \
               "it will also appear in ordinary backups and database dumps. If that is a " \
-              "reviewed decision, say so explicitly first:\n\n" \
-              "  config.deliberately_store_request_evidence_unencrypted!(\n" \
-              "    because: \"...your reviewed reason...\"\n" \
-              "  )\n"
+              "reviewed decision, say so explicitly first:\n\n  " \
+              "config.deliberately_store_request_evidence_unencrypted!(\n    " \
+              "because: \"...your reviewed reason...\"\n  " \
+              ")\n"
       end
 
       raise ConfigurationError, "#{name} must be true or false, got #{value.inspect}"
@@ -644,5 +887,20 @@ module Clickwrap
     end
 
     def storing_request_evidence_unencrypted? = @deliberately_storing_request_evidence_unencrypted == true
+
+    def method_missing(name, *arguments, **options, &)
+      if name.to_s.end_with?("=")
+        setting = name.to_s.delete_suffix("=")
+        raise ConfigurationError,
+              "Clickwrap has no initializer setting named `config.#{setting}`. Check the " \
+              "spelling; unknown settings are refused so a typo can never look configured."
+      end
+
+      super
+    end
+
+    def respond_to_missing?(name, include_private = false)
+      super
+    end
   end
 end

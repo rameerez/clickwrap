@@ -5,6 +5,8 @@ require "test_helper"
 # A receipt has to still be readable, reproducible, and honest years after the
 # code that wrote it has moved on. These tests hold it to that.
 class ReceiptTest < ActiveSupport::TestCase
+  use_real_database_commits!
+
   setup do
     @user = create_user
     @receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
@@ -23,7 +25,13 @@ class ReceiptTest < ActiveSupport::TestCase
 
     terms = body["documents"].find { |document| document["key"] == "terms" }
     assert_equal "2026-08-15", terms["version"]
-    assert_match(/\Asha256:[0-9a-f]{64}\z/, terms["digest"])
+    assert_match(/\Asha256:[0-9a-f]{64}\z/, terms["source_digest"])
+    assert_match(/\Asha256:[0-9a-f]{64}\z/, terms["rendered_digest"])
+  end
+
+  test "document presentation order is stored as one consecutive sequence" do
+    assert_equal [0, 1], @receipt.event.documents.order(:ordinal).pluck(:ordinal)
+    assert_equal([0, 1], @receipt.to_h.fetch("documents").map { |document| document.fetch("ordinal") })
   end
 
   test "the canonical JSON is RFC 8785 canonical and stable" do
@@ -74,8 +82,47 @@ class ReceiptTest < ActiveSupport::TestCase
     assert @receipt.verify.success?
   end
 
+  test "a lawfully disposed core event is incomplete rather than failed as tampering" do
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      @receipt.event,
+      because: "The reviewed retention period ended"
+    )
+    disposed_receipt = Clickwrap.receipt(@receipt.event_id)
+
+    result = Clickwrap::ReceiptVerifier.verify(disposed_receipt.to_canonical_json)
+
+    assert result.incomplete?, result.to_s
+    assert_empty result.failures
+    check = result.checks.find { |candidate| candidate.name == "event_digest" }
+    assert check.skipped?
+    assert_match(/lawfully disposed/, check.detail)
+    assert_match(/cannot be re-derived/, check.detail)
+    assert_match(/disposed of/, disposed_receipt.to_h.fetch("verifier_instructions"))
+  end
+
+  test "an inconsistent core-disposition claim fails verification" do
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      @receipt.event,
+      because: "The reviewed retention period ended"
+    )
+    body = Clickwrap.receipt(@receipt.event_id).to_h
+    disposition = body.dig("lifecycle", "successors").first
+                      .dig("event", "protected_outcome", "core_event_disposition")
+    disposition["original_event_digest"] =
+      Clickwrap::Digest.digest("a different event")
+    body["integrity"]["receipt_digest"] = Clickwrap::Digest.digest_canonical(
+      Clickwrap::ReceiptVerifier.body_covered_by_digest(body)
+    )
+
+    result = Clickwrap::ReceiptVerifier.verify(Clickwrap::CanonicalJson.generate(body))
+
+    assert result.failed?
+    check = result.failures.find { |candidate| candidate.name == "event_digest" }
+    assert_match(/different original event digest/, check.detail)
+  end
+
   test "verification fails when a bound document version is edited underneath it" do
-    Clickwrap::Document.find_by(key: "terms").current_version
+    Clickwrap::Document.find_by(document_key: "terms").current_version
                        .update_columns(content: "rewritten after the fact")
 
     result = @receipt.verify
@@ -85,11 +132,18 @@ class ReceiptTest < ActiveSupport::TestCase
 
   test "the HTML receipt renders the same facts and the same bounded claims" do
     html = @receipt.to_html
+    terms = @receipt.to_h.fetch("documents").find { |document| document.fetch("key") == "terms" }
 
     assert_match(/Evidence receipt/, html)
     assert_match(/#{Regexp.escape(@receipt.event_id)}/, html)
     assert_match(/Agreed to:/, html)
     assert_match(/Acknowledged:/, html)
+    assert_includes html, terms.fetch("source_digest")
+    assert_includes html, terms.fetch("rendered_digest")
+    assert_match(%r{Source \(text/markdown\)}, html)
+    assert_match(%r{Rendered \(text/html; charset=utf-8\)}, html)
+    assert_match(/What the application offered/, html)
+    assert_no_match(/What was on screen/, html)
     assert_match(/detects accidental or ordinary modification/, html)
     assert_no_match(/compliant/i, html)
     assert_no_match(/enforceable/i, html)
@@ -153,6 +207,55 @@ class ReceiptTest < ActiveSupport::TestCase
     assert_equal false, access.included_fields["browser_user_agent"]
   end
 
+  test "an unredacted export refuses to reveal data inside an outer transaction" do
+    operator = create_security_operator
+
+    ActiveRecord::Base.transaction do
+      error = assert_raises(Clickwrap::AccessNotAuthorized) do
+        Clickwrap::Receipt.export(
+          @receipt,
+          requested_by: operator,
+          because: "Investigating dispute 2026-184",
+          include_ip_address: true
+        )
+      end
+      assert_match(/cannot run inside an outer database transaction/, error.message)
+      raise ActiveRecord::Rollback
+    end
+
+    assert_equal 0, Clickwrap::ReceiptAccess.where(event_id: @receipt.event_id).count
+    assert_equal 0,
+                 Clickwrap::Event.where(
+                   root_event_id: @receipt.event_id,
+                   event_type: "receipt_access"
+                 ).count
+  end
+
+  test "an audit-write failure rolls back the whole sensitive export attempt" do
+    operator = create_security_operator
+
+    Clickwrap::Lifecycle.stub(
+      :append_lifecycle_event!,
+      ->(**_arguments) { raise "audit event unavailable" }
+    ) do
+      assert_raises(RuntimeError) do
+        Clickwrap::Receipt.export(
+          @receipt,
+          requested_by: operator,
+          because: "Investigating dispute 2026-184",
+          include_ip_address: true
+        )
+      end
+    end
+
+    assert_equal 0, Clickwrap::ReceiptAccess.where(event_id: @receipt.event_id).count
+    assert_equal 0,
+                 Clickwrap::Event.where(
+                   root_event_id: @receipt.event_id,
+                   event_type: "receipt_access"
+                 ).count
+  end
+
   test "there is no single switch that reveals every sensitive category" do
     # Deliberately absent: one flag that turns on three different categories of
     # personal data makes an operator's intent unreviewable.
@@ -171,24 +274,24 @@ class ReceiptTest < ActiveSupport::TestCase
 
     hold = @receipt.place_on_legal_hold!(because: "Pending dispute 2026-184",
                                          placed_by: operator,
-                                         review_on: 6.months.from_now)
+                                         review_at: 6.months.from_now)
 
     assert hold.in_effect?
     assert @receipt.event.reload.on_legal_hold?
     assert_equal "Pending dispute 2026-184", hold.reason
-    assert hold.review_on.present?
+    assert hold.review_at.present?
 
     assert_raises(ActiveRecord::RecordInvalid) do
-      Clickwrap::LegalHold.create!(scope: "event", event_id: @receipt.event_id,
+      Clickwrap::LegalHold.create!(hold_scope: "event", event_id: @receipt.event_id,
                                    placed_by_reference: "x", placed_at: Time.current,
-                                   review_on: 1.month.from_now)
+                                   review_at: 1.month.from_now)
     end
   end
 
   test "releasing a hold records who released it and why" do
     operator = create_security_operator
     @receipt.place_on_legal_hold!(because: "Pending dispute", placed_by: operator,
-                                  review_on: 6.months.from_now)
+                                  review_at: 6.months.from_now)
 
     @receipt.release_legal_hold!(because: "Dispute resolved", released_by: operator)
 
@@ -203,7 +306,7 @@ class ReceiptTest < ActiveSupport::TestCase
 
     assert_difference -> { Clickwrap::Event.where(event_type: "legal_hold_placed").count }, 1 do
       @receipt.place_on_legal_hold!(because: "Pending dispute", placed_by: operator,
-                                    review_on: 6.months.from_now)
+                                    review_at: 6.months.from_now)
     end
 
     assert_difference -> { Clickwrap::Event.where(event_type: "legal_hold_released").count }, 1 do

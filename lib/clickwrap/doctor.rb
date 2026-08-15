@@ -66,13 +66,14 @@ module Clickwrap
       findings.concat(with_database("disposition") { disposition_findings })
       findings.concat(with_database("legal holds") { legal_hold_findings })
       findings.concat(with_database("event digests") { digest_findings })
+      findings.concat(with_database("integrity attestations") { integrity_attestation_findings })
       findings.concat(with_database("external actions") { external_action_findings })
       findings
     end
 
     # The README's rendering: one line per finding, in the order they were
     # produced, with nothing summarizing them into a verdict.
-    def to_s = report.map(&:to_s).join("\n")
+    def to_s = report.join("\n")
 
     private
 
@@ -118,7 +119,7 @@ module Clickwrap
     end
 
     def document_problem(definition)
-      document = Document.find_by(key: definition.key, tenant_key: definition.tenant_key)
+      document = Document.find_by(document_key: definition.key, tenant_key: definition.tenant_key)
       version = document&.versions&.find_by(version_label: definition.version_label, locale: definition.locale)
 
       if version.nil? || !version.published?
@@ -280,12 +281,24 @@ module Clickwrap
       events = Event.order(id: :desc).limit(DIGEST_SAMPLE_SIZE).to_a
       return [ok("no events recorded yet")] if events.empty?
 
-      failed = events.reject(&:digest_verified?)
-      return [ok("all #{events.length} checked event digests verify")] if failed.empty?
+      by_status = events.group_by(&:digest_integrity_status)
+      failed = by_status.fetch(:unaccounted_mismatch, [])
+
+      if failed.empty?
+        dispositions = by_status.fetch(:documented_core_disposition, []).length
+        verifying = by_status.fetch(:verified, []).length
+
+        return [ok("all #{events.length} checked event digests verify")] if dispositions.zero?
+
+        return [ok("#{verifying} checked event digests verify and #{dispositions} " \
+                   "#{pluralize(dispositions, "core disposition is", "core dispositions are")} " \
+                   "documented by valid linked events; no mismatch is unexplained")]
+      end
 
       [problem("#{failed.length} of #{events.length} checked event digests do not match the bytes " \
-               "they cover (first: #{failed.first.id}). That means those rows changed after they " \
-               "were written; it does not on its own say who changed them.")]
+               "they cover and have no valid linked disposition event (first: #{failed.first.id}). " \
+               "That means those rows changed after they were written or carry an unexplained " \
+               "disposition marker; it does not on its own say who changed them.")]
     end
 
     def external_action_findings
@@ -297,6 +310,23 @@ module Clickwrap
       [warning("#{unresolved} external #{pluralize(unresolved, "action is", "actions are")} still " \
                "pending or unknown (#{stale} older than 15 minutes). Run " \
                "`bin/rails clickwrap:reconcile_external_actions` to list them.")]
+    end
+
+    def integrity_attestation_findings
+      counts = Integrity::AttestationReconciler.missing_counts
+      return [ok("no external integrity attestation adapters are configured")] if counts.empty?
+
+      missing = counts.sum { |_, count| count }
+      return [ok("every eligible event has an attestation attempt from each configured adapter")] if missing.zero?
+
+      details = counts.filter_map do |kind, count|
+        "#{count} #{kind.tr("_", " ")}" unless count.zero?
+      end.join(", ")
+
+      [warning("#{missing} configured integrity #{pluralize(missing, "attestation attempt is",
+                                                            "attestation attempts are")} " \
+               "missing (#{details}). Run `bin/rails clickwrap:integrity:attest_missing`; this can " \
+               "call external providers and does not change the committed evidence event.")]
     end
 
     # --- Plumbing -------------------------------------------------------------

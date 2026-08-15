@@ -14,7 +14,8 @@ module Clickwrap
     attr_reader :key, :kind, :ordinal, :document_keys, :assertion, :label,
                 :link_labels, :choices, :purpose_key, :withdrawal_path,
                 :valid_for, :requires, :subject_fingerprint_with,
-                :record_protected_outcome_with, :options
+                :subject_fingerprint_version, :record_protected_outcome_with,
+                :protected_outcome_version, :options
 
     def initialize(key:, kind:, ordinal:, options: {})
       @key = key.to_s
@@ -22,17 +23,19 @@ module Clickwrap
       @ordinal = ordinal
       @options = options
 
-      @document_keys = Array(options[:document] || options[:documents]).map(&:to_s)
-      @assertion = LocalizedText.new(options[:statement] || options[:assertion])
+      @document_keys = Array(options[:document]).map(&:to_s)
+      @assertion = LocalizedText.new(options[:statement])
       @label = LocalizedText.new(options[:label])
-      @link_labels = build_link_labels(options[:link_label] || options[:link_labels])
+      @link_labels = build_link_labels(options[:link_label])
       @choices = normalize_choices(options[:choices])
       @purpose_key = (options[:purpose] || key).to_s
       @withdrawal_path = options[:withdrawal_path]
       @valid_for = options[:valid_for]
       @requires = Array(options[:requires]).map(&:to_s)
       @subject_fingerprint_with = options[:subject_fingerprint_with]
+      @subject_fingerprint_version = options[:subject_fingerprint_version]&.to_s
       @record_protected_outcome_with = options[:record_protected_outcome_with]
+      @protected_outcome_version = options[:protected_outcome_version]&.to_s
 
       validate!
       freeze
@@ -99,7 +102,9 @@ module Clickwrap
         "valid_for_seconds" => valid_for&.to_i,
         "requires" => requires,
         "subject_fingerprint_with" => subject_fingerprint_with ? "configured" : nil,
-        "record_protected_outcome_with" => record_protected_outcome_with ? "configured" : nil
+        "subject_fingerprint_version" => subject_fingerprint_version,
+        "record_protected_outcome_with" => record_protected_outcome_with ? "configured" : nil,
+        "protected_outcome_version" => protected_outcome_version
       }.compact
     end
 
@@ -139,6 +144,7 @@ module Clickwrap
 
       validate_assertion!
       validate_lifecycle!
+      validate_versioned_callbacks!
       validate_choices!
       validate_consent!
     end
@@ -148,7 +154,7 @@ module Clickwrap
 
       raise DefinitionError,
             "Statement #{key} has no assertion text. Give it `statement:` with the exact " \
-            "first-person sentence the person will be shown, because that sentence is what " \
+            "first-person sentence the server should include in its offer, because that is what " \
             "the receipt records."
     end
 
@@ -177,13 +183,37 @@ module Clickwrap
     def validate_choices!
       return if choices.nil?
 
-      permitted = Vocabulary.actions_for(kind) + %w[grant decline]
+      # Choices belong to the initial act. Lifecycle actions such as consumed,
+      # revoked, superseded, or corrected are server-authored transitions and
+      # must never become meanings a browser can choose in a capture.
+      permitted = [initial_action]
+      permitted.push("grant", "decline") if kind == "consent"
       unknown = choices.values.reject { |meaning| permitted.include?(meaning) }
       return if unknown.empty?
 
       raise DefinitionError,
             "Statement #{key} maps a choice to #{unknown.join(", ")}, which is not something a " \
             "#{kind} can record. Use one of: #{permitted.uniq.join(", ")}."
+    end
+
+    # Proc bodies cannot be serialized into a frozen policy revision. Requiring
+    # a human-chosen version makes a behavior change visible in the revision
+    # digest and lets capture reject an old presentation whose executable
+    # callback no longer exists under the same meaning.
+    def validate_versioned_callbacks!
+      if subject_fingerprint_with && subject_fingerprint_version.to_s.strip.empty?
+        raise DefinitionError,
+              "Statement #{key} configures `subject_fingerprint_with:` but gives no " \
+              "`subject_fingerprint_version:`. Name the callback contract (for example " \
+              '"covered-rides-v1") and change that name whenever its behavior changes.'
+      end
+
+      return unless record_protected_outcome_with && protected_outcome_version.to_s.strip.empty?
+
+      raise DefinitionError,
+            "Statement #{key} configures `record_protected_outcome_with:` but gives no " \
+            "`protected_outcome_version:`. Name the callback contract and change that name " \
+            "whenever the recorded outcome shape or meaning changes."
     end
 
     def validate_consent!

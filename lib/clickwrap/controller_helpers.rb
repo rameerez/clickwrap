@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "cgi/escape"
+
 module Clickwrap
   # What a host controller gets for free: the submission envelope, the two
   # capture verbs, the authentication description, and the `requires_clickwrap`
@@ -36,7 +38,10 @@ module Clickwrap
       # compile without either the engine mounted or an explicit
       # `remediation_path:` the host owns. Everything else in `**options` is
       # passed straight through to `before_action` (`only:`, `except:`, `if:`).
-      def requires_clickwrap(policy_key, remediation_path: nil, **before_action_options)
+      def requires_clickwrap(policy_key, remediation_path: nil, subject_with: nil,
+                             acting_for_with: nil, **before_action_options)
+        ControllerHelpers.validate_gate_resolver!(:subject_with, subject_with)
+        ControllerHelpers.validate_gate_resolver!(:acting_for_with, acting_for_with)
         # The dead-end check is REGISTERED here, not run here.
         #
         # Rails eager-loads controllers before it draws the route set, so a
@@ -52,14 +57,21 @@ module Clickwrap
         ControllerHelpers.register_gate(
           policy_key,
           remediation_path: remediation_path,
+          subject_with: subject_with,
+          acting_for_with: acting_for_with,
           gate: "#{name || "an anonymous controller"}.requires_clickwrap"
         )
 
         before_action(**before_action_options) do
-          clickwrap_gate!(policy_key, remediation_path: remediation_path)
+          clickwrap_gate!(policy_key, remediation_path: remediation_path,
+                                      subject_with: subject_with,
+                                      acting_for_with: acting_for_with)
         end
       end
     end
+
+    Gate = Data.define(:policy_key, :remediation_path, :subject_with,
+                       :acting_for_with, :gate)
 
     class << self
       # The current actor, through the host's configured controller method.
@@ -83,8 +95,15 @@ module Clickwrap
       # Remembers a declared gate so it can be checked once the route set
       # exists. Re-declaring the same gate (a development reload) replaces the
       # entry rather than accumulating duplicates.
-      def register_gate(policy_key, remediation_path:, gate:)
-        registered_gates[[gate, policy_key.to_s]] = remediation_path
+      def register_gate(policy_key, remediation_path:, gate:, subject_with: nil,
+                        acting_for_with: nil)
+        registered_gates[[gate, policy_key.to_s]] = Gate.new(
+          policy_key: policy_key.to_s,
+          remediation_path: remediation_path,
+          subject_with: subject_with,
+          acting_for_with: acting_for_with,
+          gate: gate
+        )
       end
 
       def registered_gates
@@ -94,12 +113,34 @@ module Clickwrap
       # Run from the engine's `after_initialize`, when the host's routes are
       # drawn and the answer is actually knowable.
       def verify_registered_gates!
-        registered_gates.each do |(gate, policy_key), remediation_path|
-          verify_remediation_is_possible!(policy_key, remediation_path: remediation_path, gate: gate)
+        registered_gates.each_value do |entry|
+          verify_remediation_is_possible!(
+            entry.policy_key,
+            remediation_path: entry.remediation_path,
+            subject_with: entry.subject_with,
+            acting_for_with: entry.acting_for_with,
+            gate: entry.gate
+          )
         end
       end
 
-      def verify_remediation_is_possible!(policy_key, remediation_path:, gate:)
+      def verify_remediation_is_possible!(policy_key, remediation_path:, gate:,
+                                          subject_with: nil, acting_for_with: nil)
+        if subject_with && !Clickwrap.config.remediation_subject_authorization_configured?
+          raise ConfigurationError,
+                "#{gate} :#{policy_key} resolves a subject with `subject_with:`, but the host " \
+                "has not configured `authorize_clickwrap_remediation_subject_with`. That " \
+                "server-side callback must decide whether the current actor may complete this " \
+                "policy for the resolved subject."
+        end
+
+        if acting_for_with && !Clickwrap.config.remediation_represented_party_authorization_configured?
+          raise ConfigurationError,
+                "#{gate} :#{policy_key} resolves a represented party with `acting_for_with:`, " \
+                "but the host has not configured " \
+                "`authorize_clickwrap_remediation_represented_party_with`."
+        end
+
         return true if remediation_path
         return true unless defined?(::Rails) && ::Rails.respond_to?(:application) && ::Rails.application
         return true if load_host_routes == :unavailable
@@ -117,10 +158,10 @@ module Clickwrap
         raise ConfigurationError,
               "#{gate} :#{policy_key} would have no way to be satisfied. A required gate needs " \
               "somewhere to send the person it stops, and Clickwrap::Engine is not mounted, so " \
-              "there is no capture screen to redirect them to. Either mount it:\n\n" \
-              "  mount Clickwrap::Engine => \"/agreements\"\n\n" \
-              "or point this gate at a page you own:\n\n" \
-              "  requires_clickwrap :#{policy_key}, remediation_path: \"/support/agreements\"\n\n" \
+              "there is no capture screen to redirect them to. Either mount it:\n\n  " \
+              "mount Clickwrap::Engine => \"/agreements\"\n\n" \
+              "or point this gate at a page you own:\n\n  " \
+              "requires_clickwrap :#{policy_key}, remediation_path: \"/support/agreements\"\n\n" \
               "A gate that blocks an action with no route to unblocking it is a dead end, and " \
               "Clickwrap will not compile one."
       end
@@ -133,7 +174,7 @@ module Clickwrap
       # second opinion for anything unusual.
       def engine_is_mounted?
         helpers = ::Rails.application.routes.mounted_helpers
-        return true if helpers&.instance_methods&.include?(:clickwrap)
+        return true if helpers&.method_defined?(:clickwrap)
 
         ::Rails.application.routes.routes.any? { |route| mounts_clickwrap_engine?(route) }
       rescue StandardError
@@ -142,6 +183,13 @@ module Clickwrap
 
       def verified_gates
         @verified_gates ||= Set.new
+      end
+
+      def validate_gate_resolver!(name, resolver)
+        return if resolver.nil? || resolver.is_a?(Symbol) || resolver.respond_to?(:call)
+
+        raise ConfigurationError,
+              "#{name} must be a controller method name (Symbol) or a callable, got #{resolver.inspect}."
       end
 
       private
@@ -203,8 +251,8 @@ module Clickwrap
     # `Clickwrap.capture_and!` with the same defaults. The block runs inside the
     # same database transaction as the evidence write: if either fails, neither
     # happened.
-    def capture_clickwrap_and!(policy_key, **options, &block)
-      Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(options), &block)
+    def capture_clickwrap_and!(policy_key, **options, &)
+      Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(options), &)
     end
 
     # Signup, for Rails' own authentication generator or any hand-rolled
@@ -219,16 +267,20 @@ module Clickwrap
     # the welcome email, and the redirect that would normally follow simply do
     # not happen — which is the difference between a refused signup and a live
     # account nobody can explain.
-    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **options, &block)
-      Clickwrap::Registration.perform(
+    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **, &)
+      result = Clickwrap::Registration.perform(
         policy_key,
         prospective_actor: prospective_actor || user,
         http_request: request,
         submission: clickwrap_submission,
         tenant: Clickwrap.config.find_current_tenant_with.call(self),
-        **options,
-        &block
+        registration_flow_id: clickwrap_registration_flow_id(policy_key),
+        **,
+        &
       )
+
+      clear_clickwrap_registration_flow_when_committed(result, policy_key)
+      result
     end
 
     # Whatever the host chose to record about how this request was
@@ -239,7 +291,52 @@ module Clickwrap
       Clickwrap.config.describe_authentication_with.call(self)
     end
 
+    # Resolves and re-authorizes the signed context handed to a custom
+    # `remediation_path:`. The returned object exposes `subject`,
+    # `represented_party`, and `return_to`; pass the first two to both
+    # presentation and capture. No browser-owned id needs to be permitted.
+    def resolve_clickwrap_remediation!(policy_key, token: params[:remediation_token])
+      context = RemediationToken.resolve!(
+        token,
+        policy: Clickwrap.policy!(policy_key),
+        actor: clickwrap_current_actor,
+        tenant: clickwrap_current_tenant
+      )
+
+      authorize_clickwrap_remediation_context!(
+        policy_key,
+        actor: clickwrap_current_actor,
+        subject: context.subject,
+        represented_party: context.represented_party
+      )
+      context
+    end
+
     private
+
+    def clickwrap_registration_flow_id(policy_key)
+      unless respond_to?(:session)
+        raise ConfigurationError,
+              "Registration-flow binding needs a controller session. API registrations must " \
+              "create their own server-side registration_flow_id and pass it to both " \
+              "Clickwrap.present and Clickwrap.register!."
+      end
+
+      flows = (session[:clickwrap_registration_flows] ||= {})
+      flows[policy_key.to_s] ||= SecureRandom.uuid
+    end
+
+    def clear_clickwrap_registration_flow_id(policy_key)
+      session[:clickwrap_registration_flows]&.delete(policy_key.to_s)
+    end
+
+    def clear_clickwrap_registration_flow_when_committed(result, policy_key)
+      if result.respond_to?(:when_durably_committed)
+        result.when_durably_committed { clear_clickwrap_registration_flow_id(policy_key) }
+      elsif result.committed?
+        clear_clickwrap_registration_flow_id(policy_key)
+      end
+    end
 
     def clickwrap_current_actor
       @clickwrap_current_actor ||= ControllerHelpers.resolve_current_actor(self)
@@ -255,6 +352,8 @@ module Clickwrap
       resolved[:submission] = clickwrap_submission unless resolved.key?(:submission)
       resolved[:actor] = clickwrap_current_actor unless resolved.key?(:actor)
       resolved[:tenant] = clickwrap_current_tenant unless resolved.key?(:tenant)
+      resolved[:authentication_context] = clickwrap_authentication_context unless
+        resolved.key?(:authentication_context)
       resolved
     end
 
@@ -266,21 +365,69 @@ module Clickwrap
     # Controller gates improve the flow. They are not the security boundary:
     # anything consequential should still call `Clickwrap.require!` where the
     # action actually happens.
-    def clickwrap_gate!(policy_key, remediation_path: nil)
+    def clickwrap_gate!(policy_key, remediation_path: nil, subject_with: nil, acting_for_with: nil)
+      # A gate inherited from the host's ApplicationController must never gate
+      # Clickwrap's own remediation, receipt, withdrawal, or document screens.
+      # Those screens are how the person satisfies the gate; redirecting them
+      # back to themselves creates a loop and can make the document they must
+      # review unreachable. Domain enforcement remains the host's
+      # `Clickwrap.require!` call, not this navigation convenience.
+      return if clickwrap_engine_controller?
+
       ControllerHelpers.verify_remediation_is_possible!(
         policy_key,
         remediation_path: remediation_path,
+        subject_with: subject_with,
+        acting_for_with: acting_for_with,
         gate: "#{self.class.name}.requires_clickwrap"
       )
 
       actor = clickwrap_current_actor
-      return if actor && Clickwrap.current?(policy_key, actor: actor, tenant: clickwrap_current_tenant)
+      unless actor
+        if clickwrap_prefers_a_structured_response?
+          render json: { error: "clickwrap_actor_required", policy: policy_key.to_s }, status: :unauthorized
+        else
+          head :unauthorized
+        end
+        return
+      end
 
-      clickwrap_require_remediation(policy_key, remediation_path: remediation_path)
+      subject = resolve_clickwrap_gate_value(subject_with)
+      represented_party = resolve_clickwrap_gate_value(acting_for_with)
+      tenant = clickwrap_current_tenant
+
+      return if Clickwrap.current?(policy_key, actor: actor, tenant: tenant, subject: subject,
+                                               acting_for: represented_party)
+
+      authorize_clickwrap_remediation_context!(policy_key, actor: actor, subject: subject,
+                                                           represented_party: represented_party)
+      clickwrap_require_remediation(
+        policy_key,
+        remediation_path: remediation_path,
+        actor: actor,
+        tenant: tenant,
+        subject: subject,
+        represented_party: represented_party
+      )
+    rescue RemediationNotAuthorized
+      # A denial must not disclose that the resolved subject or represented
+      # party exists. This is the same not-found posture the standalone screen
+      # uses for a swapped, expired, or otherwise invalid signed handoff.
+      head :not_found
     end
 
-    def clickwrap_require_remediation(policy_key, remediation_path:)
+    def clickwrap_require_remediation(policy_key, remediation_path:, actor:, tenant:, subject:,
+                                      represented_party:)
       destination = remediation_path || clickwrap_capture_url_for(policy_key)
+      token = RemediationToken.issue(
+        policy: Clickwrap.policy!(policy_key),
+        actor: actor,
+        tenant: tenant,
+        subject: subject,
+        represented_party: represented_party,
+        return_to: request.fullpath
+      )
+      destination = clickwrap_remediation_destination(destination, token)
 
       if clickwrap_prefers_a_structured_response?
         render json: {
@@ -290,12 +437,16 @@ module Clickwrap
                },
                status: :forbidden
       else
-        redirect_to clickwrap_return_to_destination(destination), allow_other_host: false
+        redirect_to destination, allow_other_host: false
       end
     end
 
     def clickwrap_capture_url_for(policy_key)
       clickwrap_engine_routes.capture_path(policy_key)
+    end
+
+    def clickwrap_engine_controller?
+      defined?(Clickwrap::ApplicationController) && is_a?(Clickwrap::ApplicationController)
     end
 
     # The mounted proxy when the host mounted the engine (it carries the mount
@@ -307,9 +458,31 @@ module Clickwrap
     # Where to come back to once the policy is satisfied. Only this request's
     # own path travels — never a client-supplied URL — so the gate cannot be
     # turned into an open redirect.
-    def clickwrap_return_to_destination(destination)
+    def clickwrap_remediation_destination(destination, token)
       separator = destination.include?("?") ? "&" : "?"
-      "#{destination}#{separator}return_to=#{CGI.escape(request.fullpath)}"
+      "#{destination}#{separator}remediation_token=#{CGI.escape(token)}"
+    end
+
+    def resolve_clickwrap_gate_value(resolver)
+      return nil if resolver.nil?
+      return send(resolver) if resolver.is_a?(Symbol)
+      return instance_exec(&resolver) if resolver.arity.zero?
+
+      resolver.call(self)
+    end
+
+    def authorize_clickwrap_remediation_context!(policy_key, actor:, subject:, represented_party:)
+      policy = Clickwrap.policy!(policy_key)
+      subject_allowed = Clickwrap.config.authorize_clickwrap_remediation_subject_with.call(
+        actor: actor, subject: subject, policy: policy, controller: self
+      )
+      party_allowed = Clickwrap.config.authorize_clickwrap_remediation_represented_party_with.call(
+        actor: actor, represented_party: represented_party, policy: policy, controller: self
+      )
+      return true if subject_allowed == true && party_allowed == true
+
+      raise RemediationNotAuthorized,
+            "The host did not authorize this actor to remediate the policy for the resolved context."
     end
 
     # HTML and Turbo get a redirect they can follow; everything else gets a

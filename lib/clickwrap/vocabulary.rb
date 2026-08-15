@@ -108,7 +108,7 @@ module Clickwrap
     ].freeze
 
     # The current state of one statement for one actor/subject, projected from
-    # immutable events.
+    # retained event payloads.
     STATES = %w[
       active
       declined
@@ -206,7 +206,12 @@ module Clickwrap
       presentation_actor_mismatch
       presentation_subject_mismatch
       presentation_tenant_mismatch
+      presentation_channel_mismatch
       presentation_policy_mismatch
+      represented_party_mismatch
+      represented_party_authority_mismatch
+      registration_flow_mismatch
+      registration_actor_type_mismatch
       document_digest_mismatch
       integrity_check_failed
       exemption_not_accepted
@@ -222,8 +227,8 @@ module Clickwrap
       baseline
       database_hardening
       chained_history
-      independent_anchoring
-      trusted_timestamp
+      external_event_anchoring
+      third_party_timestamp
     ].freeze
 
     # Public words that would overclaim what any of this proves. The release
@@ -243,6 +248,7 @@ module Clickwrap
       "audit guaranteed",
       "qualified electronic signature",
       "trusted time",
+      "trusted_timestamp",
       "verified identity",
       "legal advice"
     ].freeze

@@ -2,15 +2,9 @@ name: Tests
 
 on:
   pull_request:
-    paths-ignore:
-      - "*.md"
-      - "LICENSE.txt"
   push:
     branches:
       - main
-    paths-ignore:
-      - "*.md"
-      - "LICENSE.txt"
 
 jobs:
   # Static gates: style, autoload health, and a buildable gem — fast,
@@ -51,7 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ruby_version: ["3.3", "3.4", "4.0"]
+        ruby_version: ["3.2", "3.3", "3.4", "4.0"]
         gemfile:
           - Gemfile
           - gemfiles/rails_7.1.gemfile

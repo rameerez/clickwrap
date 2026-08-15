@@ -22,8 +22,8 @@ module Clickwrap
       base.extend(ClassMethods)
     end
 
-    # The two controller macros. Both are available on every controller; nothing
-    # happens unless one is actually called, and neither requires Devise.
+    # The optional Devise controller macro. Nothing happens unless a host calls
+    # it, and merely loading Clickwrap never requires Devise.
     module ClassMethods
       # Devise:
       #
@@ -32,33 +32,20 @@ module Clickwrap
       #   end
       #
       # Wraps the resource save so the account and its evidence share one
-      # transaction. Devise's own emails, sign-in, and redirects are untouched:
-      # they run after `create` returns, which is after the transaction has
-      # committed.
+      # transaction. Devise's own `create` action remains the implementation of
+      # the flow; Clickwrap decorates only the resource's one `save` call.
       def clickwraps_registration_with(policy_key, **options)
-        include Clickwrap::Registration::DeviseAdapter
+        prepend Clickwrap::Registration::DeviseAdapter
 
         self.clickwrap_registration_policy = policy_key
         self.clickwrap_registration_options = options
-      end
-
-      # Rails' own authentication generator, or any hand-rolled registration:
-      #
-      #   register_with_clickwrap :signup, user: @user do
-      #     @user.save!
-      #   end
-      #
-      # Available as an instance method through ControllerHelpers; this class
-      # method exists so the two integrations read the same way in a controller.
-      def register_with_clickwrap(policy_key, **options, &block)
-        Clickwrap::Registration.perform(policy_key, **options, &block)
       end
     end
 
     # The primitive both adapters compose. A host with its own registration
     # service can call this directly and get the same guarantees.
     def self.perform(policy_key, prospective_actor:, http_request: nil, submission: nil,
-                     tenant: nil, locale: nil, &block)
+                     tenant: nil, locale: nil, registration_flow_id: nil, &block)
       raise ArgumentError, "register_with_clickwrap needs a block that persists the account" unless block
 
       Clickwrap.register!(
@@ -68,6 +55,7 @@ module Clickwrap
         submission: submission,
         tenant: tenant,
         locale: locale,
+        registration_flow_id: registration_flow_id,
         &block
       )
     end
@@ -80,65 +68,86 @@ module Clickwrap
     module DeviseAdapter
       extend ActiveSupport::Concern
 
-      included do
+      prepended do
         class_attribute :clickwrap_registration_policy, instance_writer: false
         class_attribute :clickwrap_registration_options, instance_writer: false, default: {}
       end
 
       private
 
-      # Devise calls this from `create`. Returning the resource's persisted
-      # state is the whole contract, so a failed evidence write has to surface
-      # as a raise rather than as a falsy return: `Clickwrap::EventWriteFailed`
-      # reaching the controller is precisely what stops Devise from continuing
-      # on to sign the person in and send a confirmation email for an account
-      # whose evidence does not exist.
-      def clickwrap_save_resource(resource)
-        Clickwrap::Registration.perform(
+      # Devise's public registration action owns all response, sign-in, flash,
+      # inactive-account, callback, and block-yield behavior. Its only database
+      # decision is `resource.save`. Decorating that one instance method keeps
+      # those semantics on Devise's side of the boundary and avoids copying a
+      # version-specific controller action into this gem.
+      def build_resource(*arguments, **keywords, &)
+        super.tap { install_clickwrap_save_on(resource) }
+      end
+
+      def install_clickwrap_save_on(resource)
+        return if resource.instance_variable_defined?(:@clickwrap_save_installation)
+
+        controller = self
+        singleton_class = resource.singleton_class
+        original_was_singleton = singleton_class.method_defined?(:save, false)
+        original_visibility = method_visibility(singleton_class, :save)
+
+        singleton_class.send(:alias_method, :clickwrap_save_without_evidence, :save)
+        singleton_class.send(:remove_method, :save) if original_was_singleton
+        resource.instance_variable_set(
+          :@clickwrap_save_installation,
+          { original_was_singleton: original_was_singleton, original_visibility: original_visibility }
+        )
+
+        resource.define_singleton_method(:save) do |*arguments, **keywords, &block|
+          controller.send(
+            :clickwrap_save_registration_resource,
+            self,
+            -> { clickwrap_save_without_evidence(*arguments, **keywords, &block) }
+          )
+        ensure
+          controller.send(:restore_registration_resource_save, self)
+        end
+      end
+
+      def restore_registration_resource_save(resource)
+        installation = resource.remove_instance_variable(:@clickwrap_save_installation)
+        singleton_class = resource.singleton_class
+        singleton_class.send(:remove_method, :save)
+
+        if installation.fetch(:original_was_singleton)
+          singleton_class.send(:alias_method, :save, :clickwrap_save_without_evidence)
+          singleton_class.send(installation.fetch(:original_visibility), :save)
+        end
+
+        singleton_class.send(:remove_method, :clickwrap_save_without_evidence)
+      end
+
+      def method_visibility(singleton_class, method_name)
+        return :private if singleton_class.private_method_defined?(method_name)
+        return :protected if singleton_class.protected_method_defined?(method_name)
+
+        :public
+      end
+
+      def clickwrap_save_registration_resource(resource, original_save)
+        result = Clickwrap::Registration.perform(
           clickwrap_registration_policy,
           prospective_actor: resource,
           http_request: request,
           submission: clickwrap_submission,
           tenant: clickwrap_current_tenant,
+          registration_flow_id: clickwrap_registration_flow_id(clickwrap_registration_policy),
           **clickwrap_registration_options
-        ) { resource.save }
+        ) { original_save.call }
+
+        clear_clickwrap_registration_flow_when_committed(result, clickwrap_registration_policy)
 
         resource.persisted?
-      end
-
-      # Devise's RegistrationsController#create calls `resource.save`. Wrapping
-      # it here keeps the override to one method and one line of behavior.
-      def create
-        build_resource(sign_up_params)
-
-        if clickwrap_save_resource(resource)
-          super_create_success
-        else
-          clean_up_passwords(resource)
-          set_minimum_password_length if respond_to?(:set_minimum_password_length, true)
-          respond_with(resource)
-        end
-      rescue Clickwrap::PresentationInvalid, Clickwrap::AnswerInvalid => error
-        clean_up_passwords(resource)
-        resource.errors.add(:base, error.message)
-        respond_with(resource)
-      end
-
-      def super_create_success
-        yield_resource_if_block_given
-        if resource.active_for_authentication?
-          set_flash_message! :notice, :signed_up
-          sign_up(resource_name, resource)
-          respond_with resource, location: after_sign_up_path_for(resource)
-        else
-          set_flash_message! :notice, :"signed_up_but_#{resource.inactive_message}"
-          expire_data_after_sign_in!
-          respond_with resource, location: after_inactive_sign_up_path_for(resource)
-        end
-      end
-
-      def yield_resource_if_block_given
-        yield resource if block_given?
+      rescue Clickwrap::PresentationInvalid, Clickwrap::AnswerInvalid,
+             Clickwrap::RegistrationFailed, ActiveRecord::RecordInvalid => error
+        resource.errors.add(:base, error.message) if resource.errors.empty?
+        false
       end
 
       def clickwrap_current_tenant

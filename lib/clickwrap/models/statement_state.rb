@@ -4,11 +4,14 @@ module Clickwrap
   # The current-state projection: the answer to "does this person currently have
   # X?" without walking the whole event history on every request.
   #
-  # This table is a cache of a computation over immutable events, and it can be
-  # rebuilt from them at any time. Nothing here is evidence — the evidence is in
-  # `clickwrap_events`. That separation is what lets this row be mutable,
-  # indexed, and fast without any of those properties leaking into the record of
-  # what actually happened.
+  # This table is a cache of a computation over retained event payloads. Nothing
+  # here is evidence — the evidence is in `clickwrap_events`. Before retention
+  # disposes of a root payload it can be rebuilt from those events; afterward,
+  # deleting this projection would try to recreate personal identity facts that
+  # the reviewed disposition intentionally removed. `CurrentState.rebuild_for!`
+  # therefore refuses that destructive operation when it can see such a root.
+  # That separation lets this row be mutable, indexed, and fast without those
+  # properties leaking into the evidence record.
   #
   # The unique index on identity is doing real work: it is what stops two
   # concurrent submits from producing two live grants, or two usable
@@ -38,20 +41,22 @@ module Clickwrap
     scope :expiring_before, ->(moment) { where.not(expires_at: nil).where(expires_at: ...moment) }
 
     scope :due_for_expiry, lambda { |at = Clickwrap.now|
-      active.where.not(expires_at: nil).where(expires_at: ...at)
+      active.where.not(expires_at: nil).where(expires_at: ..at)
     }
 
     # The identity a unique index can enforce. NULLs do not collide in a unique
     # index on most adapters, so "no tenant" and "no subject" are the empty
     # string rather than NULL — otherwise a policy with no subject would happily
     # accumulate duplicate live grants.
-    def self.identity_for(policy_key:, statement_key:, actor_reference:, tenant_key: nil, subject_key: nil)
+    def self.identity_for(policy_key:, statement_key:, actor_reference:, tenant_key: nil,
+                          subject_key: nil, represented_party_reference: nil)
       attributes = {
         policy_key: policy_key.to_s,
         statement_key: statement_key.to_s,
         actor_reference: actor_reference.to_s,
         tenant_key: tenant_key.to_s,
-        subject_key: subject_key.to_s
+        subject_key: subject_key.to_s,
+        represented_party_reference: represented_party_reference.to_s
       }
 
       attributes.merge(identity_digest: identity_digest_for(attributes))
@@ -64,13 +69,8 @@ module Clickwrap
       Digest.digest_canonical(attributes.transform_keys(&:to_s))
     end
 
-    def self.subject_key_for(subject)
-      return "" if subject.nil?
-      return subject.to_s if subject.is_a?(String)
-      return subject.to_gid.to_s if subject.respond_to?(:to_gid)
-
-      "#{subject.class.name}/#{subject.id}"
-    end
+    def self.subject_key_for(subject) = Reference.subject(subject)
+    def self.tenant_key_for(tenant) = Reference.tenant(tenant)
 
     def current_event = Event.find_by(id: current_event_id)
 
@@ -95,10 +95,9 @@ module Clickwrap
       case state
       when "withdrawn" then :consent_withdrawn
       when "declined" then :declined
-      when "superseded" then :superseded
+      when "superseded", "corrected" then :superseded
       when "revoked" then :revoked
       when "consumed" then :authorization_consumed
-      when "corrected" then :superseded
       when "exempted" then :exemption_not_accepted
       when "expired" then expiry_error
       else expired?(at) ? expiry_error : :no_evidence
@@ -115,13 +114,13 @@ module Clickwrap
         statement_key: statement_key.to_s,
         actor_reference: actor_reference.to_s,
         tenant_key: tenant_key.to_s,
-        subject_key: subject_key.to_s
+        subject_key: subject_key.to_s,
+        represented_party_reference: represented_party_reference.to_s
       )
     end
 
     def expiry_error
       case kind
-      when "declaration" then :declaration_expired
       when "acknowledgment" then :acknowledgment_expired
       when "authorization" then :authorization_expired
       else :declaration_expired

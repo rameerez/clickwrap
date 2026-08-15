@@ -36,6 +36,10 @@ module Clickwrap
         previous_digest_does_not_link
         sequence_gap
         earlier_events_missing
+        chain_head_missing
+        chain_tail_missing
+        chain_head_event_mismatch
+        chain_head_digest_mismatch
       ].freeze
 
       Break = Data.define(:chain_scope, :chain_sequence, :event_id, :reason, :detail) do
@@ -52,12 +56,26 @@ module Clickwrap
         def to_s = "#{chain_scope}##{chain_sequence} #{event_id}: #{detail}"
       end
 
-      Result = Data.define(:chaining_enabled, :checked, :verified, :scopes, :breaks, :started_mid_chain) do
+      Result = Data.define(
+        :chaining_enabled,
+        :checked,
+        :verified,
+        :documented_dispositions,
+        :scopes,
+        :breaks,
+        :started_mid_chain
+      ) do
         def success? = breaks.empty?
         def first_break = breaks.first
 
         def counts
-          { "checked" => checked, "verified" => verified, "breaks" => breaks.length, "scopes" => scopes.length }
+          {
+            "checked" => checked,
+            "verified" => verified,
+            "documented_dispositions" => documented_dispositions,
+            "breaks" => breaks.length,
+            "scopes" => scopes.length
+          }
         end
 
         def to_h
@@ -88,6 +106,7 @@ module Clickwrap
         @breaks = []
         @checked = 0
         @verified = 0
+        @documented_dispositions = 0
         @started_mid_chain = []
       end
 
@@ -101,6 +120,7 @@ module Clickwrap
           chaining_enabled: !Clickwrap.config.chain_event_history_with.nil?,
           checked: @checked,
           verified: @verified,
+          documented_dispositions: @documented_dispositions,
           scopes: scopes,
           breaks: @breaks,
           started_mid_chain: @started_mid_chain
@@ -112,7 +132,9 @@ module Clickwrap
       def chain_scopes
         return [scope] if scope
 
-        Event.where.not(chain_scope: nil).distinct.pluck(:chain_scope).compact.sort
+        event_scopes = Event.where.not(chain_scope: nil).distinct.pluck(:chain_scope)
+        head_scopes = ChainHead.distinct.pluck(:chain_scope)
+        (event_scopes + head_scopes).compact.uniq.sort
       end
 
       def walk(chain_scope)
@@ -130,6 +152,65 @@ module Clickwrap
           check_digest(chain_scope, event)
           previous = event
         end
+
+        check_durable_head(chain_scope, previous) if full_chain_walk?
+      end
+
+      def check_durable_head(chain_scope, last_event)
+        head = ChainHead.find_by(chain_scope: chain_scope)
+
+        unless head
+          add_head_break(
+            chain_scope,
+            last_event,
+            :chain_head_missing,
+            "Events name this chain scope, but its durable chain-head row is missing. The walk " \
+            "cannot establish whether the newest recorded events are still present."
+          )
+          return
+        end
+
+        if last_event.nil?
+          return if head.chain_sequence.to_i.zero? && head.last_event_id.blank? && head.last_event_digest.blank?
+
+          add_head_break(
+            chain_scope,
+            nil,
+            :chain_tail_missing,
+            "The durable head records sequence #{head.chain_sequence} and event #{head.last_event_id}, " \
+            "but this scope has no event rows. Its recorded tail is missing."
+          )
+          return
+        end
+
+        if last_event.chain_sequence != head.chain_sequence
+          add_head_break(
+            chain_scope,
+            last_event,
+            :chain_tail_missing,
+            "The newest event row is sequence #{last_event.chain_sequence}, while the durable " \
+            "head records sequence #{head.chain_sequence}. One or more newest events are missing."
+          )
+        end
+
+        if last_event.id.to_s != head.last_event_id.to_s
+          add_head_break(
+            chain_scope,
+            last_event,
+            :chain_head_event_mismatch,
+            "The newest event row is #{last_event.id}, while the durable head names " \
+            "#{head.last_event_id}. The head and chain tail do not describe the same event."
+          )
+        end
+
+        return if Digest.secure_compare?(last_event.event_digest.to_s, head.last_event_digest.to_s)
+
+        add_head_break(
+          chain_scope,
+          last_event,
+          :chain_head_digest_mismatch,
+          "The newest event digest does not match the digest retained by the durable chain head."
+        )
       end
 
       # Keyset pagination on the (chain_scope, chain_sequence) index. `find_each`
@@ -196,15 +277,18 @@ module Clickwrap
       end
 
       def check_digest(chain_scope, event)
-        if event.digest_verified?
+        case event.digest_integrity_status
+        when :verified
           @verified += 1
-          return
+        when :documented_core_disposition
+          @documented_dispositions += 1
+        else
+          add_break(chain_scope, event, :digest_does_not_match,
+                    "Recomputing the canonical body of this event produces a different digest than " \
+                    "the one stored with it, and no valid disposition event accounts for the missing " \
+                    "payload. Its meaningful bytes changed after it was written or its disposition " \
+                    "marker is unexplained. That does not, on its own, say who changed it or when.")
         end
-
-        add_break(chain_scope, event, :digest_does_not_match,
-                  "Recomputing the canonical body of this event produces a different digest than " \
-                  "the one stored with it, so its meaningful bytes changed after it was written. " \
-                  "That does not, on its own, say who changed them or when.")
       end
 
       def add_break(chain_scope, event, reason, detail)
@@ -212,7 +296,18 @@ module Clickwrap
                              event_id: event.id, reason: reason, detail: detail)
       end
 
+      def add_head_break(chain_scope, event, reason, detail)
+        @breaks << Break.new(
+          chain_scope: chain_scope,
+          chain_sequence: event&.chain_sequence,
+          event_id: event&.id,
+          reason: reason,
+          detail: detail
+        )
+      end
+
       def bounded_run? = !from.nil?
+      def full_chain_walk? = from.nil? && to.nil?
     end
   end
 end

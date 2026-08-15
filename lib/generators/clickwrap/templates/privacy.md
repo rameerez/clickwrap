@@ -29,8 +29,8 @@ configuration; it does not judge it.
 1. Replace this file with your own reviewed Privacy Notice.
 2. Set the matching `version:` label in `config/clickwrap.rb`.
 3. Run `bin/rails clickwrap:publish` to freeze an immutable snapshot.
-4. Publish a NEW version whenever the text changes, so a receipt keeps showing
-   the notice that was actually presented.
+4. Publish a NEW version whenever the text changes, so a receipt keeps binding
+   the notice version in the accepted server offer.
 
 Note how this document is used in `config/clickwrap.rb`: it is `acknowledge`,
 not `agree_to` and not `consent_to`. A notice is information people are entitled

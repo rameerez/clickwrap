@@ -47,7 +47,8 @@ module Clickwrap
     # options for the button. Everything else in `**html_options` decorates the
     # wrapper element, so a design system can hang its own classes on the block.
     def clickwrap(policy_key, submit:, actor: NOT_GIVEN, subject: nil, tenant: NOT_GIVEN,
-                  locale: nil, capture_channel: nil, errors: nil, **html_options)
+                  acting_for: nil, locale: nil, capture_channel: nil, errors: nil, **html_options)
+      clickwrap_reserve_form_presentation!(policy_key)
       text, button_options = clickwrap_split_submit(submit)
 
       presentation = clickwrap_present(
@@ -56,6 +57,7 @@ module Clickwrap
         actor: actor,
         subject: subject,
         tenant: tenant,
+        acting_for: acting_for,
         locale: locale,
         capture_channel: capture_channel
       )
@@ -83,14 +85,16 @@ module Clickwrap
     # remains the preferred call precisely because it makes that whole class of
     # drift impossible.
     def clickwrap_fields(policy_key, submit_button_text:, actor: NOT_GIVEN, subject: nil,
-                         tenant: NOT_GIVEN, locale: nil, capture_channel: nil, errors: nil,
+                         tenant: NOT_GIVEN, acting_for: nil, locale: nil, capture_channel: nil, errors: nil,
                          **html_options)
+      clickwrap_reserve_form_presentation!(policy_key)
       presentation = clickwrap_present(
         policy_key,
         submit_button_text: submit_button_text,
         actor: actor,
         subject: subject,
         tenant: tenant,
+        acting_for: acting_for,
         locale: locale,
         capture_channel: capture_channel
       )
@@ -105,16 +109,40 @@ module Clickwrap
 
     private
 
-    def clickwrap_present(policy_key, submit_button_text:, actor:, subject:, tenant:, locale:,
-                          capture_channel:)
+    def clickwrap_reserve_form_presentation!(policy_key)
+      return @clickwrap_policy_rendered_in_this_form = policy_key.to_s if @clickwrap_policy_rendered_in_this_form.nil?
+
+      raise ConfigurationError,
+            "One Rails form can submit only one Clickwrap presentation. This form already renders " \
+            "#{@clickwrap_policy_rendered_in_this_form.inspect} and tried to render #{policy_key.to_s.inspect}. " \
+            "Put the statements in one Clickwrap policy, or use a separate form for each policy, so " \
+            "the request carries one unambiguous signed presentation token."
+    end
+
+    def clickwrap_present(policy_key, submit_button_text:, actor:, subject:, tenant:, acting_for:,
+                          locale:, capture_channel:)
       options = {
         actor: actor.equal?(NOT_GIVEN) ? clickwrap_actor_from_view_context : actor,
         subject: subject,
+        acting_for: acting_for,
         tenant: tenant.equal?(NOT_GIVEN) ? clickwrap_tenant_from_view_context : tenant,
         locale: locale || clickwrap_locale_from_view_context,
         submit_button_text: submit_button_text
       }
       options[:capture_channel] = capture_channel if capture_channel
+
+      if options[:actor].nil? && @object.respond_to?(:new_record?) && @object.new_record?
+        controller = @template.try(:controller)
+
+        unless controller.respond_to?(:clickwrap_registration_flow_id, true)
+          raise ConfigurationError,
+                "A signup clickwrap needs a controller session to bind its registration flow. " \
+                "Include Clickwrap::ControllerHelpers in the parent controller."
+        end
+
+        options[:prospective_actor] = @object
+        options[:registration_flow_id] = controller.send(:clickwrap_registration_flow_id, policy_key)
+      end
 
       Clickwrap.present(policy_key, **options)
     end

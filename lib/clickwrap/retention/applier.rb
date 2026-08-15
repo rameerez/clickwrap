@@ -61,9 +61,12 @@ module Clickwrap
         def clean? = errors.empty?
       end
 
-      def initialize(plan, applied_by:)
+      def initialize(plan, applied_by:, recover_application_if_stale_for: nil,
+                     because_recovery_is_needed: nil)
         @plan = plan
         @applied_by = applied_by
+        @recover_application_if_stale_for = recover_application_if_stale_for
+        @because_recovery_is_needed = because_recovery_is_needed
         @at = Clickwrap.now
         @applied = []
         @skipped_held = []
@@ -77,7 +80,11 @@ module Clickwrap
         # First, before anything is read or deleted: is this plan still one
         # somebody may act on? An expired, superseded, or already-applied plan
         # names a set that nobody currently agrees to.
-        plan.ensure_usable!
+        plan.claim_for_application!(
+          by_reference: reference_for(applied_by),
+          recover_if_stale_after: @recover_application_if_stale_for,
+          because_recovery_is_needed: @because_recovery_is_needed
+        )
 
         plan_items.each { |item| apply_item(item) }
 
@@ -85,16 +92,16 @@ module Clickwrap
         # that could be run twice would be a plan whose second run nobody
         # reviewed; the operator re-plans instead, and the fresh plan shows what
         # is still outstanding.
-        plan.mark_applied!(by_reference: reference_for(applied_by))
-
-        Result.new(applied: @applied, skipped_held: @skipped_held,
-                   skipped_changed: @skipped_changed, errors: @errors)
+        result = Result.new(applied: @applied, skipped_held: @skipped_held,
+                            skipped_changed: @skipped_changed, errors: @errors)
+        plan.finish_application!(outcome_summary: result.to_h, had_errors: @errors.any?)
+        result
       end
 
       private
 
       def plan_items
-        Array(plan.scope.to_h["items"]).map { |entry| Planner::Item.from_plan_entry(entry) }
+        Array(plan.disposition_scope.to_h["items"]).map { |entry| Planner::Item.from_plan_entry(entry) }
       end
 
       def apply_item(item)
@@ -217,10 +224,7 @@ module Clickwrap
       end
 
       def reference_for(actor)
-        return nil if actor.nil?
-        return actor if actor.is_a?(String)
-
-        Clickwrap.config.identify_actor_with.call(actor)
+        Reference.actor(actor)
       end
     end
   end

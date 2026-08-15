@@ -31,29 +31,12 @@ module Clickwrap
       # are the record that an estimate existed and was disposed of on schedule.
       # Erasing them too would turn a documented deletion into a gap, which is
       # the one outcome a retention process must never produce.
-      IP_GEOLOCATION_VALUE_COLUMNS = %w[
-        ip_geolocation_country_code
-        ip_geolocation_country_name
-        ip_geolocation_region_name
-        ip_geolocation_region_code
-        ip_geolocation_city_name
-        ip_geolocation_postal_code
-        ip_geolocation_latitude
-        ip_geolocation_longitude
-        ip_geolocation_timezone
-        ip_geolocation_continent_code
-        ip_geolocation_metro_code
-        ip_geolocation_accuracy_radius_in_kilometers
-      ].freeze
+      IP_GEOLOCATION_VALUE_COLUMNS = RequestEvidence::IP_GEOLOCATION_VALUE_COLUMNS
 
       # One category, one set of columns. The raw values are the only things
       # that go; the reader name, the trusted-proxy configuration digest, and
       # the recorded-at timestamp explain where the deleted value came from.
-      COLUMNS_FOR_FIELD = {
-        ip_address: %w[ip_address_ciphertext].freeze,
-        browser_user_agent: %w[browser_user_agent_ciphertext].freeze,
-        ip_geolocation: IP_GEOLOCATION_VALUE_COLUMNS
-      }.freeze
+      COLUMNS_FOR_FIELD = RequestEvidence::VALUE_COLUMNS_BY_CATEGORY
 
       class << self
         # Deletes one recorded request-evidence field from the annex attached to
@@ -67,48 +50,64 @@ module Clickwrap
           field = normalize_field!(field)
           require_reason!(because, "Deleting the recorded #{field}")
 
-          event = event_for(receipt_or_event)
-          refuse_while_on_legal_hold!(event, "the recorded #{field}")
+          event_id = event_for(receipt_or_event).id
 
-          # Read the annex from the database rather than through whatever the
-          # caller's object happens to have cached. A deletion has to be decided
-          # on the row as it stands right now, and a receipt handed around a
-          # request cycle may have loaded its annex several queries ago.
-          annex = RequestEvidence.find_by(event_id: event.id)
-          return nil if annex.nil?
-          return nil if annex.deleted_for?(field)
-          return nil if annex.public_send(:"#{field}_recorded_at").nil?
+          ::ActiveRecord::Base.transaction do
+            event = Event.lock.find(event_id)
+            refuse_while_on_legal_hold!(event, "the recorded #{field}")
 
-          delete_annex_field!(annex, event, field, because)
+            annex = RequestEvidence.lock.find_by(event_id: event.id)
+            return nil if annex.nil?
+            return nil if annex.deleted_for?(field)
+            return nil if annex.public_send(:"#{field}_recorded_at").nil?
+
+            status = event.request_evidence_binding_status
+            unless %i[verified disposed_with_documented_events].include?(status)
+              raise ImmutableEvidenceError,
+                    "Request evidence for event #{event.id} failed its binding check (#{status}); " \
+                    "Clickwrap refused to delete it because disposition must not hide an integrity problem."
+            end
+
+            delete_annex_field!(annex, event, field, because)
+          end
         end
 
         # Marks a core event disposed of under its retention rule.
         #
         # The row stays. What changes is `core_event_disposed_at`, which is one
-        # of the three columns the append-only Event model permits, and a linked
+        # of the named columns the Event model permits for disposition, and a linked
         # `disposition` event that explains it. An auditor then reads a
         # documented disposition rather than finding a hole where an agreement
         # used to be, and verification of the surrounding chain still works.
         def dispose_core_event!(event, because:)
           event = event_for(event)
           require_reason!(because, "Disposing of the core event")
-          refuse_while_on_legal_hold!(event, "the core event")
-
-          # Same reasoning as the annex: `core_event_disposed_at` is one of the
-          # three columns that can change after an event is written, so it is
-          # read fresh instead of trusted from a loaded object. Appending a
-          # second disposition event for a disposition that already happened
-          # would put an event in the record that describes nothing.
-          return nil if Event.where(id: event.id).pick(:core_event_disposed_at).present?
 
           ::ActiveRecord::Base.transaction do
-            event.mark_core_event_disposed!
+            event = Event.lock.find(event.id)
+            return nil if event.disposed?
 
-            Lifecycle.append_lifecycle_event!(
+            refuse_while_on_legal_hold!(event, "the core event")
+            disposed_at = Clickwrap.now
+            disposition = Lifecycle.append_lifecycle_event!(
               event: event,
               event_type: "disposition",
-              reason: "Disposed of the core event under its retention rule. #{because}"
+              reason: "Disposed of the core event under its retention rule. #{because}",
+              extra: {
+                protected_outcome: {
+                  "core_event_disposition" => {
+                    "event_id" => event.id,
+                    "original_event_digest" => event.event_digest,
+                    "disposed_at" => Receipt.format_time(disposed_at),
+                    "removed_statement_count" => event.statements.size,
+                    "removed_document_binding_count" => event.documents.size,
+                    "removed_fields" => core_payload_field_names
+                  }
+                }
+              }
             )
+            event.dispose_core_payload!(disposition_event: disposition, at: disposed_at)
+            disposition
           end
         end
 
@@ -120,11 +119,11 @@ module Clickwrap
           return true if event.on_legal_hold?
 
           holds = LegalHold.in_effect
-          return true if holds.where(scope: "event", event_id: event.id).exists?
+          return true if holds.where(hold_scope: "event", event_id: event.id).exists?
           return true if event.actor_reference.present? &&
-                         holds.where(scope: "actor", actor_reference: event.actor_reference).exists?
+                         holds.where(hold_scope: "actor", actor_reference: event.actor_reference).exists?
 
-          holds.where(scope: "policy", policy_key: event.policy_key).exists?
+          holds.where(hold_scope: "policy", policy_key: event.policy_key).exists?
         end
 
         # Resolves a receipt, an event, or an event id to the event itself, so
@@ -140,6 +139,14 @@ module Clickwrap
         end
 
         private
+
+        def core_payload_field_names
+          %w[
+            actor actor_reference actor_snapshot represented_party authority tenant subject
+            authentication_context idempotency_key http_request presentation protected_outcome
+            provider_receipt provider_verification reason statements document_bindings
+          ]
+        end
 
         # The deletion itself, plus the event that documents it, in one
         # transaction. Either both happen or neither does: a value that
@@ -161,18 +168,23 @@ module Clickwrap
         # reports the field as `deleted_after_retention` with the timestamp, so
         # a reader is told which it is.
         def delete_annex_field!(annex, event, field, because)
-          ::ActiveRecord::Base.transaction do
-            annex.update!(
-              COLUMNS_FOR_FIELD.fetch(field).to_h { |column| [column, nil] }
-                               .merge("#{field}_deleted_at" => Clickwrap.now)
-            )
+          disposed_at = Clickwrap.now
+          annex.dispose_category!(field, at: disposed_at)
 
-            Lifecycle.append_lifecycle_event!(
-              event: event,
-              event_type: "disposition",
-              reason: "Deleted the recorded #{field}. #{because}"
-            )
-          end
+          Lifecycle.append_lifecycle_event!(
+            event: event,
+            event_type: "disposition",
+            reason: "Deleted the recorded #{field}. #{because}",
+            extra: {
+              protected_outcome: {
+                "request_evidence_disposition" => {
+                  "category" => field.to_s,
+                  "annex_id" => annex.id.to_s,
+                  "disposed_at" => Receipt.format_time(disposed_at)
+                }
+              }
+            }
+          )
         end
 
         def normalize_field!(field)

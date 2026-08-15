@@ -46,10 +46,13 @@ decision.
 
 ## States and how they change
 
-Current state is a **projection**. Everything in `clickwrap_statement_states` is derived from
-`clickwrap_events`; drop the table and `CurrentState.rebuild_for!(actor_reference:)` rebuilds
-it. Keeping the projection strictly downstream of the events is what lets it be mutable and
-fast without any of that leaking into the record of what actually happened.
+Current state is a **projection** derived from retained event payloads.
+`CurrentState.rebuild_for!(actor_reference:)` replays those payloads while they still contain
+the affected statement identity. A reviewed core disposition deliberately removes that personal
+identity; after that point the method refuses to delete an existing projection that depends on
+the disposed root. Do not drop the projection after core disposition and expect removed identity
+facts to be reconstructed. Keeping it downstream of retained evidence is what lets it be mutable
+and fast without treating the projection itself as the evidence record.
 
 | State | Satisfies a requirement | How a statement gets there |
 |---|---|---|
@@ -278,5 +281,4 @@ repurposed.
 | [AEPD FAQ 02.48](https://www.aepd.es/preguntas-frecuentes/2-tus-obligaciones-como-responsable-del-tratamiento/6-el-deber-de-informacion/FAQ-0248-sobre-si-el-usuario-tiene-que-dar-consentimiento-a-clausula-de-privacidad) — a privacy-information checkbox is not blanket consent | Regulator guidance |
 | [Directive 93/13/EEC](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=celex%3A31993L0013) — electronic form does not make an unfair term fair | Law |
 | [15 U.S.C. § 7001](https://www.law.cornell.edu/uscode/text/15/7001), [§ 7003](https://www.law.cornell.edu/uscode/text/15/7003) — electronic validity preserved, substantive requirements and exclusions retained | Law |
-| `lib/clickwrap/vocabulary.rb`, `lib/clickwrap/dsl/policy_builder.rb`, `lib/clickwrap/statement.rb`, `lib/clickwrap/current_state.rb`, `lib/clickwrap/models/event_statement.rb` at commit `a1ffe9b` | Pinned source code |
 | The six-kind taxonomy, the capability matrix, and the decision order above | Product-design inference |

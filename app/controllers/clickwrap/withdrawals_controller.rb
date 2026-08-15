@@ -24,6 +24,7 @@ module Clickwrap
       Clickwrap.withdraw!(
         @purpose_key,
         actor: clickwrap_current_actor,
+        tenant: clickwrap_current_tenant,
         http_request: request,
         because: t("clickwrap.withdrawals.recorded_reason")
       )

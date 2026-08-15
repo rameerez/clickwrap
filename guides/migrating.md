@@ -20,7 +20,7 @@ because the gap is a fact about the evidence and the invention is a lie about it
 | Field | Why it cannot be filled in |
 |---|---|
 | The presentation manifest | Nobody signed one. There is no offer to reproduce, and a synthesized manifest would be a signed description of an offer nobody made |
-| The assertion | The sentence the person was actually shown was not recorded. Using the current policy's wording would claim they saw text that may not have existed yet |
+| The assertion | The sentence the old application generated or offered was not recorded. Using the current policy's wording would claim it offered text that may not have existed yet |
 | Submit-button text | The words on the control were not recorded |
 | IP address, browser user-agent, IP geolocation | These were never observed by this application. A later session's address is a different fact about a different request |
 | Document bytes and digests | Only linked when the caller can point at a version that is **actually published here**. A version label alone is a claim about a label, not about content |
@@ -149,8 +149,8 @@ nothing.
 The assertion says, in the receipt, exactly what this is:
 
 > Imported from a pre-existing record: it states that this actor agreed to terms on
-> 2023-04-11T08:22:07.000000Z. The original wording shown to them was not recorded, so this is
-> not the sentence they saw. Not recorded by the source and therefore unknown: assertion,
+> 2023-04-11T08:22:07.000000Z. The source system's original offer wording was not recorded, so
+> this receipt does not reproduce it. Not recorded by the source and therefore unknown: assertion,
 > exact_document_bytes, presentation, request_evidence, submit_button_text. Imported from
 > users.accepted_terms_at.
 
@@ -181,7 +181,15 @@ If the policy has optional consent statements, `import_legacy!` imports only the
 ones unless you name statements explicitly:
 
 ```ruby
-Clickwrap.import_legacy!(:signup, ..., statements: %i[terms privacy_notice])
+Clickwrap.import_legacy!(
+  :signup,
+  actor: user,
+  occurred_at: user.accepted_terms_at,
+  known: { document_version: user.terms_version },
+  unknown: %i[exact_document_bytes presentation assertion request_evidence],
+  because: "Imported from users.accepted_terms_at",
+  statements: %i[terms privacy_notice]
+)
 ```
 
 A legacy boolean column recorded one decision. Reading it as a grant of an optional consent
@@ -318,5 +326,4 @@ decision to make explicitly rather than one to discover from a failing predicate
 |---|---|
 | [FinePrint README at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/README.md#L7-L25) | Pinned source code |
 | [FinePrint signature model at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/app/models/fine_print/signature.rb#L1-L33) | Pinned source code |
-| `lib/clickwrap/import/legacy.rb`, `lib/clickwrap/import/fine_print.rb`, `lib/clickwrap/vocabulary.rb` at commit `a1ffe9b` | Pinned source code |
 | The never-synthesize rule, the `unknown:` vocabulary, and the dry-run-first workflow | Product-design inference |

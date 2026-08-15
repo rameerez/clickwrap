@@ -41,9 +41,13 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     # exact_document_bytes was listed unknown, so no document rows were invented.
     assert_empty event.documents
 
-    # The projection answers current-state questions after a migration.
-    assert_clickwrap_agreed_to :terms, actor: @user
-    assert_clickwrap_acknowledged :privacy_notice, actor: @user
+    # A migration preserves what the old database says happened, including its
+    # unknowns, but it cannot retroactively turn that row into a verified human
+    # act through Clickwrap's presentation/capture path. Imported evidence is
+    # historical evidence, never a live grant.
+    refute_clickwrap_current :signup, actor: @user
+    refute @user.clickwraps.agreed_to?(:terms)
+    refute @user.clickwraps.acknowledged?(:privacy_notice)
   end
 
   test "import_legacy! is idempotent and dry-runnable" do
@@ -136,6 +140,53 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_not @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
   end
 
+  test "an outbox-row failure rolls its authorization evidence back" do
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    Clickwrap::ExternalAction.stubs(:create!).raises(
+      ActiveRecord::StatementInvalid.new("outbox write unavailable")
+    )
+
+    assert_raises(ActiveRecord::StatementInvalid) do
+      Clickwrap.authorize_external_action!(
+        :withdrawal_authorization,
+        actor: @user,
+        subject: withdrawal,
+        provider_name: "stripe",
+        submission: submission_for(
+          presentation,
+          { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+        )
+      )
+    end
+
+    assert_equal 0, Clickwrap::ExternalAction.count
+    assert_no_clickwrap_event :withdrawal_authorization, actor: @user
+    assert_not @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
+  end
+
+  test "a failed provider-outcome event rolls the outbox transition back and can be retried" do
+    action, withdrawal = pending_external_action
+
+    Clickwrap::Testing.fail_next_event_write do
+      assert_raises(Clickwrap::EventWriteFailed) do
+        action.record_provider_success_and_consume!("provider_id" => "pi_retryable")
+      end
+    end
+
+    assert_equal "pending", action.reload.state
+    assert_equal 0, action.attempt_count
+    assert_nil action.provider_receipt
+    assert_equal 0, Clickwrap::Event.where(event_type: %w[provider_outcome consumption]).count
+    assert @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
+
+    action.record_provider_success_and_consume!("provider_id" => "pi_retryable")
+
+    assert_equal "succeeded", action.reload.state
+    assert_equal 1, action.attempt_count
+    assert_not @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
+  end
+
   test "a repeated authorization request reuses the same outbox row and key" do
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
@@ -153,6 +204,64 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_equal first.id, again.id
     assert_equal first.idempotency_key, again.idempotency_key
     assert_equal 1, Clickwrap::ExternalAction.count
+  end
+
+  test "a repeated provider success is idempotent only when its evidence agrees" do
+    action, withdrawal = pending_external_action
+
+    action.record_provider_success_and_consume!("provider_id" => "pi_1")
+    counts = [
+      Clickwrap::Event.where(event_type: "provider_outcome").count,
+      Clickwrap::Event.where(event_type: "consumption").count
+    ]
+
+    action.record_provider_success_and_consume!("provider_id" => "pi_1")
+    assert_equal counts, [
+      Clickwrap::Event.where(event_type: "provider_outcome").count,
+      Clickwrap::Event.where(event_type: "consumption").count
+    ]
+    assert_not @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
+
+    assert_raises(Clickwrap::ExternalActionAlreadyResolved) do
+      action.record_provider_success_and_consume!("provider_id" => "pi_different")
+    end
+  end
+
+  test "unknown provider observations remain reconcilable and each different attempt is appended" do
+    action, = pending_external_action
+
+    action.record_provider_outcome_unknown!(reason: "First request timed out")
+    first_attempts = action.reload.attempt_count
+    first_events = Clickwrap::Event.where(event_type: "provider_outcome").count
+
+    action.record_provider_outcome_unknown!(reason: "Reconciliation endpoint timed out")
+
+    assert_equal "unknown", action.reload.state
+    assert_equal first_attempts + 1, action.attempt_count
+    assert_equal first_events + 1, Clickwrap::Event.where(event_type: "provider_outcome").count
+
+    action.record_provider_success_and_consume!("provider_id" => "pi_later")
+    assert_equal "succeeded", action.reload.state
+    assert action.resolved?
+  end
+
+  test "a late success for authorization A never consumes newer authorization B" do
+    action_a, withdrawal = pending_external_action
+    action_b = create_pending_external_action(withdrawal)
+
+    current_before = @user.clickwraps.authorization(:withdrawal, subject: withdrawal)
+    assert_equal action_b.event_id, current_before.root_event_id
+
+    action_a.record_provider_success_and_consume!("provider_id" => "pi_a")
+
+    current_after = @user.clickwraps.authorization(:withdrawal, subject: withdrawal)
+    assert_equal action_b.event_id, current_after.root_event_id
+    assert_equal "active", current_after.state
+    assert @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
+
+    consumption = Clickwrap::Event.where(event_type: "consumption", root_event_id: action_a.event_id).last
+    assert consumption
+    assert_equal action_a.event_id, consumption.predecessor_event_id
   end
 
   # --- Testing ---------------------------------------------------------------
@@ -315,14 +424,16 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
   # --- ReceiptVerifier --------------------------------------------------------
 
-  test "the standalone verifier reads a real exported receipt" do
+  test "the standalone verifier validates receipt internals and reports missing document artifacts" do
     receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     # No hand-built stand-in: this is exactly the bytes `to_canonical_json`
     # produces, which is exactly what a host writes to a file.
     result = Clickwrap::ReceiptVerifier.verify(receipt.to_canonical_json)
 
-    assert result.success?, result.to_s
+    refute result.success?, result.to_s
+    assert result.failures.empty?, result.to_s
+    assert result.skipped.any?, result.to_s
     assert_equal "clickwrap.receipt.v1", result.schema
     assert(result.checks.any? { |check| check.name == "receipt_digest" && check.passed? })
     assert(result.checks.any? { |check| check.name == "canonical_bytes" && check.passed? })
@@ -330,13 +441,16 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
   test "the standalone verifier checks supplied document bytes and reports the ones it was not given" do
     receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
-    terms = Clickwrap::Document.find_by(key: "terms").current_version
+    terms = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     with_terms = Clickwrap::ReceiptVerifier.verify(
-      receipt.to_canonical_json, documents: { "terms" => terms.content_bytes }
+      receipt.to_canonical_json,
+      documents: {
+        "terms" => { source: terms.content_bytes, rendered: terms.rendered_bytes }
+      }
     )
-    assert with_terms.success?, with_terms.to_s
-    assert(with_terms.checks.any? { |check| check.name.include?("terms") && check.passed? })
+    refute with_terms.success?, with_terms.to_s
+    assert(with_terms.checks.count { |check| check.name.include?("terms") && check.passed? } == 2)
 
     # A document nobody supplied is neither a pass nor a failure. Collapsing the
     # three states into two is how "we did not look" becomes "we looked and it
@@ -344,7 +458,13 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert with_terms.skipped.any?, with_terms.to_s
 
     wrong = Clickwrap::ReceiptVerifier.verify(
-      receipt.to_canonical_json, documents: { "terms" => "these are not the bytes that were shown" }
+      receipt.to_canonical_json,
+      documents: {
+        "terms" => {
+          source: terms.content_bytes,
+          rendered: "these are not the rendered bytes the receipt bound"
+        }
+      }
     )
     assert_not wrong.success?
     assert(wrong.failures.any? { |check| check.name.include?("terms") })
@@ -381,5 +501,106 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert integrity["receipt_digest"].start_with?("sha256:")
     assert integrity["event_digest"].start_with?("sha256:")
     assert_not_equal integrity["receipt_digest"], integrity["event_digest"]
+  end
+
+  test "the standalone verifier re-derives every lifecycle successor event" do
+    receipt = capture_clickwrap(
+      :marketing_preferences,
+      actor: @user,
+      answers: { product_updates: "1" }
+    )
+    withdrawal = Clickwrap.withdraw!(
+      :product_updates,
+      actor: @user,
+      because: "The actor withdrew product updates"
+    )
+
+    result = Clickwrap::ReceiptVerifier.verify(
+      receipt.to_canonical_json,
+      documents: document_artifacts_for(receipt)
+    )
+
+    assert result.success?, result.to_s
+    assert(
+      result.checks.any? do |check|
+        check.name == "lifecycle_successor:#{withdrawal.id}" && check.passed?
+      end
+    )
+  end
+
+  test "a recomputed receipt digest cannot hide an edited lifecycle successor" do
+    receipt = capture_clickwrap(
+      :marketing_preferences,
+      actor: @user,
+      answers: { product_updates: "1" }
+    )
+    Clickwrap.withdraw!(
+      :product_updates,
+      actor: @user,
+      because: "The actor withdrew product updates"
+    )
+    body = JSON.parse(receipt.to_canonical_json)
+    body.dig("lifecycle", "successors").first["reason"] = "A reason nobody recorded"
+    refresh_receipt_digest!(body)
+
+    result = Clickwrap::ReceiptVerifier.verify(
+      Clickwrap::CanonicalJson.generate(body),
+      documents: document_artifacts_for(receipt)
+    )
+
+    assert_not result.success?
+    assert(
+      result.failures.any? do |check|
+        check.name.start_with?("lifecycle_successor:") &&
+          check.detail.include?("summary differs")
+      end
+    )
+  end
+
+  private
+
+  def pending_external_action
+    withdrawal = create_withdrawal(user: @user)
+    [create_pending_external_action(withdrawal), withdrawal]
+  end
+
+  def create_pending_external_action(withdrawal)
+    presentation = present_clickwrap(
+      :withdrawal_authorization,
+      actor: @user,
+      subject: withdrawal
+    )
+    Clickwrap.authorize_external_action!(
+      :withdrawal_authorization,
+      actor: @user,
+      subject: withdrawal,
+      provider_name: "stripe",
+      submission: submission_for(
+        presentation,
+        {
+          withdrawal_requirements: "1",
+          ride_exclusivity: "1",
+          withdrawal: "1"
+        }
+      )
+    )
+  end
+
+  def document_artifacts_for(receipt)
+    receipt.documents.to_h do |binding|
+      version = Clickwrap::DocumentVersion.find(binding.document_version_id)
+      [
+        "#{binding.document_key}@#{binding.version_label}",
+        { source: version.content_bytes, rendered: version.rendered_bytes }
+      ]
+    end
+  end
+
+  def refresh_receipt_digest!(body)
+    covered = Marshal.load(Marshal.dump(body))
+    covered.fetch("integrity").delete("receipt_digest")
+    algorithm = Clickwrap::Digest.algorithm_of(body.dig("integrity", "receipt_digest")) || "sha256"
+    body.fetch("integrity")["receipt_digest"] =
+      Clickwrap::Digest.digest_canonical(covered, algorithm: algorithm)
   end
 end

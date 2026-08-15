@@ -69,7 +69,9 @@ module ClickwrapTasks
   # preview is not the place to find that out.
   def reacceptance_report(policy, statement)
     current = statement.document_keys.to_h do |document_key|
-      [document_key, Clickwrap::Document.find_by(key: document_key)&.current_version&.id&.to_s]
+      document = Clickwrap::Document.find_by(document_key: document_key)
+      version = document&.current_version
+      [document_key, version&.id&.to_s]
     end
 
     affected = Set.new
@@ -96,17 +98,32 @@ module ClickwrapTasks
   # both things an operator legitimately wants at 03:00.
   def digest_sweep
     checked = 0
+    verified = []
+    documented_dispositions = []
     failed = []
 
     check = lambda do |event|
       checked += 1
-      failed << event.id unless event.digest_verified?
+
+      case event.digest_integrity_status
+      when :verified
+        verified << event.id
+      when :documented_core_disposition
+        documented_dispositions << event.id
+      else
+        failed << event.id
+      end
     end
 
     events = sweep_scope
     events.respond_to?(:find_each) ? events.find_each(&check) : events.each(&check)
 
-    { "checked" => checked, "verified" => checked - failed.length, "failed" => failed }
+    {
+      "checked" => checked,
+      "verified" => verified.length,
+      "documented_dispositions" => documented_dispositions,
+      "failed" => failed
+    }
   end
 
   def sweep_scope
@@ -195,6 +212,7 @@ namespace :clickwrap do
         "event_type" => event.event_type,
         "policy" => event.policy_key,
         "digest_verifies" => event.digest_verified?,
+        "documented_core_disposition" => event.documented_core_disposition?,
         "verification" => result.to_h
       }
 
@@ -205,10 +223,11 @@ namespace :clickwrap do
         ClickwrapTasks.say("  policy:            #{event.policy_key} (#{event.event_type})")
         ClickwrapTasks.say("  recorded by server: #{event.recorded_at_by_server}")
         ClickwrapTasks.say("  digest verifies:   #{event.digest_verified?}")
+        ClickwrapTasks.say("  core disposition documented: #{event.documented_core_disposition?}")
         ClickwrapTasks.say("  verification:      #{result.success? ? "satisfied" : result.error}")
       end
 
-      exit(1) unless event.digest_verified?
+      exit(1) unless event.digest_integrity_accounted_for?
     else
       chain = Clickwrap::Integrity::Chain.verify
       digests = ClickwrapTasks.digest_sweep
@@ -225,7 +244,8 @@ namespace :clickwrap do
         ClickwrapTasks.heading("Event digests")
         ClickwrapTasks.say("  events checked:    #{digests["checked"]}")
         ClickwrapTasks.say("  digests verifying: #{digests["verified"]}")
-        ClickwrapTasks.say("  not verifying:     #{digests["failed"].length}")
+        ClickwrapTasks.say("  documented core dispositions: #{digests["documented_dispositions"].length}")
+        ClickwrapTasks.say("  unexplained mismatches: #{digests["failed"].length}")
         ClickwrapTasks.list(digests["failed"].first(20))
         ClickwrapTasks.say
         ClickwrapTasks.say("A verifying digest detects accidental or ordinary modification of the bytes it")
@@ -233,6 +253,31 @@ namespace :clickwrap do
       end
 
       exit(1) unless chain.success? && digests["failed"].empty?
+    end
+  end
+
+  namespace :integrity do
+    desc "Record configured timestamp/anchor attempts missing after committed events (may call providers)"
+    task attest_missing: :environment do
+      result = Clickwrap.reconcile_missing_integrity_attestations!(
+        scope: ClickwrapTasks.sweep_scope,
+        retry_failed_attestations: ClickwrapTasks.flag?("RETRY_FAILED_ATTESTATIONS")
+      )
+
+      if ClickwrapTasks.json?
+        ClickwrapTasks.dump(result.to_h)
+      else
+        ClickwrapTasks.heading("Missing integrity attestations")
+        ClickwrapTasks.say("  attempts made:        #{result.attempted}")
+        ClickwrapTasks.say("  results recorded:     #{result.recorded}")
+        ClickwrapTasks.say("  results not recorded: #{result.not_recorded}")
+        ClickwrapTasks.say
+        ClickwrapTasks.say("This task may call external providers. After a crash, a provider may have accepted")
+        ClickwrapTasks.say("a request before its local result was recorded, so adapters should treat the event")
+        ClickwrapTasks.say("digest or exact chain snapshot as an idempotency key. This is not exactly-once delivery.")
+      end
+
+      exit(1) unless result.clean?
     end
   end
 
@@ -316,8 +361,8 @@ namespace :clickwrap do
     desc "List legal holds in effect and the ones past their review date"
     task review: :environment do
       now = Clickwrap.now
-      in_effect = Clickwrap::LegalHold.in_effect.order(:review_on).to_a
-      due = in_effect.select { |hold| hold.review_on <= now }
+      in_effect = Clickwrap::LegalHold.in_effect.order(:review_at).to_a
+      due = in_effect.select { |hold| hold.review_at <= now }
 
       ClickwrapTasks.heading("Legal holds")
       ClickwrapTasks.say("  in effect:        #{in_effect.length}")
@@ -326,8 +371,8 @@ namespace :clickwrap do
       ClickwrapTasks.say("  past their review date:")
       ClickwrapTasks.list(
         due.map do |hold|
-          "#{hold.scope} #{hold.event_id || hold.actor_reference || hold.policy_key} — " \
-            "review due #{hold.review_on}, placed #{hold.placed_at} by #{hold.placed_by_reference}: #{hold.reason}"
+          "#{hold.hold_scope} #{hold.event_id || hold.actor_reference || hold.policy_key} — " \
+            "review due #{hold.review_at}, placed #{hold.placed_at} by #{hold.placed_by_reference}: #{hold.reason}"
         end
       )
       ClickwrapTasks.say
@@ -435,7 +480,7 @@ namespace :clickwrap do
     ClickwrapTasks.list(
       unresolved.first(50).map do |action|
         "#{action.state} #{action.policy_key} #{action.idempotency_key} " \
-          "(requested #{action.requested_at}, #{action.attempts} attempts) provider=#{action.provider_name}"
+          "(requested #{action.requested_at}, #{action.attempt_count} attempts) provider=#{action.provider_name}"
       end
     )
     ClickwrapTasks.say

@@ -108,7 +108,7 @@ class LinterTest < ActionView::TestCase
     findings = Clickwrap::Linter.review_manifest(reworded, policy: Clickwrap.policy!(:signup))
 
     assert_equal [:rendered_manifest_differs_from_policy], findings.map(&:code)
-    assert_match(/terms was presented with different wording/, findings.first.explanation)
+    assert_match(/terms has different wording in the manifest/, findings.first.explanation)
   end
 
   test "it flags a submitted manifest that left a statement out entirely" do
@@ -117,7 +117,7 @@ class LinterTest < ActionView::TestCase
 
     findings = Clickwrap::Linter.review_manifest(incomplete, policy: Clickwrap.policy!(:signup))
 
-    assert_match(/privacy_notice is in the policy but was not presented/, findings.first.explanation)
+    assert_match(/privacy_notice is in the policy but absent from the manifest/, findings.first.explanation)
   end
 
   # --- What it stays quiet about ----------------------------------------------
@@ -191,9 +191,9 @@ class LinterTest < ActionView::TestCase
 
   # A manifest built from a real presentation with exactly one thing changed, so
   # what the linter reacts to is genuine drift rather than a hand-built fixture.
-  def with_statements(presentation, &rewrite)
+  def with_statements(presentation, &)
     attributes = presentation.manifest.to_h
-    rewritten = attributes["statements"].filter_map(&rewrite)
+    rewritten = attributes["statements"].filter_map(&)
 
     Clickwrap::PresentationManifest.new(attributes.merge("statements" => rewritten))
   end

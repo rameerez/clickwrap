@@ -7,10 +7,10 @@ module Clickwrap
   module Generators
     # `rails generate clickwrap:hardening --database` — the opt-in database tier.
     #
-    # Clickwrap's models already refuse `update` and `destroy` on an event. This
-    # generator adds the same refusal one layer down, where a stray console
-    # session, a bulk `update_all`, or a well-meaning data-fix script cannot talk
-    # its way past a callback.
+    # Clickwrap's models refuse ordinary `update` and `destroy` calls. This
+    # generator adds a narrower database control for paths that bypass model
+    # callbacks: direct SQL, `delete`, `delete_all`, `update_column`, and
+    # `update_all`.
     #
     # What that is worth is bounded, and the bound is the point: it rejects
     # unsupported mutation paths within the documented database threat model. It
@@ -18,8 +18,8 @@ module Clickwrap
     # anyone holding database superuser rights, direct file access, or the
     # ability to drop the triggers — which, in most Rails applications, is the
     # same credential that runs migrations. Real assurance against that comes
-    # from the tiers above it: chained history, independent anchoring, and
-    # provider timestamps.
+    # from separately verified mechanisms: chained history, event digests
+    # published outside the primary database, and provider timestamps.
     #
     # It is opt-in because it is a production decision with real consequences for
     # anyone who clears tables with DELETE.
@@ -34,6 +34,18 @@ module Clickwrap
 
       def self.next_migration_number(dir)
         ActiveRecord::Generators::Base.next_migration_number(dir)
+      end
+
+      # A generated migration must remain runnable after the application later
+      # upgrades Clickwrap, so it snapshots the write sets at generation time
+      # instead of consulting the then-current gem while `db:migrate` runs.
+      # The Event model is the sole source of truth; this formatter only turns
+      # that frozen contract into readable, self-contained migration code.
+      def self.render_event_write_sets(write_sets = Clickwrap::Event::DATABASE_HARDENING_WRITE_SETS)
+        write_sets.map do |name, columns|
+          wrapped = columns.each_slice(5).map { |slice| "      #{slice.join(" ")}" }.join("\n")
+          %(    #{name.inspect} => %w[\n#{wrapped}\n    ])
+        end.join(",\n")
       end
 
       def require_explicit_opt_in!
@@ -71,11 +83,11 @@ module Clickwrap
       def display_post_install_message
         say "\n☑️  The database hardening migration has been created.", :green
         say "\nBefore you run it:"
-        say "  1. Read it. It is short, and the comments say exactly what it rejects."
+        say "  1. Read it. Its comments say exactly which transitions it accepts and rejects."
         say "  2. Check how your test suite clears tables. Transactional tests are fine —"
         say "     a rollback is not a DELETE. But fixtures, and any cleaner using the"
-        say "     deletion strategy, run `DELETE FROM …`, and these protections will"
-        say "     reject that on the three evidence tables."
+        say "     deletion strategy, run `DELETE FROM …`, and these protections reject"
+        say "     blanket deletion of finalized events and their evidence children."
         say "  3. Run 'rails db:migrate'."
         say "\nThe migration is reversible: `rails db:rollback` removes the triggers and"
         say "functions it created and leaves your data alone."
@@ -85,6 +97,10 @@ module Clickwrap
       end
 
       private
+
+      def event_write_sets_for_migration
+        self.class.render_event_write_sets
+      end
 
       def migration_version
         "[#{ActiveRecord::VERSION::STRING.to_f}]"
@@ -108,12 +124,12 @@ module Clickwrap
 
       def explain_postgresql
         say "\n   PostgreSQL detected. The migration installs row-level triggers that:", :green
-        say "     • reject any UPDATE to clickwrap_events except the three columns"
-        say "       Clickwrap itself writes (core_event_disposed_at, on_legal_hold,"
-        say "       request_evidence_id — disposition and legal holds);"
+        say "     • allow one in-transaction finalization of a new event;"
+        say "     • allow only pointer nullification, one annex link, recorded legal-hold"
+        say "       changes, and a fully documented core disposition after finalization;"
         say "     • reject every DELETE from clickwrap_events; and"
-        say "     • reject every UPDATE and DELETE on clickwrap_event_statements and"
-        say "       clickwrap_event_documents, which have no legitimate mutation at all."
+        say "     • reject child UPDATEs and allow child DELETEs only while the parent"
+        say "       carries a valid linked core-disposition event."
         say "\n   Optional personal request evidence is deliberately NOT protected: it has"
         say "   to stay deletable on its retention schedule, and disposition appends its"
         say "   own event recording that it happened."
@@ -131,8 +147,8 @@ module Clickwrap
         say "   schema has no `updated_at` on events to tempt anyone, every receipt is"
         say "   digest-verified, and `bin/rails clickwrap:verify` detects bytes that no"
         say "   longer match. What does not hold: anything about a writer with file access."
-        say "\n   If this data matters that much, the tier that helps is independent"
-        say "   anchoring — chain heads stored somewhere the database cannot rewrite."
+        say "\n   A separate mechanism can add assurance only when it publishes the exact"
+        say "   event digest outside this database and independently verifies that record."
       end
 
       def explain_mysql
@@ -144,11 +160,11 @@ module Clickwrap
         say "   the protected account can remove is a comment, not a control."
         say "\n   The control that does work on MySQL is privilege separation, and it lives"
         say "   outside this gem: a migration role that owns the schema, and a runtime role"
-        say "   with SELECT and INSERT on clickwrap_events, clickwrap_event_statements, and"
-        say "   clickwrap_event_documents, plus UPDATE on nothing but the disposition and"
-        say "   legal-hold columns. That is a database-administration decision with real"
-        say "   operational consequences, so this generator explains it instead of guessing"
-        say "   at your deployment."
+        say "   with reviewed grants or stored procedures for Clickwrap's named write paths."
+        say "   Disposition needs conditional UPDATE and DELETE behavior, so a blanket"
+        say "   SELECT/INSERT-only grant is not a drop-in replacement. That is a database-"
+        say "   administration decision with operational consequences, so this generator"
+        say "   explains the boundary instead of guessing at your deployment."
       end
 
       def explain_unknown_adapter

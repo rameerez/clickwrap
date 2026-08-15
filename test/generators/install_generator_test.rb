@@ -3,20 +3,23 @@
 require "test_helper"
 require "rails/generators/test_case"
 require "generators/clickwrap/install_generator"
+require "open3"
+require "rbconfig"
+require "tmpdir"
 
 # `rails generate clickwrap:install` is the first thing anyone runs, and almost
 # everything it writes is a decision with consequences years later: the schema
 # evidence is stored under, and an initializer whose defaults decide what
 # personal data this application starts collecting about people.
 #
-# Every run below passes `--skip-questions`, a recipe, or an explicit field flag,
+# Every run below passes `--skip-questions` or the privacy-minimized recipe,
 # because the interactive path reads from $stdin and a test suite has no keyboard.
 class InstallGeneratorTest < Rails::Generators::TestCase
   tests Clickwrap::Generators::InstallGenerator
-  # The gem root's tmp/, which is already gitignored — a generator scratch
-  # directory that shows up in `git status` is a generator scratch directory
-  # someone eventually commits.
-  destination File.expand_path("../../tmp/generators/install", __dir__)
+  # Each test process needs its own destination. A fixed checkout-relative path
+  # lets concurrent Ruby/Rails matrix lanes erase one another's generated
+  # migration between generation and the scratch-database execution check.
+  destination Dir.mktmpdir("clickwrap-generator-install-")
   setup :prepare_destination
 
   teardown do
@@ -36,6 +39,16 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   # None of them may appear as a setting in a file this generator writes.
   FORBIDDEN_MODE_SETTINGS = %w[
     gdpr_compliant_mode maximum_evidence full_evidence legal_proof record_network_context
+  ].freeze
+
+  # A signed server manifest cannot prove that a browser rendered pixels or a
+  # person perceived them. These phrases are narrower than the global legal-
+  # claim vocabulary and specifically protect the files the installer writes.
+  PRESENTATION_OVERCLAIMS = [
+    "what was on screen",
+    "actually shown",
+    "actually presented",
+    "wording that appeared beside"
   ].freeze
 
   test "installing writes the migration, the initializer, the policy file, and the legal placeholders" do
@@ -106,39 +119,47 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     end
   end
 
-  test "the evidence-rich recipe expands into individual settings and leaves no runtime switch behind" do
-    run_generator %w[--request-evidence-recipe=evidence-rich]
+  test "the privacy-minimized recipe writes explicit off settings and leaves no runtime switch behind" do
+    run_generator %w[--request-evidence-recipe=privacy-minimized]
 
     assert_file "config/initializers/clickwrap.rb" do |initializer|
       RECORD_SETTINGS.each do |setting|
-        assert_match(/^\s*config\.#{setting} = true$/, initializer,
-                     "Expected the evidence-rich recipe to write config.#{setting} = true")
+        assert_match(/^\s*config\.#{setting} = false$/, initializer,
+                     "Expected privacy-minimized to write config.#{setting} = false")
       end
 
-      # The recipe cannot supply a purpose, so it writes the one honest thing it
-      # can: a placeholder that says a human still has to.
-      %w[
-        reason_for_recording_ip_addresses_by_default
-        reason_for_recording_browser_user_agents_by_default
-        reason_for_recording_ip_geolocation_by_default
-      ].each do |reason|
-        assert_match(/config\.#{reason} =\s*\n?\s*"TODO: replace with your reviewed purpose[^"]*"/, initializer,
-                     "Expected config.#{reason} to be a TODO placeholder rather than an invented sentence")
-      end
-
-      # THE POINT OF THE FLAG: it is scaffolding. It expanded into the lines
-      # above and then stopped existing. Nothing here may read as a mode.
+      # The flag is scaffolding. It expands into ordinary settings and then
+      # stops existing. Nothing here may read as a runtime mode.
       FORBIDDEN_MODE_SETTINGS.each do |name|
         refute_match(/^\s*config\.[\w.]*#{name}/, initializer,
                      "#{name} must never exist as a runtime setting — a flag cannot make a legal determination")
       end
       refute_match(/^\s*config\.[\w.]*recipe/, initializer,
                    "the recipe is generator-only and must not survive into the configuration")
+      refute_match(/config\.identify_actor_with\s*=.*to_gid/, initializer,
+                   "a generated initializer must still work when a minimal Rails host does not load GlobalID")
     end
   end
 
+  test "the installer refuses the removed evidence-rich shortcut before writing files" do
+    stderr = capture(:stderr) do
+      run_generator %w[--request-evidence-recipe=evidence-rich]
+    end
+
+    assert_match(/request-evidence-recipe.*privacy-minimized/i, stderr)
+    assert_no_file "config/initializers/clickwrap.rb"
+    assert_empty Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb"))
+  end
+
   test "asking for IP addresses on the command line turns on that one setting and nothing else" do
-    run_generator %w[--record-ip-addresses-by-default]
+    proxy_digest = Clickwrap::Digest.digest("reviewed proxy configuration")
+    run_generator [
+      "--skip-questions",
+      "--record-ip-addresses-by-default",
+      "--reason-for-recording-ip-addresses-by-default=Investigate disputed agreement submissions.",
+      "--delete-recorded-ip-addresses-after-days=90",
+      "--trusted-proxy-configuration-digest=#{proxy_digest}"
+    ]
 
     assert_file "config/initializers/clickwrap.rb" do |initializer|
       assert_match(/^\s*config\.record_ip_address_by_default = true$/, initializer)
@@ -150,10 +171,51 @@ class InstallGeneratorTest < Rails::Generators::TestCase
                      "Enabling IP addresses must not enable #{setting}")
       end
 
-      assert_match(/config\.reason_for_recording_ip_addresses_by_default =\s*\n?\s*"TODO/, initializer)
+      reason_setting = /config\.reason_for_recording_ip_addresses_by_default =\s*\n?\s*/
+      assert_match(reason_setting, initializer)
+      assert_match(/"Investigate disputed agreement submissions\."/, initializer)
       assert_match(/config\.delete_recorded_ip_addresses_after = 90\.days/, initializer)
+      assert_match(/config\.trusted_proxy_configuration_digest = #{Regexp.escape(proxy_digest.inspect)}/, initializer)
       assert_match(/config\.reason_for_recording_browser_user_agents_by_default = nil/, initializer)
       assert_match(/config\.ip_geolocation_resolver = nil/, initializer)
+    end
+  end
+
+  test "an incomplete enabled category is refused before any file is written" do
+    stderr = capture(:stderr) do
+      run_generator %w[--skip-questions --record-ip-addresses-by-default]
+    end
+
+    assert_match(/cannot enable IP addresses with a blank or scaffolding reason/i, stderr)
+    assert_match(/No files were written/, stderr)
+    assert_no_file "config/initializers/clickwrap.rb"
+    assert_empty Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb"))
+  end
+
+  test "IP geolocation requires explicit uncertainty, proxy provenance, and a resolver class" do
+    common = [
+      "--skip-questions",
+      "--record-ip-geolocation-latitude-and-longitude-by-default",
+      "--reason-for-recording-ip-geolocation-by-default=Investigate the network context of disputed submissions.",
+      "--delete-recorded-ip-geolocation-after-days=30"
+    ]
+
+    stderr = capture(:stderr) { run_generator common }
+    assert_match(/without their accuracy radius/i, stderr)
+    assert_no_file "config/initializers/clickwrap.rb"
+
+    proxy_digest = Clickwrap::Digest.digest("reviewed proxy configuration")
+    run_generator common + [
+      "--record-ip-geolocation-accuracy-radius-in-kilometers-by-default",
+      "--trusted-proxy-configuration-digest=#{proxy_digest}",
+      "--ip-geolocation-resolver-class-name=Clickwrap::IpGeolocation::TrackdownResolver"
+    ]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/config\.record_ip_geolocation_latitude_and_longitude_by_default = true/, initializer)
+      assert_match(/config\.record_ip_geolocation_accuracy_radius_in_kilometers_by_default = true/, initializer)
+      assert_match(/config\.trusted_proxy_configuration_digest = #{Regexp.escape(proxy_digest.inspect)}/, initializer)
+      assert_match(/config\.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver\.new/, initializer)
     end
   end
 
@@ -167,6 +229,10 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       Clickwrap::Vocabulary::PROHIBITED_CLAIM_PHRASES.each do |phrase|
         refute_includes body.downcase, phrase,
                         "Generated output claims #{phrase.inspect}, which no library can honestly claim"
+      end
+      PRESENTATION_OVERCLAIMS.each do |phrase|
+        refute_includes body.downcase, phrase,
+                        "Generated output claims human perception with #{phrase.inspect}"
       end
     end
   end
@@ -201,10 +267,56 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_equal index_names_in(TEMPLATE_MIGRATION), index_names_in(DUMMY_MIGRATION)
   end
 
+  test "the dummy's clickwrap migration declares the same foreign keys as the template" do
+    assert_equal foreign_keys_in(TEMPLATE_MIGRATION), foreign_keys_in(DUMMY_MIGRATION)
+  end
+
+  test "the dummy migration is an ordered, exact rendering of the install template" do
+    template = migration_body(TEMPLATE_MIGRATION).sub("<%= migration_version %>", "[7.1]")
+    dummy = migration_body(DUMMY_MIGRATION)
+
+    assert_equal template, dummy,
+                 "The dummy database must exercise the exact migration users receive, " \
+                 "including column options, declaration order, constraints, and helpers."
+  end
+
+  test "neither migration declares the same generated column twice inside one table" do
+    [TEMPLATE_MIGRATION, DUMMY_MIGRATION].each do |path|
+      table_column_names_in(path).each do |table, columns|
+        duplicates = columns.tally.select { |_column, count| count > 1 }.keys
+        assert_empty duplicates,
+                     "#{File.basename(path)} declares #{duplicates.join(", ")} more than once in #{table}."
+      end
+    end
+  end
+
+  test "the migration generated for a host executes against a scratch database" do
+    run_generator %w[--skip-questions]
+    migration = Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb")).sole
+
+    Dir.mktmpdir("clickwrap-generated-migration") do |directory|
+      database = File.join(directory, "scratch.sqlite3")
+      stdout, stderr, status = Open3.capture3(
+        { "RAILS_ENV" => "test" },
+        RbConfig.ruby,
+        "-e",
+        scratch_migration_program,
+        migration,
+        database
+      )
+
+      assert status.success?, <<~MESSAGE
+        The migration produced by `clickwrap:install` did not execute on a clean database.
+        stdout:
+        #{stdout}
+        stderr:
+        #{stderr}
+      MESSAGE
+    end
+  end
+
   private
 
-  # Set semantics (uniq): a template carries BOTH branches of an ERB conditional,
-  # of which exactly one survives generation.
   def column_names_in(path)
     source = File.read(path)
     plain = source.scan(
@@ -214,11 +326,93 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     (plain + sent).flatten.uniq
   end
 
+  def migration_body(path)
+    File.read(path).match(/class CreateClickwrapTables\b.*\z/m).to_s
+  end
+
+  def table_column_names_in(path)
+    File.read(path).scan(/create_table :(\w+).*? do \|t\|\n(.*?)^    end$/m).to_h do |table, body|
+      columns = body.each_line.flat_map do |line|
+        case line
+        when /^\s*t\.references :(\w+)(.*)$/
+          base = Regexp.last_match(1)
+          Regexp.last_match(2).include?("polymorphic: true") ? ["#{base}_type", "#{base}_id"] : ["#{base}_id"]
+        when /^\s*t\.timestamps\b/
+          %w[created_at updated_at]
+        when /^\s*t\.send\([^,]+, :(\w+)/, /^\s*t\.\w+ :(\w+)/
+          [Regexp.last_match(1)]
+        else
+          []
+        end
+      end
+
+      [table, columns]
+    end
+  end
+
   def table_names_in(path)
     File.read(path).scan(/create_table :(\w+)/).flatten.uniq
   end
 
   def index_names_in(path)
     File.read(path).scan(/name: "(index_\w+)"/).flatten.uniq
+  end
+
+  def foreign_keys_in(path)
+    File.read(path).scan(
+      /add_(?:clickwrap_)?foreign_key :(\w+), :(\w+),\s*\n?\s*column: :(\w+), name: "(fk_\w+)"/
+    ).uniq
+  end
+
+  def scratch_migration_program
+    <<~'RUBY'
+      require "bundler/setup"
+      require "rails"
+      require "active_record"
+
+      class ClickwrapScratchApplication < Rails::Application
+        # Never let Rails infer the gem checkout as this throwaway host's root.
+        # Rails 7.1 would otherwise load the engine's config/routes.rb as the
+        # application's routes before the Clickwrap engine itself was loaded.
+        config.root = File.dirname(ARGV.fetch(1))
+        config.eager_load = false
+      end
+
+      ClickwrapScratchApplication.initialize!
+      ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ARGV.fetch(1))
+      ActiveRecord::Migration.verbose = false
+      load ARGV.fetch(0)
+      CreateClickwrapTables.new.migrate(:up)
+
+      expected = %w[
+        clickwrap_documents clickwrap_document_versions clickwrap_policy_revisions
+        clickwrap_presentations clickwrap_events clickwrap_event_statements
+        clickwrap_event_documents clickwrap_statement_states
+        clickwrap_statement_identity_locks clickwrap_request_evidence
+        clickwrap_legal_holds clickwrap_chain_heads clickwrap_external_actions
+        clickwrap_disposition_plans clickwrap_receipt_accesses
+        clickwrap_integrity_attestations
+      ]
+      missing = expected - ActiveRecord::Base.connection.tables
+      abort "Generated migration omitted: #{missing.join(', ')}" unless missing.empty?
+
+      connection = ActiveRecord::Base.connection
+      actor_id = connection.columns(:clickwrap_presentations).find { |column| column.name == "actor_id" }
+      abort "Generated actor_id was #{actor_id.type}, not string" unless actor_id.type == :string
+
+      precision_failures = expected.flat_map do |table|
+        connection.columns(table).filter_map do |column|
+          next unless [:datetime, :timestamp].include?(column.type)
+          "#{table}.#{column.name}=#{column.precision.inspect}" unless column.precision == 6
+        end
+      end
+      abort "Generated timestamps lost precision: #{precision_failures.join(', ')}" if precision_failures.any?
+
+      presentation_indexes = connection.indexes(:clickwrap_presentations).map(&:columns)
+      abort "Generated migration omitted presentation expiry index" unless presentation_indexes.include?(["expires_at"])
+
+      presentation_checks = connection.check_constraints(:clickwrap_presentations).map(&:name)
+      abort "Generated migration omitted presentation state check" unless presentation_checks.include?("chk_clickwrap_presentations_state")
+    RUBY
   end
 end

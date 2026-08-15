@@ -14,10 +14,10 @@ module Clickwrap
   # Clickwrap does not choose these periods and cannot tell you whether yours
   # are right. What it does is make a reviewed decision executable and
   # auditable, keep the core event's schedule separate from the optional
-  # personal request evidence, and support the event-based and "later of" rules
-  # that real record-keeping obligations actually use — because a fixed
+  # personal request evidence, and delegate event-based or "later of" rules to
+  # a named host calculation. The host owns that calculation because a fixed
   # duration cannot express "five years, or three years after this contract is
-  # liquidated, whichever is later".
+  # liquidated, whichever is later" without application domain state.
   class RetentionClass
     PARTS = %i[core_event ip_address browser_user_agent ip_geolocation].freeze
 
@@ -49,25 +49,6 @@ module Clickwrap
 
     def rule_for(part) = rules[part.to_sym]
 
-    # Returns the time this part becomes eligible for disposition, or nil when
-    # the rule depends on a host event that has not happened yet. A nil is a
-    # real answer here — "not yet due, and we cannot say when" — and the
-    # disposition planner reports it rather than guessing a date.
-    def eligible_at(part, event:)
-      rule = rule_for(part)
-      return nil if rule.nil?
-
-      if rule.duration?
-        recorded_at(event) + rule.duration
-      else
-        Clickwrap.configuration.resolve_retention_time(rule.host_event_name, event)
-      end
-    end
-
-    def retains_core_event_forever?
-      rule_for(:core_event).nil?
-    end
-
     def to_snapshot
       {
         "key" => key,
@@ -76,10 +57,6 @@ module Clickwrap
     end
 
     private
-
-    def recorded_at(event)
-      event.respond_to?(:recorded_at_by_server) ? event.recorded_at_by_server : event[:recorded_at_by_server]
-    end
 
     def validate!
       unknown = rules.keys - PARTS
@@ -90,6 +67,18 @@ module Clickwrap
       end
 
       rules.each_value do |rule|
+        if rule.duration? == rule.host_event?
+          raise DefinitionError,
+                "Retention class #{key} must give #{rule.part} exactly one schedule: a " \
+                "duration or a named host calculation, not both or neither."
+        end
+
+        if rule.host_event? && rule.host_event_name.to_s.strip.empty?
+          raise DefinitionError,
+                "Retention class #{key} gives #{rule.part} a blank host calculation name. " \
+                "Name the calculation registered with `config.calculate_retention_time_for`."
+        end
+
         next unless rule.duration? && rule.duration.to_i <= 0
 
         raise DefinitionError,

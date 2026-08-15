@@ -47,7 +47,7 @@ Two consequences that hold everywhere in Clickwrap:
 | **Baseline** | Nothing. `config.digest_canonical_receipts_with = :sha256` is the default | The recorded digest detects accidental or ordinary modification of the bytes it covers. It does not establish who produced them, when, or that a party controlling both the application and the database could not have written both the record and the digest |
 | **Database hardening** | `bin/rails generate clickwrap:hardening --database` and a migration | Rejects unsupported mutation paths within the documented database threat model. On PostgreSQL this is real update and delete protection; on SQLite and MySQL the generator says plainly what the database can and cannot reject rather than emitting something that looks like protection and is not |
 | **Chained history** | `config.chain_event_history_with = :sha256` | Each event carries the digest of the one before it, so an event later rewritten or removed stops linking up with its successors. This makes a rewrite of history detectable for as long as the chain head remains trustworthy — and no more than that |
-| **Independent anchoring** | `config.anchor_event_history_with = MyAnchor.new` | Chain heads are recorded outside the primary database, which improves evidence against a rewrite by a privileged database actor. The claim is only ever as strong as the place the head was published to |
+| **Independent anchoring** | `config.anchor_event_history_with = MyAnchor.new` | The exact chain scope, sequence, event ID, and event digest committed for each event are offered to an outside publication service. The tier upgrades only when the adapter records and verifies that exact snapshot; the claim is only ever as strong as the publication and its verifier |
 | **Timestamp or trust-service provider** | `config.timestamp_receipts_with = MyRfc3161Provider.new` | Preserves exactly the assurance and validation status that provider supplies, verbatim. If the provider's own status is "unknown" or "expired", that is what travels into the receipt |
 
 Three notes on the honest edges of that table.
@@ -58,19 +58,22 @@ cannot say otherwise. What the chain reliably catches is ordinary corruption, a 
 `update_column`, a restored partial backup, and a row edited by hand — which is most of what
 actually goes wrong. It is precisely the remaining gap that the anchor adapter addresses.
 
-**Anchoring and timestamps are adapter contracts, not bundled providers.** Both ship working
-no-op defaults that report the absence of a provider rather than failing, so no code path has
-to guess whether one exists. Clickwrap ships no RFC 3161 client — no ASN.1 encoder, no HTTP
-client, no certificate-chain validation — and adds no dependency that would. A host that needs
-one supplies an adapter that speaks to its own chosen authority.
+**Anchoring and timestamps are adapter contracts, not bundled providers.** Both configuration
+settings default to `nil`, so no provider call or attestation row exists until the host chooses
+an adapter. `Clickwrap::Integrity::Anchor` and `Clickwrap::Integrity::Timestamp` are reference
+base classes with explicit unavailable results; they are not installed implicitly. Clickwrap
+ships no RFC 3161 client — no ASN.1 encoder, no HTTP client, no certificate-chain validation —
+and adds no dependency that would. A host that needs one supplies an adapter that speaks to its
+chosen service.
 
-**The receipt's `integrity.tier` reports what it can observe from the event and the current
-configuration**: `independent_anchoring` when an anchor is configured, `chained_history` when
-the event carries a chain scope, and `baseline` otherwise. Database hardening and a configured
-timestamp provider are real tiers in the vocabulary but are not inferred into that field; check
-them with `bin/rails clickwrap:doctor` and with the adapter's own `#capabilities`, which reports
-in the provider's words rather than letting the mere presence of an adapter imply a stronger
-claim.
+**The receipt's `integrity.tier` reports recorded, verified evidence — never configuration
+alone.** It is `third_party_timestamp` only when an independently-verifiable timestamp
+attestation over the event digest verifies; otherwise `external_event_anchoring` only when an
+outside-publication attestation over the exact chain snapshot verifies; otherwise
+`chained_history` when the event carries a chain scope; otherwise `baseline`. Database
+hardening is checked separately by `bin/rails clickwrap:doctor`. Unavailable, failed, and issued
+but unverified provider results remain visible in `integrity.attestations` without upgrading the
+tier.
 
 Enable what you need, explicitly:
 
@@ -84,6 +87,32 @@ config.timestamp_receipts_with        = MyRfc3161TimestampProvider.new
 Every digest stored anywhere carries its algorithm name as an `"<algorithm>:<hex>"` prefix, so
 a future release can add an algorithm without making old events unverifiable, and an auditor
 never has to guess which function produced a bare hex string.
+
+### External attestations happen after commit
+
+Timestamp and anchor providers cannot participate in the database transaction that records the
+event and the protected host action. Clickwrap therefore calls them after commit. A provider
+outage cannot undo a capture that already committed. Each ordinary result — `verified`,
+`issued_unverified`, or `unavailable` — becomes an immutable attestation row. An adapter
+exception becomes a `failed` row when the database is available and is also reported through
+`report_after_commit_failure_with`.
+
+There is one unavoidable crash window: a process can die after the event commits, or after a
+provider accepts a request but before the local attestation row commits. Inventory missing
+attempts with `clickwrap:doctor`, then reconcile them explicitly:
+
+```bash
+bin/rails clickwrap:integrity:attest_missing
+bin/rails clickwrap:integrity:attest_missing SINCE=2026-08-15T00:00:00Z LIMIT=100
+bin/rails clickwrap:integrity:attest_missing RETRY_FAILED_ATTESTATIONS=1
+```
+
+The task may call external providers. It skips events that already have a result; failed results
+are retried only with `RETRY_FAILED_ATTESTATIONS=1`. This is at-least-once recovery, not
+exactly-once delivery: if the provider accepted a request before the process died, a retry can
+create another valid provider record. Timestamp adapters should use the event digest, and anchor
+adapters the exact chain snapshot, as their provider-side idempotency input. Clickwrap preserves
+every result rather than claiming certainty it cannot have.
 
 Run verification continuously rather than at audit time:
 
@@ -113,7 +142,7 @@ Clickwrap does" is a statement about mechanism, not a guarantee about outcomes.
 
 | What happens if | What Clickwrap does |
 |---|---|
-| A privileged application or database actor updates or deletes evidence | Events, statements, and document bindings refuse ordinary updates and destroys at the model layer, with only three columns permitted to change after write (`core_event_disposed_at`, `on_legal_hold`, `request_evidence_id`). Optional database hardening pushes that into the database on PostgreSQL. Neither stops somebody with full database access; the chain makes it detectable, and an anchor narrows the gap further |
+| A privileged application or database actor updates or deletes evidence | Events, statements, and document bindings refuse ordinary updates and destroys at the model layer. Four event columns have named mutable roles (`core_event_disposed_at`, `core_event_disposition_event_id`, `on_legal_hold`, `request_evidence_id`); reviewed core disposition also clears a fixed payload write set while atomically appending its digest-linked disposition event. Optional database hardening pushes the documented write sets into PostgreSQL. Neither stops somebody with full database access; digest/chain verification detects covered changes, and a verified outside publication narrows the gap further |
 | A fully privileged actor rewrites the hash chain along with the events | The chain alone cannot detect this, and this guide says so rather than implying otherwise. That is what the independent anchor adapter is for, and the claim is then only as strong as the anchor |
 | Signing or encryption keys rotate, or leak | Keys come from Rails credentials or a host key provider, and rotate with versioned key identifiers. The annex binding digest records its algorithm and a key identifier so a later reader can tell which key produced it |
 | The server clock is wrong | Nothing here can fix that, and nothing here pretends to. `recorded_at_by_server` is labeled as the server's clock. A timestamp provider is the mechanism that adds a second, independent opinion about time |
@@ -146,7 +175,7 @@ Clickwrap does" is a statement about mechanism, not a guarantee about outcomes.
 | What happens if | What Clickwrap does |
 |---|---|
 | A custom view removes the real control, or moves the notice below the call to action | The development linter reports `submit_control_before_clickwrap_block`, `consent_control_preselected`, and `document_link_missing`. These are heuristics that warn; they never block a render and never certify a page. See [the accessibility guide](accessibility.md) |
-| An analytics hook fails | After-commit hooks are observers, never authorization. A failure is reported through `report_after_commit_failure_with` and swallowed, because the evidence and the action it protected have already committed and nothing an analytics call does may undo them |
+| An analytics, notification, timestamp, or anchor call fails | After-commit work is an observer, never authorization. A failure is reported through `report_after_commit_failure_with` and cannot undo evidence and domain state that already committed. Timestamp/anchor attempts additionally record an immutable result when possible; the missing-attestation inventory and explicit reconciliation task cover a process or database failure in that post-commit window |
 | An export leaks a document, actor detail, or request secret | Operator access requires a host authorization callback plus a plain-English reason, and every access appends a `ReceiptAccess` row. Foreign event IDs return not found, so existence is not leaked |
 
 ---
@@ -155,14 +184,15 @@ Clickwrap does" is a statement about mechanism, not a guarantee about outcomes.
 
 Say the tier, say its sentence, and say what is not in it.
 
-At baseline, that is: canonical receipts, immutable snapshots, versioned SHA-256 digests, an
-append-only public API, and a verifier that runs without this application. It detects
+At baseline, that is: canonical receipts, immutable document and statement snapshots while their
+reviewed retention periods run, versioned SHA-256 digests, an append-oriented public API with
+named disposition transitions, and a verifier that runs without this application. It detects
 modification of the bytes it covers. It does not establish origin, does not establish time, and
 does not exclude fabrication by a party controlling every source.
 
-If you need origin or time evidence, the mechanisms are chained history, an independently held
-head, and a timestamp or trust-service provider — three separate things, each claiming only
-what it supplies.
+If you need stronger rewrite detection or a third party's statement about time, the mechanisms
+are chained history, a verified publication of exact chain snapshots, and a timestamp or
+trust-service provider — three separate things, each claiming only what it supplies.
 
 `bin/rails clickwrap:doctor` reports objective configuration and data facts and never prints a
 verdict. If it printed one, it would be the least trustworthy line in the output.
@@ -179,5 +209,4 @@ verdict. If it printed one, it would be the least trustworthy line in the output
 | [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785) | Technical standard |
 | [OWASP Logging Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html) | Industry guidance |
 | [GDPR Article 32](https://eur-lex.europa.eu/eli/reg/2016/679/art_32/oj/eng) — security of processing | Law |
-| `lib/clickwrap/digest.rb`, `lib/clickwrap/integrity/chain.rb`, `lib/clickwrap/integrity/anchor.rb`, `lib/clickwrap/integrity/timestamp.rb`, `lib/clickwrap/models/event.rb`, `lib/clickwrap/receipt.rb`, `lib/clickwrap/vocabulary.rb` at commit `a1ffe9b` | Pinned source code |
 | The tier ladder and every "what Clickwrap does" cell above | Product-design inference |

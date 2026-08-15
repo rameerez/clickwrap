@@ -49,12 +49,17 @@ class ProofsTest < ActiveSupport::TestCase
     # The exact failure RailsFast and CarHey both had: the account is already
     # persisted, the evidence write fails, and the exception is rescued.
     email = "atomic-#{SecureRandom.hex(4)}@example.com"
+    prospective_actor = User.new(email: email, name: "New")
+    registration_flow_id = SecureRandom.uuid
 
     Clickwrap::Testing.fail_next_event_write do
       assert_raises(Clickwrap::EventWriteFailed) do
-        Clickwrap.register!(:signup, prospective_actor: User.new(email: email, name: "New"),
-                                     submission: registration_submission) do
-          User.create!(email: email, name: "New")
+        Clickwrap.register!(:signup, prospective_actor: prospective_actor,
+                                     registration_flow_id: registration_flow_id,
+                                     submission: registration_submission(
+                                       prospective_actor, registration_flow_id
+                                     )) do
+          prospective_actor.save!
         end
       end
     end
@@ -64,12 +69,17 @@ class ProofsTest < ActiveSupport::TestCase
 
   test "proof A: signup records account-registration attribution, not a fictional session" do
     email = "reg-#{SecureRandom.hex(4)}@example.com"
-    user = nil
+    user = User.new(email: email, name: "New")
+    registration_flow_id = SecureRandom.uuid
 
-    receipt = Clickwrap.register!(:signup, prospective_actor: User.new(email: email, name: "New"),
-                                           submission: registration_submission) do
-      user = User.create!(email: email, name: "New")
+    receipt = Clickwrap.register!(:signup, prospective_actor: user,
+                                           registration_flow_id: registration_flow_id,
+                                           submission: registration_submission(
+                                             user, registration_flow_id
+                                           )) do
+      user.save!
     end
+    receipt = committed_test_receipt(receipt)
 
     # At first render there was no persisted actor, and the receipt says exactly
     # that rather than implying the person was already authenticated.
@@ -93,22 +103,25 @@ class ProofsTest < ActiveSupport::TestCase
   # Fails if the gem replaces the domain model, weakens server ownership, or
   # needs a private hook.
 
-  test "proof B: the declaration's exact wording is what gets presented and recorded" do
+  test "proof B: the declaration's exact wording is bound into the offer and event" do
     user = create_user
     scheme = create_withdrawal(user: user)
 
     presentation = present_clickwrap(:driver_declaration, actor: user, subject: scheme)
-    presented = presentation.statements.first.assertion
+    offered = presentation.statements.first.assertion
 
-    receipt = Clickwrap.capture!(:driver_declaration, actor: user, subject: scheme,
-                                                      submission: submission_for(presentation,
-                                                                                 { non_professional_driver: "1" }))
+    receipt = committed_test_receipt(
+      Clickwrap.capture!(:driver_declaration, actor: user, subject: scheme,
+                                              submission: submission_for(
+                                                presentation, { non_professional_driver: "1" }
+                                              ))
+    )
 
-    # CarHey's bug was recording Terms acceptance on a screen that never showed
-    # the declaration. The presented sentence and the recorded sentence are the
-    # same string here, and the test would fail if they drifted.
-    assert_equal "I declare that I drive privately and not as a professional driver.", presented
-    assert_equal presented, receipt.statements.first.assertion_text
+    # The original bug recorded Terms acceptance while the server offer omitted
+    # the declaration. The offered and recorded sentences are the same string
+    # here, and the test would fail if they drifted.
+    assert_equal "I declare that I drive privately and not as a professional driver.", offered
+    assert_equal offered, receipt.statements.first.assertion_text
   end
 
   test "proof B: the policy kind is declaration, not generic acceptance" do
@@ -311,8 +324,14 @@ class ProofsTest < ActiveSupport::TestCase
     { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
   end
 
-  def registration_submission
-    presentation = Clickwrap.present(:signup, actor: nil, submit_button_text: "Create account")
+  def registration_submission(prospective_actor, registration_flow_id)
+    presentation = Clickwrap.present(
+      :signup,
+      actor: nil,
+      prospective_actor: prospective_actor,
+      registration_flow_id: registration_flow_id,
+      submit_button_text: "Create account"
+    )
     submission_for(presentation, { terms: "1", privacy_notice: "1" })
   end
 end

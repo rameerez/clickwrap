@@ -2,8 +2,9 @@
 
 module Clickwrap
   module Integrity
-    # The adapter contract for a timestamp provider — and a working no-op
-    # default that issues no tokens and says so.
+    # The adapter contract for a timestamp provider, plus a reference base
+    # implementation that issues no tokens and says so. Configuration defaults
+    # to nil.
     #
     #   config.timestamp_receipts_with = MyRfc3161TimestampProvider.new
     #
@@ -31,9 +32,9 @@ module Clickwrap
     # WHAT THIS FILE DELIBERATELY IS NOT. It is not an RFC 3161 client. Clickwrap
     # ships no ASN.1 encoder, no HTTP client, and no certificate-chain
     # validation, and it adds no dependency that would. Timestamping is an
-    # optional integration with a working no-op default, exactly like every
-    # other external service this gem touches: a host that needs it supplies an
-    # adapter that speaks to its own chosen authority.
+    # optional integration. A host that needs it supplies an adapter that speaks
+    # to its own chosen authority; assigning this base class is useful only when
+    # an explicit unavailable result is wanted.
     #
     # WRITING ONE. Implement `#timestamp(digest)` and `#verify(token, digest)`,
     # and report honestly from `#capabilities`.
@@ -97,7 +98,7 @@ module Clickwrap
           issued: false,
           digest: digest,
           provider_name: provider_name,
-          detail: "No timestamp provider is configured, so no token was requested and the only " \
+          detail: "This timestamp adapter issues no token, so the only " \
                   "recorded time remains the application server's own."
         )
       end
@@ -109,7 +110,7 @@ module Clickwrap
           checked: false,
           verified: false,
           provider_name: provider_name,
-          detail: "No timestamp provider is configured, so there is nothing that can check this " \
+          detail: "This timestamp adapter issues no token, so there is nothing to check in this " \
                   "token."
         )
       end
@@ -124,8 +125,8 @@ module Clickwrap
           "available" => available?,
           "protocol" => nil,
           "supplies" => "Nothing. This is the default placeholder that reports the absence of a " \
-                        "timestamp provider instead of failing, so no code path has to guess " \
-                        "whether one exists.",
+                        "timestamp provider for explicit adapter-contract tests. Configuration " \
+                        "normally remains nil.",
           "note" => "A configured provider supplies exactly the assurance and validation status " \
                     "that provider supplies. Clickwrap preserves it and never restates it more " \
                     "strongly."

@@ -11,7 +11,7 @@ class ConfigurationTest < ActiveSupport::TestCase
 
     assert_equal "User", config.actor_class_name
     assert_equal :current_user, config.current_actor_method_name
-    assert_equal "::ApplicationController", config.parent_controller_class_name
+    assert_equal "ApplicationController", config.parent_controller_class_name
     assert_equal :database, config.store_document_contents_in
     assert_equal :sha256, config.digest_canonical_receipts_with
     assert_equal 2.hours, config.presentation_valid_for
@@ -119,6 +119,25 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/must be true or false/, error.message)
   end
 
+  test "IP-derived application defaults require reviewed proxy provenance" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.configure do |config|
+        config.trusted_proxy_configuration_digest = nil
+        config.record_ip_address_by_default = true
+        config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
+        config.delete_recorded_ip_addresses_after = 30.days
+      end
+    end
+
+    assert_match(/trusted_proxy_configuration_digest/, error.message)
+    assert_match(/does not claim that decision was correct/, error.message)
+
+    Clickwrap.configure do |config|
+      config.trusted_proxy_configuration_digest = Clickwrap::Digest.digest("reviewed proxy configuration")
+    end
+    assert Clickwrap.config.validate!
+  end
+
   test "an adapter that does not implement its contract is refused by method name" do
     error = assert_raises(Clickwrap::ConfigurationError) { Clickwrap.config.ip_geolocation_resolver = Object.new }
 
@@ -153,11 +172,31 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_equal user.to_gid.to_s, Clickwrap.config.identify_actor_with.call(user)
   end
 
+  test "the default actor reference works when a minimal Rails host does not load GlobalID" do
+    actor_class = Class.new do
+      attr_reader :id
+
+      def initialize(id)
+        @id = id
+      end
+    end
+    actor_class.define_singleton_method(:name) { "MinimalActor" }
+    actor = actor_class.new(42)
+
+    assert_not_respond_to actor, :to_gid
+    assert_equal "MinimalActor/42", Clickwrap.config.identify_actor_with.call(actor)
+  end
+
   test "a host can override the reference on the model without touching the initializer" do
     user = create_user
     user.define_singleton_method(:clickwrap_actor_reference) { "host-owned-reference" }
 
     assert_equal "host-owned-reference", Clickwrap.config.identify_actor_with.call(user)
+  end
+
+  test "literal actor references remain usable without pretending they are model instances" do
+    assert_equal "external/actor-123", Clickwrap::Reference.actor("external/actor-123")
+    assert_equal "external_actor", Clickwrap::Reference.actor(:external_actor)
   end
 
   test "reset! restores every default" do

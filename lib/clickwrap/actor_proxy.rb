@@ -21,44 +21,45 @@ module Clickwrap
 
     # --- Predicates -----------------------------------------------------------
 
-    def current_for?(policy_key, subject: nil, tenant: nil)
-      Clickwrap.current?(policy_key, actor: actor, subject: subject, tenant: tenant)
+    def current_for?(policy_key, subject: nil, tenant: nil, acting_for: nil)
+      Clickwrap.current?(policy_key, actor: actor, subject: subject, tenant: tenant,
+                                     acting_for: acting_for)
     end
 
-    def required_for?(policy_key, subject: nil, tenant: nil)
-      !current_for?(policy_key, subject: subject, tenant: tenant)
+    def required_for?(policy_key, subject: nil, tenant: nil, acting_for: nil)
+      !current_for?(policy_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def agreed_to?(statement_key, subject: nil, tenant: nil)
-      satisfied?("agreement", statement_key, subject: subject, tenant: tenant)
+    def agreed_to?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      satisfied?("agreement", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def acknowledged?(statement_key, subject: nil, tenant: nil)
-      satisfied?("acknowledgment", statement_key, subject: subject, tenant: tenant)
+    def acknowledged?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      satisfied?("acknowledgment", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def consented_to?(purpose_key, subject: nil, tenant: nil)
-      state = state_for_purpose(purpose_key, subject: subject, tenant: tenant)
+    def consented_to?(purpose_key, subject: nil, tenant: nil, acting_for: nil)
+      state = state_for_purpose(purpose_key, subject: subject, tenant: tenant, acting_for: acting_for)
       !state.nil? && state.satisfies?
     end
 
-    def declared?(statement_key, subject: nil, tenant: nil)
-      satisfied?("declaration", statement_key, subject: subject, tenant: tenant)
+    def declared?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      satisfied?("declaration", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def attested?(statement_key, subject: nil, tenant: nil)
-      satisfied?("attestation", statement_key, subject: subject, tenant: tenant)
+    def attested?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      satisfied?("attestation", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def authorized?(statement_key, subject: nil, tenant: nil)
-      satisfied?("authorization", statement_key, subject: subject, tenant: tenant)
+    def authorized?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      satisfied?("authorization", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
     # Deliberately a separate question. An exemption records that no human
     # action occurred, so it can never answer `agreed_to?` — the whole reason to
     # record one is that the difference matters.
-    def exempted_from?(policy_key, subject: nil, tenant: nil)
-      states(subject: subject, tenant: tenant)
+    def exempted_from?(policy_key, subject: nil, tenant: nil, acting_for: nil)
+      states(subject: subject, tenant: tenant, acting_for: acting_for)
         .for_policy(policy_key)
         .where(state: "exempted")
         .exists?
@@ -66,16 +67,16 @@ module Clickwrap
 
     # --- Records --------------------------------------------------------------
 
-    def declaration(statement_key, subject: nil, tenant: nil)
-      state_for("declaration", statement_key, subject: subject, tenant: tenant)
+    def declaration(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      state_for("declaration", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def consent(purpose_key, subject: nil, tenant: nil)
-      state_for_purpose(purpose_key, subject: subject, tenant: tenant)
+    def consent(purpose_key, subject: nil, tenant: nil, acting_for: nil)
+      state_for_purpose(purpose_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
-    def authorization(statement_key, subject: nil, tenant: nil)
-      state_for("authorization", statement_key, subject: subject, tenant: tenant)
+    def authorization(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      state_for("authorization", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
     def events
@@ -86,38 +87,39 @@ module Clickwrap
       ReceiptCollection.new(events.where(event_type: Vocabulary::HUMAN_ACTION_EVENT_TYPES))
     end
 
-    def statement_states = states
+    def statement_states = StatementState.for_actor(actor_reference)
 
     def to_s = "clickwraps for #{actor_reference}"
 
     private
 
     def actor_reference
-      @actor_reference ||= Clickwrap.config.identify_actor_with.call(actor)
+      @actor_reference ||= Reference.actor(actor)
     end
 
-    def states(subject: nil, tenant: nil)
-      scope = StatementState.for_actor(actor_reference)
-      scope = scope.where(subject_key: StatementState.subject_key_for(subject)) unless subject.nil?
-      scope = scope.where(tenant_key: tenant.to_s) unless tenant.nil?
-      scope
+    def states(subject:, tenant:, acting_for:)
+      StatementState.for_actor(actor_reference).where(
+        subject_key: StatementState.subject_key_for(subject),
+        tenant_key: Reference.tenant(tenant),
+        represented_party_reference: Reference.represented_party(acting_for)
+      )
     end
 
-    def satisfied?(kind, statement_key, subject:, tenant:)
-      state = state_for(kind, statement_key, subject: subject, tenant: tenant)
+    def satisfied?(kind, statement_key, subject:, tenant:, acting_for:)
+      state = state_for(kind, statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
       !state.nil? && state.satisfies?
     end
 
-    def state_for(kind, statement_key, subject:, tenant:)
-      states(subject: subject, tenant: tenant)
+    def state_for(kind, statement_key, subject:, tenant:, acting_for:)
+      states(subject: subject, tenant: tenant, acting_for: acting_for)
         .for_statement(statement_key)
         .where(kind: kind)
         .order(effective_at: :desc)
         .first
     end
 
-    def state_for_purpose(purpose_key, subject:, tenant:)
-      states(subject: subject, tenant: tenant)
+    def state_for_purpose(purpose_key, subject:, tenant:, acting_for:)
+      states(subject: subject, tenant: tenant, acting_for: acting_for)
         .where(kind: "consent")
         .for_purpose(purpose_key)
         .order(effective_at: :desc)

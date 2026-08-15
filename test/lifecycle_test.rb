@@ -103,6 +103,24 @@ class LifecycleTest < ActiveSupport::TestCase
     end
   end
 
+  test "the expiry sweep appends the lifecycle event at the exact validity boundary" do
+    scheme = create_withdrawal(user: @user)
+    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
+                                           answers: { non_professional_driver: "1" })
+    state = @user.clickwraps.declaration(:non_professional_driver, subject: scheme)
+
+    travel_to state.expires_at, with_usec: true do
+      expiry = nil
+
+      assert_difference -> { Clickwrap::Event.where(event_type: "expiry").count }, 1 do
+        expiry = Clickwrap::Lifecycle.expire_due!(at: state.expires_at).sole
+      end
+
+      assert_equal "expired", state.reload.state
+      assert_equal state.expires_at, expiry.statements.sole.valid_from
+    end
+  end
+
   test "a declaration is bound to its subject fingerprint" do
     scheme = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
     capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
@@ -126,10 +144,13 @@ class LifecycleTest < ActiveSupport::TestCase
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 
-    Clickwrap::Lifecycle.consume_authorization!(
-      event: Clickwrap::Event.for_policy("withdrawal_authorization").last,
-      because: "The withdrawal was submitted"
-    )
+    capture_event = Clickwrap::Event.captures.for_policy("withdrawal_authorization").last
+    assert_raises(Clickwrap::AlreadyConsumedError) do
+      Clickwrap::Lifecycle.consume_authorization!(
+        event: capture_event,
+        because: "Trying to spend the same authorization twice"
+      )
+    end
 
     state = @user.clickwraps.authorization(:withdrawal, subject: withdrawal)
     assert_equal "consumed", state.state
@@ -233,7 +254,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "a published document version cannot have its bytes changed" do
-    version = Clickwrap::Document.find_by(key: "terms").current_version
+    version = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     assert_raises(Clickwrap::DocumentVersionConflictError) do
       version.update!(content: "rewritten terms")
@@ -242,6 +263,7 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "republishing a version label with different bytes is refused" do
     definition = Clickwrap.documents.values.find { |candidate| candidate.key == "terms" }
+    Clickwrap.documents.clear
     Clickwrap.document(:terms, version: definition.version_label, locale: :en,
                                content: "completely different bytes under the same label")
 

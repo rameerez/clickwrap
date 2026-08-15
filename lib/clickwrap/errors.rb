@@ -77,6 +77,20 @@ module Clickwrap
   # cannot join the caller's transaction on the configured connection.
   class TransactionUnavailable < Error; end
 
+  # Raised when a registration block returns without persisting the exact
+  # prospective actor the presentation was issued for.
+  class RegistrationFailed < Error; end
+
+  # Raised when delegated action was not explicitly permitted by the policy and
+  # positively verified by the host's authority callback.
+  class AuthorityNotVerified < Error; end
+
+  # Raised when a signed in-place remediation context is missing, expired,
+  # belongs to a different actor/tenant/policy, or names a resource that can no
+  # longer be resolved and authorized.
+  class RemediationInvalid < Error; end
+  class RemediationNotAuthorized < RemediationInvalid; end
+
   # Raised when a deadlock or serialization failure occurred and Clickwrap
   # cannot prove the caller's block is safe to retry. The host decides.
   class RetryableTransactionError < Error; end
@@ -102,6 +116,7 @@ module Clickwrap
   class LifecycleError < Error; end
   class AlreadyWithdrawnError < LifecycleError; end
   class AlreadyConsumedError < LifecycleError; end
+  class OneTimeAuthorizationConflict < LifecycleError; end
   class NotWithdrawableError < LifecycleError; end
 
   # --- Request evidence, retention, and disposition ---------------------------
@@ -112,6 +127,10 @@ module Clickwrap
 
   # Raised when disposition is attempted on evidence under a legal hold.
   class LegalHoldInEffect < Error; end
+
+  # Raised when ordinary Active Record mutation is attempted against evidence
+  # whose only permitted changes are named, audited lifecycle transitions.
+  class ImmutableEvidenceError < Error; end
 
   # Raised when a disposition plan is stale, already applied, expired, or no
   # longer matches what the operator reviewed.

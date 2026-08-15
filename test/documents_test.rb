@@ -7,7 +7,7 @@ require "test_helper"
 # publishing, freezing, and digest verification get their own tests.
 class DocumentsTest < ActiveSupport::TestCase
   test "publishing freezes the exact bytes with a versioned digest" do
-    version = Clickwrap::Document.find_by(key: "terms").current_version
+    version = Clickwrap::Document.find_by(document_key: "terms").current_version
     source = File.binread(Rails.root.join("app/content/legal/terms.md"))
 
     assert_equal source, version.content_bytes
@@ -34,6 +34,11 @@ class DocumentsTest < ActiveSupport::TestCase
   end
 
   test "reusing a version label for different bytes is refused with both digests" do
+    # A deploy/reload clears the in-memory declarations, while the immutable
+    # published version remains in the database. The publication check must
+    # therefore still catch a reused label even though duplicate declarations
+    # inside one boot are rejected earlier by the registry.
+    Clickwrap.documents.clear
     Clickwrap.document(:terms, version: "2026-08-15", locale: :en, content: "completely different")
 
     error = assert_raises(Clickwrap::DocumentVersionConflictError) { Clickwrap.publish! }
@@ -45,7 +50,7 @@ class DocumentsTest < ActiveSupport::TestCase
   end
 
   test "reading bytes verifies them against the recorded digest" do
-    version = Clickwrap::Document.find_by(key: "terms").current_version
+    version = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     assert version.verify_content_digest
 
@@ -63,7 +68,7 @@ class DocumentsTest < ActiveSupport::TestCase
                                effective_at: Time.utc(2030, 1, 1), content: "Future terms.")
     Clickwrap.publish!
 
-    current = Clickwrap::Document.find_by(key: "terms").current_version
+    current = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     # `effective_at` is what makes scheduling possible at all. A version that
     # became presentable the moment it was published could not be prepared in
@@ -71,26 +76,26 @@ class DocumentsTest < ActiveSupport::TestCase
     assert_equal "2026-08-15", current.version_label
 
     travel_to Time.utc(2030, 6, 1) do
-      assert_equal "2030-01-01", Clickwrap::Document.find_by(key: "terms").current_version.version_label
+      assert_equal "2030-01-01", Clickwrap::Document.find_by(document_key: "terms").current_version.version_label
     end
   end
 
   test "a retired version stops being presentable without disappearing" do
-    document = Clickwrap::Document.find_by(key: "terms")
+    document = Clickwrap::Document.find_by(document_key: "terms")
     version = document.current_version
 
     version.update_columns(retired_at: 1.minute.ago, retired_reason: "Published in error")
 
     assert_nil document.reload.current_version
     assert Clickwrap::DocumentVersion.exists?(version.id),
-           "retiring stops future presentation; it does not delete what people already saw"
+           "retiring stops future offers; it does not delete versions bound into earlier events"
   end
 
   test "a document version is looked up per locale" do
     Clickwrap.document(:terms, version: "2026-08-15", locale: :es, content: "Términos en español.")
     Clickwrap.publish!
 
-    document = Clickwrap::Document.find_by(key: "terms")
+    document = Clickwrap::Document.find_by(document_key: "terms")
 
     assert_equal "en", document.current_version(locale: :en).locale
     assert_equal "es", document.current_version(locale: :es).locale
@@ -130,7 +135,7 @@ class DocumentsTest < ActiveSupport::TestCase
     })
     Clickwrap.publish!
 
-    version = Clickwrap::Document.find_by(key: "resolved").current_version
+    version = Clickwrap::Document.find_by(document_key: "resolved").current_version
 
     # Called once, at publish. Reading the document afterwards must not call it
     # again — a source that could answer differently on a later read is exactly
@@ -142,7 +147,7 @@ class DocumentsTest < ActiveSupport::TestCase
   end
 
   test "a resolver that returns nothing is refused rather than publishing an empty document" do
-    Clickwrap.document(:empty_source, version: "1", resolver: ->(_definition) { nil })
+    Clickwrap.document(:empty_source, version: "1", resolver: ->(_definition) {})
 
     assert_raises(Clickwrap::DocumentNotPublishedError) { Clickwrap.publish! }
   end
@@ -155,7 +160,7 @@ class DocumentsTest < ActiveSupport::TestCase
     Clickwrap.document(:unicode_terms, version: "1", content: text)
     Clickwrap.publish!
 
-    version = Clickwrap::Document.find_by(key: "unicode_terms").current_version
+    version = Clickwrap::Document.find_by(document_key: "unicode_terms").current_version
 
     assert_equal text, version.content_bytes
     assert version.verify_content_digest
@@ -182,7 +187,7 @@ class DocumentsTest < ActiveSupport::TestCase
     Clickwrap.document(:rendered, version: "1", content: "hello")
     Clickwrap.publish!
 
-    version = Clickwrap::Document.find_by(key: "rendered").current_version
+    version = Clickwrap::Document.find_by(document_key: "rendered").current_version
 
     # "This Markdown file existed" and "this rendered representation was
     # offered" are different claims, and each gets its own digest so neither
@@ -202,12 +207,79 @@ class DocumentsTest < ActiveSupport::TestCase
     assert_match(/exact rendered bytes/, error.message)
   end
 
-  test "a document version's receipt fragment names its digest algorithm" do
-    fragment = Clickwrap::Document.find_by(key: "terms").current_version.to_receipt_fragment
+  test "the built-in renderer falls back to the HTML4 safe-list sanitizer" do
+    html5_sanitizer = Rails::HTML5.send(:remove_const, :SafeListSanitizer)
 
-    assert_equal "terms", fragment["key"]
-    assert_equal "2026-08-15", fragment["version"]
-    assert_equal "en", fragment["locale"]
-    assert_match(/\A[0-9a-f]{64}\z/, fragment["sha256"])
+    rendered = Clickwrap::DocumentRenderer.sanitize_html("<p>Safe</p><script>unsafe()</script>")
+
+    assert_includes rendered, "<p>Safe</p>"
+    assert_not_includes rendered, "<script>"
+  ensure
+    Rails::HTML5.const_set(:SafeListSanitizer, html5_sanitizer) if html5_sanitizer
+  end
+
+  test "an Active Storage upload finishes before the database transaction opens" do
+    Clickwrap.config.store_document_contents_in = :active_storage
+    Clickwrap.document(:stored_file, version: "1", content: "stored bytes")
+    blob = fake_active_storage_blob("stored-file-signed-id")
+    starting_transaction_depth = ActiveRecord::Base.connection.open_transactions
+
+    with_fake_active_storage(blob) do
+      Clickwrap.publish!
+    end
+
+    version = Clickwrap::Document.find_by(document_key: "stored_file").current_version
+    assert_equal "active_storage", version.storage_backend
+    assert_equal "stored-file-signed-id", version.storage_locator
+    assert_equal starting_transaction_depth, blob.transaction_depth_when_uploaded
+    refute blob.purged
+  end
+
+  test "a failed publication purges the Active Storage blob uploaded for it" do
+    Clickwrap.config.store_document_contents_in = :active_storage
+    definition = Clickwrap.documents.values.find { |candidate| candidate.key == "terms" }
+    blob = fake_active_storage_blob("failed-upload-signed-id")
+    publisher = Clickwrap::Services::PublishDocuments.new(definitions: [definition])
+    publisher.stubs(:find_existing).returns(nil)
+    starting_transaction_depth = ActiveRecord::Base.connection.open_transactions
+
+    with_fake_active_storage(blob) do
+      assert_raises(ActiveRecord::RecordInvalid) { publisher.call }
+    end
+
+    assert blob.purged
+    assert_equal starting_transaction_depth, blob.transaction_depth_when_uploaded
+  end
+
+  FakeBlob = Struct.new(:signed_id, :transaction_depth_when_uploaded, :purged, keyword_init: true) do
+    def purge
+      self.purged = true
+    end
+  end
+
+  private
+
+  def fake_active_storage_blob(signed_id)
+    FakeBlob.new(signed_id:, transaction_depth_when_uploaded: nil, purged: false)
+  end
+
+  def with_fake_active_storage(blob)
+    already_loaded = Object.const_defined?(:ActiveStorage, false)
+    original = Object.const_get(:ActiveStorage) if already_loaded
+    Object.send(:remove_const, :ActiveStorage) if already_loaded
+
+    active_storage = Module.new
+    blob_class = Class.new
+    blob_class.define_singleton_method(:create_and_upload!) do |**_options|
+      blob.transaction_depth_when_uploaded = ActiveRecord::Base.connection.open_transactions
+      blob
+    end
+    active_storage.const_set(:Blob, blob_class)
+    Object.const_set(:ActiveStorage, active_storage)
+
+    yield
+  ensure
+    Object.send(:remove_const, :ActiveStorage) if Object.const_defined?(:ActiveStorage, false)
+    Object.const_set(:ActiveStorage, original) if already_loaded
   end
 end

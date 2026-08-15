@@ -22,6 +22,10 @@ group :test do
   # Minitest 6 extracted minitest/mock into its own gem.
   gem "minitest-mock"
   gem "mocha", "~> 2.0"
+  # Optional integration contract only. Devise is deliberately not a runtime
+  # dependency; this lane proves that choosing the adapter does not make it an
+  # untested README promise.
+  gem "devise", ">= 5.0.4", "< 6", require: false
   # Pinned to the 0.x line: SimpleCov 1.0 deprecates `SimpleCov.start` from a
   # `.simplecov` file, which is the layout the whole gem ecosystem uses.
   gem "simplecov", "~> 0.22", require: false
@@ -39,7 +43,7 @@ group :test do
   # advisory locks and update/delete protections actually differ.
   gem "mysql2"
   gem "pg"
-  gem "sqlite3"
+  gem "sqlite3", ">= 2.9.6"
 
   # Dummy Rails app
   gem "bootsnap", require: false

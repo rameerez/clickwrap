@@ -136,9 +136,12 @@ record_ip_geolocation(
 Nine fields, nine visible decisions, each with its own line in the privacy inventory.
 `latitude_and_longitude` is one coupled choice on purpose: half a coordinate is not a result.
 
-Installer recipes are the one permitted shorthand, and only because they are **scaffolding**:
-`--request-evidence-recipe=evidence-rich` expands into every individual setting, asks about each
-one, writes them into the initializer, and then does not exist at runtime.
+The installer follows the same rule. Interactive prompts ask about one category at a time, and
+non-interactive installs use individual flags such as
+`--record-ip-addresses-by-default`. The sole recipe,
+`--request-evidence-recipe=privacy-minimized`, writes every collection setting explicitly as
+`false`; it can never enable a data category. There is no `evidence-rich`, `full`, or other named
+recipe whose expansion could collect more in a later release.
 
 ### 7. No unexplained acronyms or abbreviations
 
@@ -314,5 +317,4 @@ after the first release it is in receipts.
 | Source | Class |
 |---|---|
 | `docs/strategy/02-request-evidence.md`, "Public naming rules" — the normative source for this guide | Internal normative design document |
-| `lib/clickwrap/configuration.rb`, `lib/clickwrap/vocabulary.rb`, `lib/clickwrap.rb`, `lib/clickwrap/actor_proxy.rb`, `lib/clickwrap/dsl/policy_builder.rb`, `lib/clickwrap/models/request_evidence.rb` at commit `a1ffe9b` | Pinned source code |
 | Every rule, rejection, and rationale above | Product-design inference |

@@ -1,8 +1,8 @@
 # Clickwrap guides
 
-The [README](../README.md) is the tour: it shows every capability once, in the order you meet
-them. These guides are the depth behind the parts that are easy to get subtly wrong, and they
-assume you have already read the README section they expand on.
+The [README](../README.md) is the tour: it gets you from install to a verified receipt and
+shows each capability briefly. These guides are the depth behind the parts that are easy to
+get subtly wrong, and they assume you have already read the README section they expand on.
 
 | Guide | Read it when |
 |---|---|
@@ -14,6 +14,7 @@ assume you have already read the README section they expand on.
 | [Migrating](migrating.md) | When you have an `accepted_terms_at` column or a FinePrint installation and you want the history without inventing the parts of it nobody recorded. |
 | [Accessibility](accessibility.md) | Before your accessibility review, so you know exactly which line is the reference views' responsibility and which is your page's. |
 | [Naming](naming.md) | Before you propose a public method, option, configuration setting, or receipt field — or before you review a pull request that adds one. |
+| [Organizations](organizations.md) | When a human user accepts or authorizes something on behalf of an organization. Separates actor, represented party, tenant, subject, membership evidence, and the legal-authority boundary. |
 
 Two things hold across all of them.
 

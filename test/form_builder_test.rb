@@ -184,7 +184,7 @@ class FormBuilderTest < ActionView::TestCase
 
     # The tempting bug: re-render the form with the boxes the person did tick
     # already ticked. Clickwrap re-presents instead, so what is captured is
-    # always an action taken against the offer on screen.
+    # always an action taken against the server-generated offer.
     refute_match(/\bchecked\b/, rendered)
   end
 
@@ -213,6 +213,20 @@ class FormBuilderTest < ActionView::TestCase
 
     nothing_at_all = assert_raises(ActionView::Template::Error) { render_clickwrap(:signup, submit: nil) }
     assert_match(/needs `submit:` to be the button text/, nothing_at_all.message)
+  end
+
+  test "one Rails form refuses two ambiguous Clickwrap presentation tokens" do
+    error = assert_raises(ActionView::Template::Error) do
+      render inline: <<~ERB
+        <%= form_with url: "/signup", method: :post do |form| %>
+          <%= form.clickwrap :current_terms, actor: @user, submit: "Accept terms" %>
+          <%= form.clickwrap :signup, actor: @user, submit: "Create account" %>
+        <% end %>
+      ERB
+    end
+
+    assert_match(/only one Clickwrap presentation/, error.message)
+    assert_match(/one Clickwrap policy.*separate form/i, error.message)
   end
 
   private

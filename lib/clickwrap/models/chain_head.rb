@@ -33,17 +33,33 @@ module Clickwrap
     # concurrent captures in the same scope from reading the same predecessor
     # and forking the chain.
     def self.reserve!(chain_scope:)
-      head = lock.find_by(chain_scope: chain_scope) ||
-             create!(chain_scope: chain_scope, sequence: 0)
+      # The first probe must be an ordinary read. On MySQL/InnoDB, two
+      # `SELECT ... FOR UPDATE` calls for the same absent unique key both take
+      # gap locks; when both then INSERT, InnoDB has to deadlock one of them.
+      # Let the unique INSERT choose the first writer, absorb the loser's
+      # duplicate in a savepoint, and only then take the row lock.
+      head = find_by(chain_scope: chain_scope)
 
-      next_sequence = head.sequence + 1
+      unless head
+        begin
+          transaction(requires_new: true) { create!(chain_scope: chain_scope, chain_sequence: 0) }
+        rescue ActiveRecord::RecordNotUnique
+          # The savepoint absorbs PostgreSQL's aborted-statement state before
+          # the winning row is read and locked in the caller's transaction.
+        end
+      end
+
+      # Always re-read under the lock. A plain read above is only an existence
+      # probe and may carry a stale sequence; this is the value from which the
+      # next link is actually reserved.
+      head = lock.find_by!(chain_scope: chain_scope)
+
+      next_sequence = head.chain_sequence + 1
       previous_digest = head.last_event_digest
 
-      head.update!(sequence: next_sequence)
+      head.update!(chain_sequence: next_sequence)
 
       [previous_digest, next_sequence]
-    rescue ActiveRecord::RecordNotUnique
-      retry
     end
 
     # Records the digest the event was actually written with, so the next event
@@ -56,6 +72,6 @@ module Clickwrap
       head
     end
 
-    def to_s = "chain #{chain_scope} at #{sequence}"
+    def to_s = "chain #{chain_scope} at #{chain_sequence}"
   end
 end

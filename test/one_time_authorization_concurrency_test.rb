@@ -1,0 +1,99 @@
+# frozen_string_literal: true
+
+require "test_helper"
+
+# Real commits and separate connections are required to exercise the absent-row
+# race. SQLite intentionally skips this: it has one writer, while PostgreSQL and
+# MySQL CI run the contention the production guarantee depends on.
+class OneTimeAuthorizationConcurrencyTest < ActiveSupport::TestCase
+  use_real_database_commits!
+
+  test "different concurrent presentations cannot both perform one protected action" do
+    adapter = ActiveRecord::Base.connection.adapter_name.downcase
+    skip "concurrent writers need PostgreSQL or MySQL (this lane is #{adapter})" if adapter.include?("sqlite")
+
+    user = create_user
+    withdrawal = create_withdrawal(user: user)
+    presentations = 2.times.map do
+      present_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal)
+    end
+    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    starts = Queue.new
+    results = Queue.new
+    counter = 0
+    counter_lock = Mutex.new
+
+    threads = presentations.map do |presentation|
+      Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          starts.pop
+          Clickwrap.capture_and!(
+            :withdrawal_authorization,
+            actor: User.find(user.id),
+            subject: Withdrawal.find(withdrawal.id),
+            submission: submission_for(presentation, answers)
+          ) do
+            counter_lock.synchronize { counter += 1 }
+          end
+          results << :committed
+        rescue Clickwrap::OneTimeAuthorizationConflict
+          results << :conflict
+        rescue StandardError => error
+          results << error
+        end
+      end
+    end
+
+    2.times { starts << true }
+    threads.each(&:join)
+    outcomes = 2.times.map { results.pop }
+
+    unexpected = outcomes.grep(StandardError)
+    assert_empty unexpected, unexpected.map(&:full_message).join("\n")
+    assert_equal %i[committed conflict], outcomes.sort
+    assert_equal 1, counter
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
+  end
+
+  test "concurrent captures reserve distinct linked chain positions" do
+    adapter = ActiveRecord::Base.connection.adapter_name.downcase
+    skip "concurrent writers need PostgreSQL or MySQL (this lane is #{adapter})" if adapter.include?("sqlite")
+
+    Clickwrap.config.chain_event_history_with = :sha256
+    users = 2.times.map { create_user }
+    presentations = users.map { |user| present_clickwrap(:signup, actor: user) }
+    starts = Queue.new
+    errors = Queue.new
+
+    threads = users.zip(presentations).map do |user, presentation|
+      Thread.new do
+        ActiveRecord::Base.connection_pool.with_connection do
+          starts.pop
+          Clickwrap.capture!(
+            :signup,
+            actor: User.find(user.id),
+            submission: submission_for(presentation, terms: "1", privacy_notice: "1")
+          )
+        rescue StandardError => error
+          errors << error
+        end
+      end
+    end
+
+    2.times { starts << true }
+    threads.each(&:join)
+    unexpected = []
+    unexpected << errors.pop until errors.empty?
+    assert_empty unexpected, unexpected.map(&:full_message).join("\n")
+
+    events = Clickwrap::Event.for_policy("signup").order(:chain_sequence).to_a
+    assert_equal [1, 2], events.map(&:chain_sequence)
+    assert_nil events.first.previous_event_digest
+    assert_equal events.first.event_digest, events.second.previous_event_digest
+
+    head = Clickwrap::ChainHead.find_by!(chain_scope: "global/signup")
+    assert_equal events.second.id, head.last_event_id
+    assert_equal events.second.event_digest, head.last_event_digest
+    assert Clickwrap::Integrity::Chain.verify(scope: "global/signup").success?
+  end
+end

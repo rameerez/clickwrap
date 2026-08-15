@@ -21,13 +21,16 @@ module Clickwrap
       # withdrawn as easily as it was given is not what this gem will record as
       # consent — the policy compiler already refused to accept one without a
       # withdrawal route.
-      def withdraw!(purpose_key, actor:, because:, tenant: nil, subject: nil, http_request: nil)
+      def withdraw!(purpose_key, actor:, because:, tenant: nil, subject: nil,
+                    acting_for: nil, http_request: nil)
         require_reason!(because, "Withdrawing consent")
 
         for_purpose = StatementState
                       .for_actor(reference_for(actor))
                       .for_purpose(purpose_key)
-                      .where(kind: "consent")
+                      .where(kind: "consent", tenant_key: Reference.tenant(tenant),
+                             subject_key: Reference.subject(subject),
+                             represented_party_reference: Reference.represented_party(acting_for))
 
         states = for_purpose.where(state: "active")
 
@@ -61,8 +64,10 @@ module Clickwrap
       # conflating "this changed" with "this was a lie" would be both wrong and
       # unfair to the person who declared it.
       def correct!(statement_key, actor:, subject: nil, tenant: nil, replaces: nil,
-                   because: nil, http_request: nil, submission: nil, answers: nil)
-        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
+                   acting_for: nil, because: nil, http_request: nil, submission: nil, answers: nil)
+        require_reason!(because, "Correcting a declaration or attestation")
+        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant,
+                                           acting_for: acting_for)
 
         unless Vocabulary.correctable?(state.kind)
           raise LifecycleError,
@@ -70,44 +75,94 @@ module Clickwrap
                 "superseded by a new version; consent is withdrawn and granted again."
         end
 
+        origin = lifecycle_origin!(state, replaces)
         policy = Clickwrap.policy!(state.policy_key)
 
-        ::ActiveRecord::Base.transaction do
-          transition!(state, to: "corrected", event_type: "correction", action: "corrected",
-                             because: because, http_request: http_request, actor: actor,
-                             predecessor: replaces)
-
-          Capture.new(policy: policy, actor: actor, subject: subject, tenant: tenant,
-                      http_request: http_request, submission: submission, answers: answers,
-                      reason: because).capture!
-        end
+        Capture.new(
+          policy: policy,
+          actor: actor,
+          subject: subject,
+          tenant: tenant,
+          acting_for: acting_for,
+          http_request: http_request,
+          submission: submission,
+          answers: answers,
+          reason: because,
+          event_type: "correction",
+          root_event_id: state.root_event_id,
+          predecessor_event_id: origin.id,
+          statement_action_overrides: { statement_key.to_s => "corrected" }
+        ).capture!
       end
 
       # A renewal always starts a new validity period rather than extending the
       # old one, so a stale expiry can never quietly survive a renewal.
       def renew!(statement_key, actor:, subject: nil, tenant: nil, because: nil,
-                 http_request: nil, submission: nil, answers: nil)
-        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
+                 acting_for: nil, http_request: nil, submission: nil, answers: nil)
+        require_reason!(because, "Renewing a statement")
+        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant,
+                                           acting_for: acting_for)
         policy = Clickwrap.policy!(state.policy_key)
+        statement = policy.statement!(statement_key)
 
-        ::ActiveRecord::Base.transaction do
-          Capture.new(policy: policy, actor: actor, subject: subject, tenant: tenant,
-                      http_request: http_request, submission: submission, answers: answers,
-                      reason: because).capture!
+        unless statement.expirable? && statement.valid_for.present?
+          raise LifecycleError,
+                "#{statement_key} is a #{statement.kind} with no validity period, so it cannot be renewed."
         end
+
+        action = statement.kind == "consent" ? "renewed" : statement.initial_action
+        Capture.new(
+          policy: policy,
+          actor: actor,
+          subject: subject,
+          tenant: tenant,
+          acting_for: acting_for,
+          http_request: http_request,
+          submission: submission,
+          answers: answers,
+          reason: because,
+          event_type: "renewal",
+          root_event_id: state.root_event_id,
+          predecessor_event_id: state.current_event_id,
+          statement_action_overrides: { statement_key.to_s => action }
+        ).capture!
       end
 
-      def revoke!(statement_key, actor:, because:, subject: nil, tenant: nil, http_request: nil)
+      def change_consent_scope!(statement_key, actor:, because:, subject: nil, tenant: nil,
+                                acting_for: nil, http_request: nil, submission: nil, answers: nil)
+        require_reason!(because, "Changing consent scope")
+        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant,
+                                           acting_for: acting_for)
+
+        unless state.kind == "consent"
+          raise LifecycleError, "Only consent has a changeable scope; #{statement_key} is #{state.kind}."
+        end
+
+        Capture.new(
+          policy: Clickwrap.policy!(state.policy_key), actor: actor, subject: subject, tenant: tenant,
+          http_request: http_request, submission: submission, answers: answers, reason: because,
+          acting_for: acting_for,
+          event_type: "scope_change", root_event_id: state.root_event_id,
+          predecessor_event_id: state.current_event_id,
+          statement_action_overrides: { statement_key.to_s => "scope_changed" }
+        ).capture!
+      end
+
+      def revoke!(statement_key, actor:, because:, subject: nil, tenant: nil,
+                  acting_for: nil, http_request: nil)
         require_reason!(because, "Revoking an authorization")
 
-        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
+        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant,
+                                           acting_for: acting_for)
 
         transition!(state, to: "revoked", event_type: "revocation", action: "revoked",
                            because: because, http_request: http_request, actor: actor)
       end
 
-      def supersede!(statement_key, actor:, subject: nil, tenant: nil, because: nil, http_request: nil)
-        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant)
+      def supersede!(statement_key, actor:, subject: nil, tenant: nil, acting_for: nil,
+                     because: nil, http_request: nil)
+        state = find_state!(statement_key, actor: actor, subject: subject, tenant: tenant,
+                                           acting_for: acting_for)
 
         transition!(state, to: "superseded", event_type: "supersession", action: "superseded",
                            because: because, http_request: http_request, actor: actor)
@@ -117,20 +172,61 @@ module Clickwrap
       # performs the protected action, after the row lock the capture took, so
       # two concurrent attempts cannot both spend the same authorization.
       def consume_authorization!(event:, because: nil)
-        states = StatementState.where(current_event_id: event.id, one_time: true, state: "active")
+        source_event = Event.includes(:statements).find(event.id)
+        authorizations = source_event.statements.select(&:one_time?)
 
-        states.map do |state|
-          state.lock!
+        authorizations.map do |authorization|
+          ::ActiveRecord::Base.transaction do
+            state = StatementState.lock.find_by(
+              StatementState.identity_for(
+                policy_key: source_event.policy_key,
+                statement_key: authorization.statement_key,
+                actor_reference: source_event.actor_reference,
+                tenant_key: source_event.tenant_key,
+                subject_key: source_event.subject_key,
+                represented_party_reference: source_event.represented_party_reference
+              )
+            )
 
-          if state.consumed_at.present?
-            raise AlreadyConsumedError,
-                  "Authorization #{state.statement_key} was already consumed at " \
-                  "#{state.consumed_at}. An authorization is not reusable merely because the " \
-                  "agreement underneath it is still current."
+            if authorization_was_consumed?(source_event, authorization.statement_key)
+              raise AlreadyConsumedError,
+                    "Authorization #{authorization.statement_key} from event #{source_event.id} " \
+                    "was already consumed. A one-time authorization cannot be spent twice."
+            end
+
+            consumed_at = Clickwrap.now
+            consumption = append_lifecycle_event!(
+              event: source_event,
+              event_type: "consumption",
+              reason: because.presence || "The one-time authorization was consumed",
+              actor: nil
+            ) do |appended|
+              appended.statements.create!(
+                ordinal: 0,
+                statement_key: authorization.statement_key,
+                kind: authorization.kind,
+                action: "consumed",
+                assertion_text: "The authorization #{authorization.statement_key} was consumed.",
+                assertion_locale: "en",
+                required: false,
+                optional: false,
+                answered: false,
+                purpose_key: authorization.purpose_key,
+                valid_from: consumed_at,
+                created_at: consumed_at
+              )
+            end
+
+            # A later authorization for the same actor/subject may already be
+            # current while an earlier provider result is being reconciled.
+            # Record consumption of the earlier authorization without spending
+            # or deactivating the later one.
+            if state && state.root_event_id.to_s == source_event.id.to_s && state.state == "active"
+              CurrentState.transition!(state, to: "consumed", event: consumption, at: consumed_at)
+            end
+
+            consumption
           end
-
-          transition!(state, to: "consumed", event_type: "consumption", action: "consumed",
-                             because: because, actor: nil)
         end
       end
 
@@ -204,6 +300,7 @@ module Clickwrap
             )
           end
 
+          event.finalize_integrity!
           CurrentState.apply!(event.reload)
           event
         end
@@ -212,30 +309,38 @@ module Clickwrap
       # Appends a linked lifecycle event without touching the projection. Used
       # by holds and dispositions, which record that something happened to the
       # evidence rather than changing what the evidence says.
-      def append_lifecycle_event!(event:, event_type:, reason:, actor: nil, extra: {})
+      def append_lifecycle_event!(event:, event_type:, reason:, actor: nil, extra: {}, &block)
         now = Clickwrap.now
+        lifecycle_actor = actor || SystemActor.new("clickwrap_lifecycle")
+        human_operator = actor.present? && !actor.is_a?(SystemActor)
 
-        Event.create!(
-          {
-            event_type: event_type,
-            policy_key: event.policy_key,
-            policy_revision_id: event.policy_revision_id,
-            root_event_id: event.root_event_id || event.id,
-            predecessor_event_id: event.id,
-            actor: actor.is_a?(::ActiveRecord::Base) ? actor : nil,
-            actor_reference: actor ? reference_for(actor) : event.actor_reference,
-            tenant_key: event.tenant_key,
-            subject_key: event.subject_key,
-            capture_channel: "system",
-            attribution_method: actor ? "operator_session" : "system_process",
-            recorded_at_by_server: now,
-            reason: reason,
-            retention_class_key: event.retention_class_key,
-            canonical_schema_version: Clickwrap::CANONICAL_SCHEMA_VERSION,
-            gem_version: Clickwrap::VERSION,
-            created_at: now
-          }.merge(extra)
-        )
+        Event.transaction do
+          appended = Event.create!(
+            {
+              event_type: event_type,
+              policy_key: event.policy_key,
+              policy_revision_id: event.policy_revision_id,
+              root_event_id: event.root_event_id || event.id,
+              predecessor_event_id: event.id,
+              actor: lifecycle_actor.is_a?(::ActiveRecord::Base) ? lifecycle_actor : nil,
+              actor_reference: reference_for(lifecycle_actor),
+              tenant_key: event.tenant_key,
+              subject_key: event.subject_key,
+              capture_channel: "system",
+              attribution_method: human_operator ? "operator_session" : "system_process",
+              recorded_at_by_server: now,
+              reason: reason,
+              retention_class_key: event.retention_class_key,
+              canonical_schema_version: Clickwrap::CANONICAL_SCHEMA_VERSION,
+              gem_version: Clickwrap::VERSION,
+              created_at: now
+            }.merge(extra)
+          )
+
+          block&.call(appended)
+          appended.finalize_integrity!
+          appended
+        end
       end
 
       private
@@ -254,22 +359,22 @@ module Clickwrap
             extra: {
               http_request_id: http_request.respond_to?(:request_id) ? http_request.request_id : nil
             }.compact
-          )
-
-          event.statements.create!(
-            ordinal: 0,
-            statement_key: state.statement_key,
-            kind: state.kind,
-            action: action,
-            assertion_text: lifecycle_assertion(action, state),
-            assertion_locale: "en",
-            required: false,
-            optional: false,
-            answered: false,
-            purpose_key: state.purpose_key,
-            valid_from: at,
-            created_at: at
-          )
+          ) do |appended|
+            appended.statements.create!(
+              ordinal: 0,
+              statement_key: state.statement_key,
+              kind: state.kind,
+              action: action,
+              assertion_text: lifecycle_assertion(action, state),
+              assertion_locale: "en",
+              required: false,
+              optional: false,
+              answered: false,
+              purpose_key: state.purpose_key,
+              valid_from: at,
+              created_at: at
+            )
+          end
 
           CurrentState.transition!(state, to: to, event: event, at: at)
           event
@@ -288,6 +393,13 @@ module Clickwrap
         end
       end
 
+      def authorization_was_consumed?(event, statement_key)
+        Event.where(root_event_id: event.id, event_type: "consumption")
+             .joins(:statements)
+             .where(clickwrap_event_statements: { statement_key: statement_key, action: "consumed" })
+             .exists?
+      end
+
       def predecessor_id(replaces)
         return nil if replaces.nil?
         return replaces if replaces.is_a?(String)
@@ -296,12 +408,30 @@ module Clickwrap
         replaces.id
       end
 
-      def find_state!(statement_key, actor:, subject:, tenant:)
+      def lifecycle_origin!(state, replaces)
+        id = predecessor_id(replaces) || state.current_event_id
+        origin = Event.find_by(id: id)
+
+        unless origin && origin.policy_key == state.policy_key &&
+               origin.actor_reference == state.actor_reference &&
+               origin.tenant_key.to_s == state.tenant_key.to_s &&
+               origin.subject_key.to_s == state.subject_key.to_s &&
+               origin.represented_party_reference.to_s == state.represented_party_reference.to_s &&
+               origin.statement(state.statement_key)
+          raise LifecycleError,
+                "The event named by `replaces:` is not the current statement for this actor, tenant, and subject."
+        end
+
+        origin
+      end
+
+      def find_state!(statement_key, actor:, subject:, tenant:, acting_for:)
         state = StatementState
                 .for_actor(reference_for(actor))
                 .for_statement(statement_key)
-                .where(subject_key: StatementState.subject_key_for(subject),
-                       tenant_key: tenant.to_s)
+                .where(subject_key: Reference.subject(subject),
+                       tenant_key: Reference.tenant(tenant),
+                       represented_party_reference: Reference.represented_party(acting_for))
                 .first
 
         return state if state
@@ -314,7 +444,7 @@ module Clickwrap
         return nil if actor.nil?
         return actor if actor.is_a?(String)
 
-        Clickwrap.config.identify_actor_with.call(actor)
+        Reference.actor(actor)
       end
 
       def require_reason!(because, what)

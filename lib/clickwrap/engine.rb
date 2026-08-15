@@ -138,6 +138,7 @@ module Clickwrap
     if config.respond_to?(:after_routes_loaded)
       config.after_routes_loaded do
         Clickwrap::ControllerHelpers.verify_registered_gates!
+        Clickwrap::Services::ValidatePolicyReferences.validate_remediation_paths!
       end
     end
 

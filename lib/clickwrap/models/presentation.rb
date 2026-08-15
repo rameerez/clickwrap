@@ -24,6 +24,7 @@ module Clickwrap
     belongs_to :policy_revision, class_name: "Clickwrap::PolicyRevision", inverse_of: :presentations
     belongs_to :actor, polymorphic: true, optional: true
     belongs_to :subject, polymorphic: true, optional: true
+    belongs_to :represented_party, polymorphic: true, optional: true
 
     has_many :events,
              class_name: "Clickwrap::Event",
@@ -37,9 +38,9 @@ module Clickwrap
     validates :capture_channel, inclusion: { in: Vocabulary::CAPTURE_CHANNELS }
 
     scope :pending, -> { where(state: "presented_by_server") }
-    scope :expired_at, ->(moment = Clickwrap.now) { where(expires_at: ...moment) }
+    scope :expired_at, ->(moment = Clickwrap.now) { where(expires_at: ..moment) }
     scope :due_for_disposition, lambda { |at = Clickwrap.now|
-      where.not(retain_until: nil).where(retain_until: ...at)
+      where.not(retain_until: nil).where(retain_until: ..at)
     }
 
     def expired?(at = Clickwrap.now) = expires_at <= at

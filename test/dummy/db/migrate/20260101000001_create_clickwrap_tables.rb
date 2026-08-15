@@ -27,8 +27,8 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     #
     # A logical document (:terms) is separate from its immutable versions,
     # because that separation is what lets a receipt from 2026 still show the
-    # exact bytes that were on screen after the file on disk has changed a dozen
-    # times. Publishing freezes `content` and its digest; a change means a new
+    # exact bytes bound into an accepted server offer after the file on disk has
+    # changed a dozen times. Publishing freezes `content` and its digest; a change means a new
     # version row, never an UPDATE. `retired_at` stops future presentation
     # without touching history.
     #
@@ -39,12 +39,12 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # credibility.
     # ---------------------------------------------------------------------------
     create_table :clickwrap_documents, id: primary_key_type do |t|
-      t.string :key, null: false
+      t.string :document_key, null: false
       t.string :tenant_key
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
-    add_index :clickwrap_documents, [ :tenant_key, :key ],
+    add_index :clickwrap_documents, [ :tenant_key, :document_key ],
               unique: true, name: "index_clickwrap_documents_on_tenant_and_key"
 
     create_table :clickwrap_document_versions, id: primary_key_type do |t|
@@ -75,12 +75,12 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :storage_locator
       t.string :source_reference
 
-      t.datetime :effective_at
-      t.datetime :published_at
-      t.datetime :retired_at
+      t.datetime :effective_at, precision: 6
+      t.datetime :published_at, precision: 6
+      t.datetime :retired_at, precision: 6
       t.string :retired_reason
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_document_versions, [ :document_id, :version_label, :locale ],
@@ -94,7 +94,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # Policies are written in Ruby, because that is reviewable in a pull request
     # and deploys with the code. But an export must stay intelligible after the
     # source has moved on, so the compiled snapshot is frozen here the first time
-    # a revision is presented or captured. The revision digest is the identity:
+    # a revision is offered or captured. The revision digest is the identity:
     # change a statement's wording and you get a new revision, and old events go
     # on pointing at the one they were captured under.
     # ---------------------------------------------------------------------------
@@ -105,8 +105,8 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :retention_class_key
       t.string :canonical_schema_version, null: false
       t.string :gem_version, null: false
-      t.datetime :compiled_at, null: false
-      t.datetime :created_at, null: false
+      t.datetime :compiled_at, precision: 6, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_policy_revisions, [ :policy_key, :revision_digest ],
@@ -134,23 +134,31 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.send(json_column_type, :manifest, null: false)
       t.string :manifest_digest, null: false
 
-      t.references :actor, polymorphic: true, type: foreign_key_type, null: true, index: false
+      # Stable references drive every evidence query. These optional convenience
+      # pointers are strings so one polymorphic column can safely point at host
+      # models whose primary keys are integers, UUIDs, or domain strings.
+      t.string :actor_type
+      t.string :actor_id
       t.string :actor_reference
       t.string :registration_flow_id
+      t.string :represented_party_type
+      t.string :represented_party_id
+      t.string :represented_party_reference
       t.string :tenant_key
-      t.references :subject, polymorphic: true, type: foreign_key_type, null: true, index: false
+      t.string :subject_type
+      t.string :subject_id
       t.string :subject_fingerprint
 
       t.string :locale, null: false, default: "en"
       t.string :capture_channel, null: false, default: "web_browser"
       t.string :state, null: false, default: "presented_by_server"
 
-      t.datetime :issued_at, null: false
-      t.datetime :expires_at, null: false
-      t.datetime :submitted_at
-      t.datetime :retain_until
+      t.datetime :issued_at, precision: 6, null: false
+      t.datetime :expires_at, precision: 6, null: false
+      t.datetime :submitted_at, precision: 6
+      t.datetime :retain_until, precision: 6
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_presentations, :nonce, unique: true,
@@ -159,15 +167,26 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
               name: "index_clickwrap_presentations_on_actor"
     add_index :clickwrap_presentations, :retain_until,
               name: "index_clickwrap_presentations_on_retain_until"
+    add_index :clickwrap_presentations, :expires_at,
+              name: "index_clickwrap_presentations_on_expires_at"
+    add_index :clickwrap_presentations, :actor_reference,
+              name: "index_clickwrap_presentations_on_actor_reference"
+    add_clickwrap_check_constraint :clickwrap_presentations,
+                         "state IN (#{quoted_values(%w[presented_by_server accepted rejected expired])})",
+                         name: "chk_clickwrap_presentations_state"
+    add_clickwrap_check_constraint :clickwrap_presentations,
+                         "capture_channel IN (#{quoted_values(%w[web_browser native_app api_client operator background_job imported_provider system])})",
+                         name: "chk_clickwrap_presentations_channel"
 
     # ---------------------------------------------------------------------------
     # clickwrap_events
     #
-    # The append-only spine. Every act, correction, withdrawal, expiry,
+    # The append-oriented spine. Every act, correction, withdrawal, expiry,
     # consumption, disposition, and hold is a row here, linked to what came
-    # before. Nothing in this table is ever updated in the ordinary course —
-    # which is why there is no `updated_at` column: a mutable timestamp on an
-    # immutable record is an invitation to treat it as mutable.
+    # before. Ordinary model updates are refused; fixed write sets exist for
+    # finalization, pointer nullification, annex links, holds, and reviewed
+    # disposition. There is no generic `updated_at` column that could obscure
+    # which named transition occurred.
     #
     # The primary key is a ULID string rather than a sequence, so it sorts in
     # creation order, appears verbatim in receipts, and does not leak a count of
@@ -191,19 +210,23 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :root_event_id, limit: 26
       t.string :predecessor_event_id, limit: 26
 
-      t.references :actor, polymorphic: true, type: foreign_key_type, null: true, index: false
+      t.string :actor_type
+      t.string :actor_id
       t.string :actor_reference, null: false
       t.send(json_column_type, :actor_snapshot, default: json_column_default)
 
       # Who the actor was acting for, kept as a separate fact from who they are.
-      t.references :represented_party, polymorphic: true, type: foreign_key_type,
-                                       null: true, index: false
+      t.string :represented_party_type
+      t.string :represented_party_id
+      t.string :represented_party_reference, null: false, default: ""
       t.string :authority_source
       t.string :authority_role
-      t.datetime :authority_verified_at
+      t.datetime :authority_verified_at, precision: 6
+      t.send(json_column_type, :authority_details, default: json_column_default)
 
       t.string :tenant_key
-      t.references :subject, polymorphic: true, type: foreign_key_type, null: true, index: false
+      t.string :subject_type
+      t.string :subject_id
       t.string :subject_key, null: false, default: ""
       t.string :subject_fingerprint
 
@@ -212,8 +235,8 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.send(json_column_type, :authentication_context, default: json_column_default)
       t.string :attribution_method, null: false, default: "unknown"
 
-      t.datetime :recorded_at_by_server, null: false
-      t.datetime :occurred_at
+      t.datetime :recorded_at_by_server, precision: 6, null: false
+      t.datetime :occurred_at, precision: 6
 
       t.string :idempotency_key
       t.string :http_request_id
@@ -229,7 +252,8 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       # here is a keyed digest binding the two together — described honestly as
       # a retained linkable digest, never as anonymization.
       t.references :request_evidence, null: true, type: foreign_key_type, index: false
-      t.string :request_evidence_digest
+      t.send(json_column_type, :request_evidence_category_binding_digests,
+             null: false, default: json_column_default)
       t.string :request_evidence_digest_algorithm
       t.string :request_evidence_key_id
 
@@ -243,9 +267,10 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.text :reason
 
       t.string :retention_class_key
-      t.datetime :retain_core_event_until
+      t.datetime :retain_core_event_until, precision: 6
       t.string :retention_rule_name
-      t.datetime :core_event_disposed_at
+      t.datetime :core_event_disposed_at, precision: 6
+      t.string :core_event_disposition_event_id, limit: 26
       t.boolean :on_legal_hold, null: false, default: false
 
       t.string :chain_scope
@@ -259,7 +284,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :application_version
       t.string :template_version
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     # The idempotency guarantee is a database constraint, not application logic:
@@ -274,10 +299,31 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     add_index :clickwrap_events, [ :subject_type, :subject_id ],
               name: "index_clickwrap_events_on_subject"
     add_index :clickwrap_events, :root_event_id, name: "index_clickwrap_events_on_root_event"
+    add_index :clickwrap_events, :predecessor_event_id,
+              name: "index_clickwrap_events_on_predecessor_event"
+    add_index :clickwrap_events, :presentation_id,
+              name: "index_clickwrap_events_on_presentation"
+    add_index :clickwrap_events, :request_evidence_id, unique: true,
+              name: "index_clickwrap_events_on_request_evidence"
+    add_index :clickwrap_events, :core_event_disposition_event_id,
+              name: "index_clickwrap_events_on_core_disposition"
     add_index :clickwrap_events, :recorded_at_by_server,
               name: "index_clickwrap_events_on_recorded_at_by_server"
     add_index :clickwrap_events, :retain_core_event_until,
               name: "index_clickwrap_events_on_retain_core_event_until"
+    add_index :clickwrap_events, :retention_class_key,
+              name: "index_clickwrap_events_on_retention_class_key"
+    add_index :clickwrap_events, :subject_key,
+              name: "index_clickwrap_events_on_subject_key"
+    add_clickwrap_check_constraint :clickwrap_events,
+                         "event_type IN (#{quoted_values(%w[capture withdrawal correction supersession expiry consumption revocation renewal scope_change exemption imported_legacy external_receipt disposition legal_hold_placed legal_hold_released receipt_access provider_outcome])})",
+                         name: "chk_clickwrap_events_event_type"
+    add_clickwrap_check_constraint :clickwrap_events,
+                         "capture_channel IN (#{quoted_values(%w[web_browser native_app api_client operator background_job imported_provider system])})",
+                         name: "chk_clickwrap_events_channel"
+    add_clickwrap_check_constraint :clickwrap_events,
+                         "attribution_method IN (#{quoted_values(%w[authenticated_session account_registration operator_session api_credential anonymous_identifier system_process imported_provider unknown])})",
+                         name: "chk_clickwrap_events_attribution"
 
     # ---------------------------------------------------------------------------
     # clickwrap_event_statements
@@ -285,7 +331,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # One row per act inside a capture. A policy with "agree to the Terms" and
     # "acknowledge the Privacy Notice" produces one event and two rows here, and
     # they never merge: each keeps its own kind, its own assertion text as it was
-    # actually resolved and shown, its own answer, and its own validity.
+    # resolved into the accepted server offer, its own answer, and its own validity.
     #
     # These rows are immutable snapshots. Current state lives in the projection
     # table below, which can be rebuilt from these at any time.
@@ -312,20 +358,30 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :purpose_key
       t.string :withdrawal_path
 
-      t.datetime :valid_from
-      t.datetime :expires_at
+      t.datetime :valid_from, precision: 6
+      t.datetime :expires_at, precision: 6
       t.boolean :one_time, null: false, default: false
       t.send(json_column_type, :requires, default: json_array_default)
 
       t.string :subject_fingerprint
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_event_statements, [ :event_id, :statement_key ],
               unique: true, name: "index_clickwrap_event_statements_on_identity"
     add_index :clickwrap_event_statements, [ :kind, :statement_key ],
               name: "index_clickwrap_event_statements_on_kind_and_key"
+    add_clickwrap_check_constraint :clickwrap_event_statements,
+                         "kind IN (#{quoted_values(%w[agreement acknowledgment consent declaration attestation authorization])})",
+                         name: "chk_clickwrap_statements_kind"
+    add_clickwrap_check_constraint :clickwrap_event_statements,
+                         "action IN (#{quoted_values(%w[agreed superseded acknowledged expired granted declined withdrawn renewed scope_changed declared corrected attested authorized consumed revoked])})",
+                         name: "chk_clickwrap_statements_action"
+    # Captured controls are required XOR optional. System lifecycle statements
+    # describe a transition and are therefore neither; no statement may be both.
+    add_clickwrap_check_constraint :clickwrap_event_statements, "NOT (required AND optional)",
+                         name: "chk_clickwrap_statements_requirement"
 
     # ---------------------------------------------------------------------------
     # clickwrap_event_documents
@@ -343,12 +399,17 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
 
       t.string :version_label, null: false
       t.string :locale, null: false
-      t.string :media_type
-      t.string :content_digest, null: false
+      t.string :source_media_type
+      t.string :source_content_digest, null: false
+      t.string :rendered_media_type, null: false
       t.string :rendered_content_digest
+      t.string :renderer_name
+      t.string :renderer_version
+      t.string :sanitizer_name
+      t.string :sanitizer_version
       t.integer :ordinal, null: false, default: 0
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_event_documents, [ :event_id, :statement_key, :document_key ],
@@ -359,7 +420,8 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     #
     # The current-state projection: the answer to "does this person currently
     # have X?" without walking the whole event history on every request. It is a
-    # cache of a computation over immutable events and can be rebuilt from them.
+    # cache of a computation over retained event payloads and can be rebuilt
+    # while the identity-bearing root payloads remain available.
     #
     # The unique index is doing real work: it is what stops two concurrent
     # submits from producing two live grants or two usable authorizations for
@@ -368,11 +430,12 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # string stands in for "no tenant" and "no subject".
     # ---------------------------------------------------------------------------
     create_table :clickwrap_statement_states, id: primary_key_type do |t|
-      # A digest of the five identity columns below, carrying the unique index.
+      # A digest of the six identity columns below, carrying the unique index.
       #
-      # This is a portability decision with teeth. Those five hold a policy key,
-      # a statement key, a GlobalID-shaped actor reference, a tenant key, and a
-      # subject key; five string columns exceed MySQL's 3072-byte index limit
+      # This is a portability decision with teeth. Those six hold a policy key,
+      # a statement key, a GlobalID-shaped actor reference, a tenant key, a
+      # subject key, and a represented-party reference; indexing the strings
+      # directly can exceed MySQL's 3072-byte index limit
       # under utf8mb4 even at a reduced length, so a composite unique index over
       # them cannot be created there at all. The guarantee this index provides is
       # the one that keeps a double submit from becoming two debits, so it has to
@@ -385,11 +448,14 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :kind, null: false
       t.string :purpose_key
 
-      t.references :actor, polymorphic: true, type: foreign_key_type, null: true, index: false
+      t.string :actor_type
+      t.string :actor_id
       t.string :actor_reference, null: false
       t.string :tenant_key, null: false, default: ""
-      t.references :subject, polymorphic: true, type: foreign_key_type, null: true, index: false
+      t.string :subject_type
+      t.string :subject_id
       t.string :subject_key, null: false, default: ""
+      t.string :represented_party_reference, null: false, default: ""
       t.string :subject_fingerprint
 
       t.string :state, null: false
@@ -399,29 +465,48 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.references :policy_revision, null: true, type: foreign_key_type, index: false,
                                      foreign_key: { to_table: :clickwrap_policy_revisions }
 
-      t.datetime :effective_at, null: false
-      t.datetime :expires_at
-      t.datetime :withdrawn_at
-      t.datetime :superseded_at
-      t.datetime :consumed_at
-      t.datetime :revoked_at
-      t.datetime :corrected_at
+      t.datetime :effective_at, precision: 6, null: false
+      t.datetime :expires_at, precision: 6
+      t.datetime :withdrawn_at, precision: 6
+      t.datetime :superseded_at, precision: 6
+      t.datetime :consumed_at, precision: 6
+      t.datetime :revoked_at, precision: 6
+      t.datetime :corrected_at, precision: 6
       t.boolean :one_time, null: false, default: false
 
       t.send(json_column_type, :document_version_ids, default: json_array_default)
 
-      t.timestamps
+      t.timestamps precision: 6
     end
 
     add_index :clickwrap_statement_states, :identity_digest,
               unique: true, name: "index_clickwrap_statement_states_on_identity"
     add_index :clickwrap_statement_states,
-              [ :policy_key, :statement_key, :actor_reference ],
-              name: "index_clickwrap_statement_states_on_lookup"
+              [ :policy_key, :statement_key ],
+              name: "index_clickwrap_statement_states_on_policy_and_statement"
     add_index :clickwrap_statement_states, [ :actor_reference, :state ],
               name: "index_clickwrap_statement_states_on_actor_and_state"
     add_index :clickwrap_statement_states, :expires_at,
               name: "index_clickwrap_statement_states_on_expires_at"
+    add_index :clickwrap_statement_states, :current_event_id,
+              name: "index_clickwrap_statement_states_on_current_event"
+    add_index :clickwrap_statement_states, :root_event_id,
+              name: "index_clickwrap_statement_states_on_root_event"
+    add_clickwrap_check_constraint :clickwrap_statement_states,
+                         "state IN (#{quoted_values(%w[active declined withdrawn expired superseded consumed revoked corrected exempted])})",
+                         name: "chk_clickwrap_states_state"
+
+    # A row exists before or after the first StatementState for an identity, so
+    # concurrent first-time authorizations have something portable to lock.
+    # These are coordination rows, not evidence, and contain only the canonical
+    # identity digest already used by StatementState's unique index.
+    create_table :clickwrap_statement_identity_locks, id: primary_key_type do |t|
+      t.string :identity_digest, null: false, limit: 71
+      t.datetime :created_at, precision: 6, null: false
+    end
+
+    add_index :clickwrap_statement_identity_locks, :identity_digest, unique: true,
+              name: "index_clickwrap_statement_identity_locks_on_identity"
 
     # ---------------------------------------------------------------------------
     # clickwrap_request_evidence
@@ -430,7 +515,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # IP geolocation, none of it recorded unless a policy names the field.
     #
     # It is a separate table on purpose. Personal request evidence needs its own
-    # deletion schedule, and welding it into the immutable event would make a
+    # deletion schedule, and welding it into the core event payload would make a
     # lawful deletion request either impossible or destructive of the historical
     # record. Here it can be removed on its own clock while the agreement it
     # accompanied stays intact and verifiable.
@@ -446,18 +531,18 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.text :ip_address_ciphertext
       t.string :ip_address_reader_name
       t.string :trusted_proxy_configuration_digest
-      t.datetime :ip_address_recorded_at
-      t.datetime :ip_address_delete_after
+      t.datetime :ip_address_recorded_at, precision: 6
+      t.datetime :ip_address_delete_after, precision: 6
       t.string :ip_address_retain_until_rule
-      t.datetime :ip_address_deleted_at
+      t.datetime :ip_address_deleted_at, precision: 6
       t.string :ip_address_unavailable_reason
 
       t.text :browser_user_agent_ciphertext
       t.boolean :browser_user_agent_was_client_supplied, null: false, default: true
-      t.datetime :browser_user_agent_recorded_at
-      t.datetime :browser_user_agent_delete_after
+      t.datetime :browser_user_agent_recorded_at, precision: 6
+      t.datetime :browser_user_agent_delete_after, precision: 6
       t.string :browser_user_agent_retain_until_rule
-      t.datetime :browser_user_agent_deleted_at
+      t.datetime :browser_user_agent_deleted_at, precision: 6
       t.string :browser_user_agent_unavailable_reason
 
       t.string :ip_geolocation_country_code
@@ -489,14 +574,14 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.integer :ip_geolocation_accuracy_radius_confidence_percentage
       t.boolean :ip_geolocation_was_estimated, null: false, default: true
       t.boolean :ip_geolocation_source_was_verified_by_host, null: false, default: false
-      t.datetime :ip_geolocation_resolved_at
+      t.datetime :ip_geolocation_resolved_at, precision: 6
       t.string :ip_geolocation_unavailable_reason
-      t.datetime :ip_geolocation_recorded_at
-      t.datetime :ip_geolocation_delete_after
+      t.datetime :ip_geolocation_recorded_at, precision: 6
+      t.datetime :ip_geolocation_delete_after, precision: 6
       t.string :ip_geolocation_retain_until_rule
-      t.datetime :ip_geolocation_deleted_at
+      t.datetime :ip_geolocation_deleted_at, precision: 6
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_request_evidence, :event_id, unique: true,
@@ -513,32 +598,37 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     #
     # A hold pauses scheduled disposition. It requires a reason, an owner, and a
     # review date, because an indefinite hold with no owner is how "we'll delete
-    # it later" becomes "we kept everything forever". The hold is itself
-    # append-only evidence.
+    # it later" becomes "we kept everything forever". Placement and release
+    # append linked events; this row changes only through the named release path.
     # ---------------------------------------------------------------------------
     create_table :clickwrap_legal_holds, id: primary_key_type do |t|
-      t.string :scope, null: false, default: "event"
+      t.string :hold_scope, null: false, default: "event"
       t.string :event_id, limit: 26
       t.string :actor_reference
       t.string :policy_key
 
       t.text :reason, null: false
       t.string :placed_by_reference, null: false
-      t.datetime :placed_at, null: false
-      t.datetime :review_on, null: false
+      t.datetime :placed_at, precision: 6, null: false
+      t.datetime :review_at, precision: 6, null: false
 
-      t.datetime :released_at
+      t.datetime :released_at, precision: 6
       t.string :released_by_reference
       t.text :release_reason
 
-      t.datetime :created_at, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_legal_holds, [ :event_id, :released_at ],
               name: "index_clickwrap_legal_holds_on_event"
     add_index :clickwrap_legal_holds, [ :actor_reference, :released_at ],
               name: "index_clickwrap_legal_holds_on_actor"
-    add_index :clickwrap_legal_holds, :review_on, name: "index_clickwrap_legal_holds_on_review_on"
+    add_index :clickwrap_legal_holds, :review_at, name: "index_clickwrap_legal_holds_on_review_at"
+    add_index :clickwrap_legal_holds, [ :policy_key, :released_at ],
+              name: "index_clickwrap_legal_holds_on_policy"
+    add_clickwrap_check_constraint :clickwrap_legal_holds,
+                         "hold_scope IN (#{quoted_values(%w[event actor policy])})",
+                         name: "chk_clickwrap_holds_scope"
 
     # ---------------------------------------------------------------------------
     # clickwrap_chain_heads
@@ -552,18 +642,20 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :chain_scope, null: false
       t.string :last_event_id, limit: 26
       t.string :last_event_digest
-      t.bigint :sequence, null: false, default: 0
+      t.bigint :chain_sequence, null: false, default: 0
 
-      t.datetime :checkpointed_at
+      t.datetime :checkpointed_at, precision: 6
       t.string :checkpoint_digest
       t.string :anchor_reference
       t.send(json_column_type, :anchor_receipt)
 
-      t.timestamps
+      t.timestamps precision: 6
     end
 
     add_index :clickwrap_chain_heads, :chain_scope, unique: true,
               name: "index_clickwrap_chain_heads_on_scope"
+    add_index :clickwrap_chain_heads, :last_event_id,
+              name: "index_clickwrap_chain_heads_on_last_event"
 
     # ---------------------------------------------------------------------------
     # clickwrap_external_actions
@@ -581,20 +673,25 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :provider_name
 
       t.string :state, null: false, default: "pending"
-      t.integer :attempts, null: false, default: 0
+      t.integer :attempt_count, null: false, default: 0
       t.send(json_column_type, :provider_receipt)
       t.text :failure_reason
 
-      t.datetime :requested_at, null: false
-      t.datetime :resolved_at
+      t.datetime :requested_at, precision: 6, null: false
+      t.datetime :resolved_at, precision: 6
 
-      t.timestamps
+      t.timestamps precision: 6
     end
 
     add_index :clickwrap_external_actions, :idempotency_key, unique: true,
               name: "index_clickwrap_external_actions_on_idempotency_key"
+    add_index :clickwrap_external_actions, :event_id, unique: true,
+              name: "index_clickwrap_external_actions_on_event"
     add_index :clickwrap_external_actions, [ :state, :requested_at ],
               name: "index_clickwrap_external_actions_on_state"
+    add_clickwrap_check_constraint :clickwrap_external_actions,
+                         "state IN (#{quoted_values(%w[pending succeeded failed unknown])})",
+                         name: "chk_clickwrap_external_actions_state"
 
     # ---------------------------------------------------------------------------
     # clickwrap_disposition_plans
@@ -606,23 +703,37 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     # ---------------------------------------------------------------------------
     create_table :clickwrap_disposition_plans, id: :string, limit: 26 do |t|
       t.string :kind, null: false
-      t.send(json_column_type, :scope, null: false)
+      t.send(json_column_type, :disposition_scope, null: false)
       t.send(json_column_type, :summary, null: false)
       t.integer :item_count, null: false, default: 0
 
       t.string :created_by_reference
       t.text :reason
 
-      t.datetime :expires_at, null: false
-      t.datetime :applied_at
+      t.datetime :expires_at, precision: 6, null: false
+      t.datetime :applied_at, precision: 6
       t.string :applied_by_reference
       t.string :state, null: false, default: "open"
+      t.string :plan_digest, null: false
+      t.datetime :application_started_at, precision: 6
+      t.integer :application_attempt_count, null: false, default: 0
+      t.send(json_column_type, :application_recoveries, default: json_array_default)
+      t.send(json_column_type, :application_outcome, default: json_column_default)
+      t.datetime :superseded_at, precision: 6
+      t.string :superseded_by_reference
+      t.text :superseded_reason
 
-      t.timestamps
+      t.timestamps precision: 6
     end
 
     add_index :clickwrap_disposition_plans, [ :state, :expires_at ],
               name: "index_clickwrap_disposition_plans_on_state"
+    add_clickwrap_check_constraint :clickwrap_disposition_plans,
+                         "kind IN (#{quoted_values(%w[retention actor_privacy])})",
+                         name: "chk_clickwrap_disposition_plans_kind"
+    add_clickwrap_check_constraint :clickwrap_disposition_plans,
+                         "state IN (#{quoted_values(%w[open applying applied applied_with_errors superseded])})",
+                         name: "chk_clickwrap_disposition_plans_state"
 
     # ---------------------------------------------------------------------------
     # clickwrap_receipt_accesses
@@ -637,20 +748,80 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
       t.string :requested_by_reference
       t.text :reason
       t.send(json_column_type, :included_fields, null: false)
-      t.string :channel, null: false, default: "api"
-      t.datetime :accessed_at, null: false
-      t.datetime :created_at, null: false
+      t.string :access_channel, null: false, default: "api"
+      t.datetime :accessed_at, precision: 6, null: false
+      t.datetime :created_at, precision: 6, null: false
     end
 
     add_index :clickwrap_receipt_accesses, [ :event_id, :accessed_at ],
               name: "index_clickwrap_receipt_accesses_on_event"
 
-    # NOTE: value-list vocabularies (kind, action, state, capture_channel,
-    # event_type) are validated in the MODELS against frozen constants in
-    # Clickwrap::Vocabulary, NOT by database check constraints — so the gem can
-    # add a lifecycle action without shipping a migration to widen a CHECK, and
-    # so a host reading old evidence written by a newer release still gets the
-    # row rather than an error. Same rationale as the rest of the gem ecosystem.
+    create_table :clickwrap_integrity_attestations, id: primary_key_type do |t|
+      t.string :event_id, limit: 26, null: false
+      t.string :kind, null: false
+      t.string :state, null: false
+      t.string :provider_name, null: false
+      t.string :subject_digest, null: false
+      t.string :chain_scope
+      t.bigint :chain_sequence
+      t.string :provider_reference
+      t.send(json_column_type, :provider_result, null: false)
+      t.send(json_column_type, :verification, null: false)
+      t.send(json_column_type, :adapter_capabilities, null: false)
+      t.string :attestation_digest, null: false
+      t.datetime :attempted_at, precision: 6, null: false
+      t.datetime :provider_reported_at, precision: 6
+      t.datetime :created_at, precision: 6, null: false
+    end
+
+    add_index :clickwrap_integrity_attestations, [ :event_id, :kind, :attempted_at ],
+              name: "index_clickwrap_integrity_attestations_on_event"
+    add_clickwrap_check_constraint :clickwrap_integrity_attestations,
+                         "kind IN (#{quoted_values(%w[event_anchor third_party_timestamp])})",
+                         name: "chk_clickwrap_attestations_kind"
+    add_clickwrap_check_constraint :clickwrap_integrity_attestations,
+                         "state IN (#{quoted_values(%w[verified issued_unverified unavailable failed])})",
+                         name: "chk_clickwrap_attestations_state"
+
+    # Every non-polymorphic evidence link is backed by the database, including
+    # lifecycle links and the tables whose ids are ULID strings rather than the
+    # host application's primary-key type. Model callbacks make ordinary writes
+    # readable; these constraints keep console SQL, bulk imports, and future code
+    # from manufacturing orphaned evidence by accident.
+    add_clickwrap_foreign_key :clickwrap_events, :clickwrap_events,
+                    column: :root_event_id, name: "fk_clickwrap_events_root"
+    add_clickwrap_foreign_key :clickwrap_events, :clickwrap_events,
+                    column: :predecessor_event_id, name: "fk_clickwrap_events_predecessor"
+    add_clickwrap_foreign_key :clickwrap_events, :clickwrap_events,
+                    column: :core_event_disposition_event_id, name: "fk_clickwrap_events_disposition"
+    add_clickwrap_foreign_key :clickwrap_events, :clickwrap_request_evidence,
+                    column: :request_evidence_id, name: "fk_clickwrap_events_request_evidence"
+
+    add_clickwrap_foreign_key :clickwrap_event_statements, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_statements_event"
+    add_clickwrap_foreign_key :clickwrap_event_documents, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_documents_event"
+    add_clickwrap_foreign_key :clickwrap_statement_states, :clickwrap_events,
+                    column: :current_event_id, name: "fk_clickwrap_states_current_event"
+    add_clickwrap_foreign_key :clickwrap_statement_states, :clickwrap_events,
+                    column: :root_event_id, name: "fk_clickwrap_states_root_event"
+    add_clickwrap_foreign_key :clickwrap_request_evidence, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_request_evidence_event"
+    add_clickwrap_foreign_key :clickwrap_legal_holds, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_legal_holds_event"
+    add_clickwrap_foreign_key :clickwrap_chain_heads, :clickwrap_events,
+                    column: :last_event_id, name: "fk_clickwrap_chain_heads_event"
+    add_clickwrap_foreign_key :clickwrap_external_actions, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_external_actions_event"
+    add_clickwrap_foreign_key :clickwrap_receipt_accesses, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_receipt_accesses_event"
+    add_clickwrap_foreign_key :clickwrap_integrity_attestations, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_attestations_event"
+
+    # The database rejects contradictory statement requirement flags and values
+    # outside this release's frozen vocabularies. A future release that adds a
+    # lifecycle value ships an upgrade migration that widens the matching check;
+    # raw SQL must not be able to manufacture evidence the model cannot read.
   end
 
   private
@@ -701,5 +872,30 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
     return :mediumtext if connection.adapter_name.downcase.include?("mysql")
 
     :text
+  end
+
+  def quoted_values(values)
+    values.map { |value| connection.quote(value) }.join(", ")
+  end
+
+  # SQLite implements both foreign keys and check constraints by rebuilding a
+  # table. During a long install migration, Active Record can otherwise rebuild
+  # from a schema-cache entry captured before the indexes/columns immediately
+  # above were added. Refreshing around every rebuild keeps the SQLite result
+  # identical to PostgreSQL/MySQL instead of quietly resurrecting stale shape.
+  def add_clickwrap_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+    add_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+  end
+
+  def add_clickwrap_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+    add_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+  end
+
+  def refresh_clickwrap_table_schema!(table)
+    connection.schema_cache.clear_data_source_cache!(table.to_s)
   end
 end

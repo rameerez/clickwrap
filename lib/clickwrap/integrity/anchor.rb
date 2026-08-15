@@ -2,16 +2,16 @@
 
 module Clickwrap
   module Integrity
-    # The adapter contract for publishing chain heads somewhere outside the
-    # primary database — and a working no-op default that publishes nowhere and
-    # says so.
+    # The adapter contract for publishing exact event-chain snapshots somewhere
+    # outside the primary database, plus a reference base implementation that
+    # publishes nowhere and says so. Configuration itself defaults to nil.
     #
     #   config.anchor_event_history_with = MyIndependentAnchor.new
     #
     # WHY THIS SEAM EXISTS. A chain makes a rewrite of history detectable for as
-    # long as the chain head remains trustworthy, and the head lives in the same
-    # database as the events. Whoever can rewrite one can usually rewrite the
-    # other. Publishing the head somewhere the application cannot quietly edit —
+    # long as a checkpoint remains trustworthy, and the ordinary checkpoint lives
+    # in the same database as the events. Whoever can rewrite one can usually
+    # rewrite the other. Publishing an exact snapshot somewhere the application cannot quietly edit —
     # an append-only object store with a retention lock, a separate account, a
     # notary, a transparency log, a printout in a safe — narrows that gap.
     #
@@ -24,16 +24,17 @@ module Clickwrap
     # which is a different claim from a timestamp authority's, and different
     # again from proof that something happened at 14:02.
     #
-    # WRITING ONE. Implement `#publish(chain_head)` and `#verify(chain_head)`,
+    # WRITING ONE. Implement `#publish(chain_snapshot)` and
+    # `#verify(publication, chain_snapshot)`,
     # and report honestly from `#capabilities`. Subclassing this class is the
     # easy path: `Configuration#anchor_event_history_with=` checks that the
     # object responds to `#anchor`, and the base class provides that name as the
     # entry point to your `#publish`. An adapter written from scratch must
     # respond to `#anchor` as well.
     #
-    # Everything here is optional. The default below is installed as "no anchor
-    # configured", the gem works untouched without one, and no code path assumes
-    # an anchor exists.
+    # Everything here is optional. Configuration defaults to nil; assigning an
+    # instance of this base class is an explicit unavailable/no-publication
+    # adapter for testing or capability reporting.
     class Anchor
       # What an adapter returns from `#publish`. `anchored: false` is a normal
       # outcome, not an error — a no-op adapter, a provider outage, or a queue
@@ -74,7 +75,7 @@ module Clickwrap
         end
       end
 
-      # Publishes this chain head outside the primary database. Called after the
+      # Publishes this exact chain snapshot outside the primary database. Called after the
       # events it covers have committed, never inside their transaction: an
       # anchoring service cannot join a database transaction, and pretending
       # otherwise is how a network timeout becomes a rolled-back capture.
@@ -82,7 +83,7 @@ module Clickwrap
         Publication.new(
           anchored: false,
           provider_name: provider_name,
-          detail: "No anchor is configured, so this chain head was not published anywhere outside " \
+          detail: "This anchor adapter publishes nowhere, so this chain snapshot was not published outside " \
                   "the primary database."
         )
       end
@@ -92,16 +93,16 @@ module Clickwrap
       # configuration keeps the verb it already documents.
       def anchor(chain_head) = publish(chain_head)
 
-      # Re-reads what was published and compares it with the head as it stands
-      # now. This is the half that does the work: publishing a head nobody ever
+      # Re-reads what was published and compares it with the exact snapshot passed
+      # for this event. This is the half that does the work: publishing bytes nobody ever
       # checks establishes nothing.
-      def verify(_chain_head)
+      def verify(_publication, _chain_head)
         Verification.new(
           checked: false,
           verified: false,
           provider_name: provider_name,
-          detail: "No anchor is configured, so there is nothing published to compare this chain " \
-                  "head against."
+          detail: "This anchor adapter publishes nowhere, so there is no outside publication to compare " \
+                  "with this chain snapshot."
         )
       end
 
@@ -115,7 +116,7 @@ module Clickwrap
           "publishes_outside_primary_database" => false,
           "independently_verifiable" => false,
           "supplies" => "Nothing. This is the default placeholder that reports the absence of an " \
-                        "anchor instead of failing, so the rest of the gem needs no nil checks."
+                        "anchor for explicit adapter-contract tests. Configuration normally remains nil."
         }
       end
 

@@ -10,6 +10,20 @@ require "test_helper"
 # `retention:apply` refuses to run without that plan's id, and there is no
 # `--all` and no `--yes`.
 class TasksTest < ActiveSupport::TestCase
+  class TimestampAdapter
+    attr_reader :digests
+
+    def initialize = @digests = []
+
+    def timestamp(digest)
+      digests << digest
+      { issued: true, token: "task-token", digest: digest, provider_name: "task_test" }
+    end
+
+    def verify(token, _digest) = { checked: true, verified: token == "task-token" }
+    def capabilities = { name: "task_test", independently_verifiable: true }
+  end
+
   # Rake's task table is global and `load_tasks` appends to it, so loading the
   # tasks a second time would run every task body twice per invocation.
   def self.load_clickwrap_tasks!
@@ -82,7 +96,8 @@ class TasksTest < ActiveSupport::TestCase
     assert_match(/chaining enabled:\s+false/, output)
     assert_match(/Event digests/, output)
     assert_match(/events checked:\s+1/, output)
-    assert_match(/not verifying:\s+0/, output)
+    assert_match(/documented core dispositions:\s+0/, output)
+    assert_match(/unexplained mismatches:\s+0/, output)
 
     # A verifying digest detects modification of the bytes it covers. The task
     # says so in the same breath as printing the green numbers.
@@ -97,6 +112,50 @@ class TasksTest < ActiveSupport::TestCase
     assert_match(/policy:\s+signup \(capture\)/, output)
     assert_match(/digest verifies:\s+true/, output)
     assert_match(/verification:\s+satisfied/, output)
+  end
+
+  test "clickwrap:verify distinguishes a documented disposition from a verifying digest" do
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      @receipt.event,
+      because: "The reviewed retention period ended"
+    )
+
+    output = run_task("clickwrap:verify", "EVENT_ID" => @receipt.event_id)
+
+    assert_match(/digest verifies:\s+false/, output)
+    assert_match(/core disposition documented:\s+true/, output)
+    assert_match(/verification:\s+core_event_disposed/, output)
+
+    sweep = ClickwrapTasks.digest_sweep
+    assert_equal 1, sweep["documented_dispositions"].length
+    assert_empty sweep["failed"]
+  end
+
+  test "clickwrap:verify treats a raw disposition marker as an unexplained mismatch" do
+    Clickwrap::Event.where(id: @receipt.event_id).update_all(core_event_disposed_at: Clickwrap.now)
+
+    sweep = ClickwrapTasks.digest_sweep
+
+    assert_empty sweep["documented_dispositions"]
+    assert_equal [@receipt.event_id], sweep["failed"]
+    assert_equal :integrity_check_failed, Clickwrap.verify(@receipt.event_id).error
+  end
+
+  test "clickwrap:integrity:attest_missing records missing work and explains its delivery boundary" do
+    adapter = TimestampAdapter.new
+    Clickwrap.config.timestamp_receipts_with = adapter
+
+    output = run_task("clickwrap:integrity:attest_missing")
+
+    assert_match(/attempts made:\s+1/, output)
+    assert_match(/results recorded:\s+1/, output)
+    assert_match(/not exactly-once delivery/, output)
+    assert_equal [@receipt.event.event_digest], adapter.digests
+    assert @receipt.event.integrity_attestations.exists?(kind: "third_party_timestamp")
+
+    rerun = run_task("clickwrap:integrity:attest_missing")
+    assert_match(/attempts made:\s+0/, rerun)
+    assert_equal 1, adapter.digests.length
   end
 
   test "clickwrap:reacceptance:plan previews who would be asked to act again" do
@@ -116,7 +175,7 @@ class TasksTest < ActiveSupport::TestCase
   test "clickwrap:holds:review lists holds in effect and the ones nobody revisited" do
     @receipt.place_on_legal_hold!(because: "Pending dispute 2026-184",
                                   placed_by: create_security_operator,
-                                  review_on: 6.months.from_now)
+                                  review_at: 6.months.from_now)
 
     output = run_task("clickwrap:holds:review")
 

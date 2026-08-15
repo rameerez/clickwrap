@@ -1,10 +1,10 @@
 # Security Policy
 
-`clickwrap` stores legal-evidence records: immutable document snapshots, signed presentation tokens, append-only evidence events, canonical receipts, and — only when a policy explicitly asks for them — encrypted IP addresses, browser user-agent strings, and IP-geolocation estimates. Please report suspected vulnerabilities privately, and do not include real evidence records, receipts, presentation tokens, IP addresses, or any other personal data in a report. Redact or synthesize a reproduction instead; a minimal fabricated policy and document reproduce almost every issue just as well.
+`clickwrap` stores legal-evidence records: frozen document snapshots, signed presentation tokens, append-oriented evidence events with fixed named disposition transitions, canonical receipts, and — only when a policy explicitly asks for them — encrypted IP addresses, browser user-agent strings, and IP-geolocation estimates. Please report suspected vulnerabilities privately, and do not include real evidence records, receipts, presentation tokens, IP addresses, or any other personal data in a report. Redact or synthesize a reproduction instead; a minimal fabricated policy and document reproduce almost every issue just as well.
 
 ## Supported versions
 
-Security fixes are released for the latest published version. The maintained test matrix covers Ruby 3.3, 3.4, and 4.0 with patched Rails 7.1, 7.2, 8.0, and 8.1 releases. Older Ruby and Rails versions may remain installable for compatibility, but runtimes that no longer receive upstream security fixes are not security-supported.
+Security fixes are released for the latest published version. The maintained test matrix covers Ruby 3.2, 3.3, 3.4, and 4.0 with patched Rails 7.1, 7.2, 8.0, and 8.1 releases. Older Ruby and Rails versions may remain installable for compatibility, but runtimes that no longer receive upstream security fixes are not security-supported.
 
 ## Reporting a vulnerability
 

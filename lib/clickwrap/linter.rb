@@ -211,12 +211,11 @@ module Clickwrap
       # --- Manifest checks ----------------------------------------------------
 
       def manifest_differences(rendered, policy:, locale:)
-        differences = []
         rendered_keys = rendered.map { |fragment| fragment["key"] || fragment[:key] }
         policy_keys = policy.statements.map(&:key)
 
-        (policy_keys - rendered_keys).each { |key| differences << "#{key} is in the policy but was not presented" }
-        (rendered_keys - policy_keys).each { |key| differences << "#{key} was presented but is not in the policy" }
+        differences = (policy_keys - rendered_keys).map { |key| "#{key} is in the policy but absent from the manifest" }
+        (rendered_keys - policy_keys).each { |key| differences << "#{key} is in the manifest but not the policy" }
 
         rendered.each do |fragment|
           statement = policy.statement(fragment["key"] || fragment[:key])
@@ -230,12 +229,12 @@ module Clickwrap
 
       def statement_differences(fragment, statement, locale)
         differences = []
-        differences << "#{statement.key} was presented as required=#{fragment["required"]}" if
+        differences << "#{statement.key} is recorded in the manifest as required=#{fragment["required"]}" if
           fragment.key?("required") && fragment["required"] != statement.required?
 
         resolved_locale = (locale || (defined?(::I18n) ? ::I18n.locale : :en)).to_s
         resolved = statement.resolve_copy(locale: resolved_locale)["assertion"]
-        differences << "#{statement.key} was presented with different wording" if
+        differences << "#{statement.key} has different wording in the manifest" if
           fragment["assertion"].present? && resolved.present? && fragment["assertion"] != resolved
 
         differences

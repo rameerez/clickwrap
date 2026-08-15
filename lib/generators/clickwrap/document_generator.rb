@@ -13,9 +13,8 @@ module Clickwrap
     #
     # A new version of an existing document is the normal case, and it is why
     # this generator APPENDS rather than edits: the previous declaration keeps
-    # describing the bytes that were actually presented to everyone who has
-    # already agreed, and nothing about their evidence changes because you wrote
-    # a new version.
+    # describing the bytes bound into earlier accepted server offers, and
+    # nothing about that evidence changes because you wrote a new version.
     class DocumentGenerator < Rails::Generators::Base
       source_root File.expand_path("templates", __dir__)
       desc "Declare a clickwrap document version and create its content file"
@@ -56,7 +55,7 @@ module Clickwrap
         say "  3. Reference it from a policy in #{policy_file}."
         say "\nPublishing is idempotent, and reusing a version label for different bytes is"
         say "refused rather than accepted. When the text changes, declare a NEW version:"
-        say "old receipts go on pointing at the bytes that were actually presented.\n"
+        say "old receipts go on pointing at the bytes their accepted server offers bound.\n"
       end
 
       private
@@ -123,7 +122,8 @@ module Clickwrap
 
           Replace this file, then run `bin/rails clickwrap:publish` to freeze an immutable
           snapshot. Publishing records the exact bytes, media type, locale, and digest, so
-          a receipt written today can still show exactly what was on screen years from now.
+          a receipt written today can reproduce the document version its accepted server
+          offer bound years from now.
 
           When the text changes, declare a new version rather than editing a published one.
         MARKDOWN

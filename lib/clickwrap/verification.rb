@@ -11,6 +11,8 @@ module Clickwrap
   # one of the stable symbols in Clickwrap::Vocabulary::VERIFICATION_ERRORS and
   # the human sentence is localized separately.
   module Verification
+    UNSPECIFIED = Object.new.freeze
+
     # The structured answer. `details` carries stable machine-readable facts —
     # never a surprise field of personal data, because a verification result
     # routinely ends up in a log line or an API response.
@@ -86,19 +88,23 @@ module Clickwrap
       # event. Both are the same question asked from different ends: the first
       # is "is there current evidence", the second is "is this evidence still
       # good for this exact operation".
-      def verify(policy_or_event, actor: nil, subject: nil, tenant: nil, policy: nil, at: nil)
+      def verify(policy_or_event, actor: nil, subject: nil, tenant: nil, acting_for: UNSPECIFIED,
+                 policy: nil, at: nil)
         at ||= Clickwrap.now
 
         if policy_or_event.is_a?(String) && Identifier.valid?(policy_or_event)
-          verify_event(policy_or_event, policy: policy, subject: subject, at: at)
+          verify_event(policy_or_event, policy: policy, subject: subject,
+                                        acting_for: acting_for, at: at)
         else
-          verify_policy(policy_or_event, actor: actor, subject: subject, tenant: tenant, at: at)
+          acting_for = nil if acting_for.equal?(UNSPECIFIED)
+          verify_policy(policy_or_event, actor: actor, subject: subject, tenant: tenant,
+                                         acting_for: acting_for, at: at)
         end
       end
 
       private
 
-      def verify_policy(policy_key, actor:, subject:, tenant:, at:)
+      def verify_policy(policy_key, actor:, subject:, tenant:, acting_for:, at:)
         policy = Clickwrap.policies[policy_key.to_s]
 
         return Result.failure(:unknown_policy, policy_key: policy_key.to_s) unless policy
@@ -107,12 +113,15 @@ module Clickwrap
 
         return Result.failure(:wrong_actor, policy_key: policy.key) unless actor_reference
 
-        states = load_states(policy, actor_reference, tenant, subject)
+        states = load_states(policy, actor_reference, tenant, subject, acting_for)
 
         policy.required_statements.each do |statement|
           state = states[statement.key]
 
           return Result.failure(:no_evidence, policy_key: policy.key, statement_key: statement.key) unless state
+
+          source_failure = check_state_source(policy, statement, state)
+          return source_failure if source_failure
 
           failure = check_statement(policy, statement, state, subject, at)
           return failure if failure
@@ -134,7 +143,13 @@ module Clickwrap
         if statement.subject_bound?
           expected = subject_fingerprint_for(statement, subject)
 
-          if expected && !Digest.secure_compare?(expected, state.subject_fingerprint.to_s)
+          if expected.nil?
+            return Result.failure(:wrong_subject, policy_key: policy.key,
+                                                  statement_key: statement.key,
+                                                  event_id: state.current_event_id)
+          end
+
+          unless Digest.secure_compare?(expected, state.subject_fingerprint.to_s)
             return Result.failure(:subject_fingerprint_mismatch,
                                   policy_key: policy.key,
                                   statement_key: statement.key,
@@ -173,7 +188,94 @@ module Clickwrap
         nil
       end
 
-      def verify_event(event_id, policy:, subject:, at:)
+      def check_state_source(policy, statement, state)
+        event = Event.includes(:statements, documents: :document_version).find_by(id: state.current_event_id)
+        unless event
+          return Result.failure(:no_evidence, policy_key: policy.key,
+                                              statement_key: statement.key)
+        end
+
+        if event.disposed?
+          if event.documented_core_disposition?
+            return Result.failure(:core_event_disposed, policy_key: policy.key,
+                                                        statement_key: statement.key,
+                                                        event_id: event.id)
+          end
+
+          return Result.failure(:integrity_check_failed, policy_key: policy.key,
+                                                         statement_key: statement.key,
+                                                         event_id: event.id,
+                                                         details: { "disposition" => "not_documented" })
+        end
+
+        unless event.evidence_integrity_verified?
+          return Result.failure(:integrity_check_failed, policy_key: policy.key,
+                                                         statement_key: statement.key,
+                                                         event_id: event.id,
+                                                         details: {
+                                                           "request_evidence_binding" =>
+                                                             event.request_evidence_binding_status.to_s
+                                                         })
+        end
+
+        recorded = event.statement(statement.key)
+        identity_source = statement_identity_source(event, state)
+        identity_matches = identity_source &&
+                           event.policy_key == policy.key &&
+                           identity_source.policy_key == policy.key &&
+                           identity_source.actor_reference == state.actor_reference &&
+                           identity_source.tenant_key.to_s == state.tenant_key.to_s &&
+                           identity_source.subject_key.to_s == state.subject_key.to_s &&
+                           identity_source.represented_party_reference.to_s ==
+                           state.represented_party_reference.to_s &&
+                           recorded&.kind == statement.kind &&
+                           recorded&.action == state.current_action
+
+        unless identity_matches
+          return Result.failure(:integrity_check_failed, policy_key: policy.key,
+                                                         statement_key: statement.key,
+                                                         event_id: event.id)
+        end
+
+        if state.state == "active" && !event.human_action?
+          return Result.failure(:no_evidence, policy_key: policy.key,
+                                              statement_key: statement.key,
+                                              event_id: event.id)
+        end
+
+        mismatched = event.documents.any? do |binding|
+          !binding.still_matches_stored_version? ||
+            !binding.document_version&.verify_content_digest ||
+            !binding.document_version&.verify_rendered_content_digest
+        end
+
+        return unless mismatched
+
+        Result.failure(:document_digest_mismatch, policy_key: policy.key,
+                                                  statement_key: statement.key,
+                                                  event_id: event.id)
+      end
+
+      # Lifecycle events record who performed the transition. For an automatic
+      # expiry/consumption that is a system actor; for an administrative
+      # revocation it may be an operator. Neither replaces the human whose
+      # statement is being changed. Its immutable root event is therefore the
+      # source of actor/tenant/subject identity, while the current event is the
+      # source of the transition action itself.
+      def statement_identity_source(event, state)
+        return event if CurrentState::INITIAL_EVENT_TYPES.include?(event.event_type)
+        return nil unless CurrentState::TRANSITION_STATE_BY_EVENT_TYPE.key?(event.event_type)
+        return nil unless event.root_event_id.to_s == state.root_event_id.to_s
+
+        root = Event.find_by(id: event.root_event_id)
+        predecessor = Event.find_by(id: event.predecessor_event_id)
+        return nil unless root&.digest_verified? && predecessor&.digest_verified?
+        return nil unless (predecessor.root_event_id.presence || predecessor.id).to_s == root.id.to_s
+
+        root
+      end
+
+      def verify_event(event_id, policy:, subject:, acting_for:, at:)
         event = Event.find_by(id: event_id)
 
         return Result.failure(:no_evidence, event_id: event_id) unless event
@@ -183,10 +285,26 @@ module Clickwrap
                                                                event_id: event.id)
         end
 
-        return Result.failure(:core_event_disposed, policy_key: event.policy_key, event_id: event.id) if event.disposed?
+        if event.disposed?
+          if event.documented_core_disposition?
+            return Result.failure(:core_event_disposed, policy_key: event.policy_key, event_id: event.id)
+          end
 
-        unless event.digest_verified?
-          return Result.failure(:integrity_check_failed, policy_key: event.policy_key, event_id: event.id)
+          return Result.failure(
+            :integrity_check_failed,
+            policy_key: event.policy_key,
+            event_id: event.id,
+            details: { "disposition" => "not_documented" }
+          )
+        end
+
+        unless event.evidence_integrity_verified?
+          return Result.failure(
+            :integrity_check_failed,
+            policy_key: event.policy_key,
+            event_id: event.id,
+            details: { "request_evidence_binding" => event.request_evidence_binding_status.to_s }
+          )
         end
 
         # Two different ways a document can stop matching, and both have to be
@@ -196,7 +314,9 @@ module Clickwrap
         # would leave every receipt citing it silently describing content that
         # is no longer there. So the stored bytes get re-digested, not trusted.
         mismatched = event.documents.reject do |binding|
-          binding.still_matches_stored_version? && binding.document_version&.verify_content_digest
+          binding.still_matches_stored_version? &&
+            binding.document_version&.verify_content_digest &&
+            binding.document_version.verify_rendered_content_digest
         end
 
         unless mismatched.empty?
@@ -210,29 +330,37 @@ module Clickwrap
           return Result.failure(:wrong_subject, policy_key: event.policy_key, event_id: event.id)
         end
 
-        Result.success(policy_key: event.policy_key, event_id: event.id)
+        if !acting_for.equal?(UNSPECIFIED) &&
+           event.represented_party_reference.to_s != Reference.represented_party(acting_for).to_s
+          return Result.failure(:represented_party_mismatch,
+                                policy_key: event.policy_key, event_id: event.id)
+        end
+
+        Result.success(
+          policy_key: event.policy_key,
+          event_id: event.id,
+          details: { "request_evidence_binding" => event.request_evidence_binding_status.to_s }
+        )
       end
 
-      def load_states(policy, actor_reference, tenant, subject)
+      def load_states(policy, actor_reference, tenant, subject, acting_for)
         StatementState
           .for_policy(policy.key)
           .for_actor(actor_reference)
-          .where(tenant_key: tenant_key_for(tenant), subject_key: StatementState.subject_key_for(subject))
+          .where(
+            tenant_key: tenant_key_for(tenant),
+            subject_key: StatementState.subject_key_for(subject),
+            represented_party_reference: Reference.represented_party(acting_for)
+          )
           .index_by(&:statement_key)
       end
 
       def reference_for(actor)
-        return nil if actor.nil?
-
-        Clickwrap.config.identify_actor_with.call(actor)
+        Reference.actor(actor)
       end
 
       def tenant_key_for(tenant)
-        return "" if tenant.nil?
-        return tenant.to_s if tenant.is_a?(String) || tenant.is_a?(Symbol)
-        return tenant.to_gid.to_s if tenant.respond_to?(:to_gid)
-
-        "#{tenant.class.name}/#{tenant.id}"
+        Reference.tenant(tenant)
       end
 
       def subject_fingerprint_for(statement, subject)
@@ -249,7 +377,10 @@ module Clickwrap
         recorded = Array(state.document_version_ids).map(&:to_s)
 
         statement.document_keys.find do |document_key|
-          document = ::Clickwrap::Document.find_by(key: document_key, tenant_key: state.tenant_key.presence)
+          document = ::Clickwrap::Document.find_by(
+            document_key: document_key,
+            tenant_key: state.tenant_key.presence
+          )
           current = document&.current_version(locale: I18n.locale)
 
           current && !recorded.include?(current.id.to_s)

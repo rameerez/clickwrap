@@ -23,7 +23,7 @@ module Clickwrap
     #
     #   * a presentation manifest — nobody signed one, and there is no offer to
     #     reproduce;
-    #   * an assertion — we do not know the sentence the person was shown;
+    #   * an assertion — we do not know the sentence the old system offered;
     #   * submit-button text — we do not know what the control said;
     #   * an IP address or browser user-agent — these were not observed by us,
     #     and a later session's address is a different fact about a different
@@ -189,7 +189,7 @@ module Clickwrap
           build_documents(event)
 
           event.save!
-          CurrentState.apply!(event.reload)
+          event.finalize_integrity!
         end
 
         Result.new(
@@ -286,15 +286,15 @@ module Clickwrap
 
       # The sentence that goes in the receipt. It is deliberately not the
       # policy's current assertion text: that sentence may have been written
-      # years after the act, and putting it here would claim the person was
-      # shown wording that did not exist yet.
+      # years after the act, and putting it here would claim the source system
+      # offered wording that may not have existed yet.
       def assertion_text_for(statement)
         [
           "Imported from a pre-existing record: it states that this actor " \
           "#{Vocabulary.initial_action_for(statement.kind)} #{statement.key} " \
           "on #{Receipt.format_time(occurred_at)}.",
-          "The original wording shown to them was not recorded, so this is not the sentence " \
-          "they saw.",
+          "The source system's original offer wording was not recorded, so this receipt does " \
+          "not reproduce it.",
           unknown_sentence,
           because
         ].compact.reject(&:empty?).join(" ")
@@ -329,9 +329,14 @@ module Clickwrap
               document_version_id: version.id,
               version_label: version.version_label,
               locale: version.locale,
-              media_type: version.media_type,
-              content_digest: version.content_digest,
-              rendered_content_digest: version.rendered_content_digest,
+              source_media_type: version.media_type,
+              source_content_digest: version.content_digest,
+              rendered_media_type: version.rendered_media_type.presence || version.media_type,
+              rendered_content_digest: version.rendered_content_digest.presence || version.content_digest,
+              renderer_name: version.renderer_name,
+              renderer_version: version.renderer_version,
+              sanitizer_name: version.sanitizer_name,
+              sanitizer_version: version.sanitizer_version,
               ordinal: ordinal,
               created_at: event.recorded_at_by_server
             )
@@ -342,8 +347,11 @@ module Clickwrap
       end
 
       def published_version(document_key, label)
-        document = ::Clickwrap::Document.find_by(key: document_key, tenant_key: tenant_key.presence)
-        document ||= ::Clickwrap::Document.find_by(key: document_key, tenant_key: nil)
+        document = ::Clickwrap::Document.find_by(
+          document_key: document_key,
+          tenant_key: tenant_key.presence
+        )
+        document ||= ::Clickwrap::Document.find_by(document_key: document_key, tenant_key: nil)
         return nil unless document
 
         document.versions.find_by(version_label: label.to_s)
@@ -395,12 +403,7 @@ module Clickwrap
       end
 
       def actor_reference
-        @actor_reference ||=
-          if actor.is_a?(String)
-            actor
-          else
-            Clickwrap.config.identify_actor_with.call(actor)
-          end
+        @actor_reference ||= Reference.actor(actor)
       end
 
       def subject_key = StatementState.subject_key_for(subject)

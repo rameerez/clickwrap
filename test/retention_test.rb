@@ -55,7 +55,7 @@ class RetentionTest < ActiveSupport::TestCase
     ordinary = capture_clickwrap(:signup, actor: create_user)
 
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
-                              review_on: 6.months.from_now)
+                              review_at: 6.months.from_now)
 
     travel_to 7.years.from_now do
       planner = Clickwrap::Retention::Planner.new(created_by: @operator)
@@ -80,7 +80,10 @@ class RetentionTest < ActiveSupport::TestCase
     # has not started its clock until liquidation happens, and the host
     # calculation says so by returning nil.
     Clickwrap.configure do |config|
-      config.calculate_retention_time_for(:regulated_evidence_retention_ends) { |_event| nil }
+      config.replace_retention_time_calculation_for(
+        :regulated_evidence_retention_ends,
+        because: "Exercise an unresolved host event in this test"
+      ) { |_event| nil }
     end
 
     scheme = create_withdrawal(user: @user)
@@ -104,8 +107,144 @@ class RetentionTest < ActiveSupport::TestCase
       # "delete it now". This is the exact regression that destroys regulated
       # evidence early, so it is asserted three ways.
       assert_not_includes planner.due_items.map(&:event_id), receipt.event_id
-      assert_not_includes plan.scope.to_h["items"].map { |item| item["event_id"] }, receipt.event_id
+      assert_not_includes plan.disposition_scope.to_h["items"].map { |item| item["event_id"] }, receipt.event_id
       assert_operator plan.summary.to_h["unresolved"], :>=, 1
+    end
+  end
+
+  test "the usable scope and application agree that a plan expires at its boundary" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    plan = nil
+
+    travel_to 7.years.from_now do
+      plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
+    end
+
+    travel_to plan.expires_at do
+      assert_not_includes Clickwrap::DispositionPlan.usable, plan
+
+      error = assert_raises(Clickwrap::DispositionPlanInvalid) do
+        Clickwrap::Retention::Applier.new(plan, applied_by: @operator).call
+      end
+
+      assert_match(/expired at/, error.message)
+      assert_not receipt.event.reload.disposed?
+    end
+  end
+
+  test "core events, request evidence, and presentations become due at their exact deadlines" do
+    record_request_evidence_by_default!
+    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    annex = receipt.event.reload.request_evidence
+
+    travel_to annex.ip_address_delete_after, with_usec: true do
+      planner = Clickwrap::Retention::Planner.new(created_by: @operator)
+      planner.call
+
+      assert(
+        planner.due_items.any? do |item|
+          item.event_id == receipt.event_id && item.part == :ip_address
+        end,
+        "the recorded IP address must be due at delete_after, not one clock tick later"
+      )
+    end
+
+    travel_to receipt.event.retain_core_event_until, with_usec: true do
+      planner = Clickwrap::Retention::Planner.new(created_by: @operator)
+      planner.call
+
+      assert(
+        planner.due_items.any? do |item|
+          item.event_id == receipt.event_id && item.part == :core_event
+        end,
+        "the core event must be due at retain_core_event_until, not one clock tick later"
+      )
+    end
+
+    withdrawal = create_withdrawal(user: create_user)
+    presentation = present_clickwrap(:regulated_authorization, actor: withdrawal.user, subject: withdrawal)
+    persisted = Clickwrap::Presentation.find_by!(nonce: presentation.manifest.nonce)
+
+    travel_to persisted.retain_until, with_usec: true do
+      planner = Clickwrap::Retention::Planner.new(created_by: @operator)
+      planner.call
+
+      assert(
+        planner.due_items.any? do |item|
+          item.part == :presentation && item.record_id.to_s == persisted.id.to_s
+        end,
+        "the unsubmitted presentation must be due at retain_until, not one clock tick later"
+      )
+    end
+  end
+
+  test "each lifecycle event freezes its own schedule and root disposition does not cascade" do
+    # `travel_to` rounds to whole seconds by default. Start one whole second
+    # after setup published the document versions so the test never travels a
+    # few microseconds behind their effective-at boundary.
+    captured_at = (Clickwrap.now + 1.second).change(usec: 0)
+    grant = nil
+    withdrawal = nil
+
+    travel_to captured_at do
+      grant = capture_clickwrap(
+        :marketing_preferences,
+        actor: @user,
+        answers: { product_updates: "1" }
+      )
+    end
+
+    travel_to captured_at + 1.year do
+      withdrawal = Clickwrap.withdraw!(
+        :product_updates,
+        actor: @user,
+        because: "The user withdrew this purpose in privacy settings"
+      )
+    end
+
+    assert_equal captured_at + 3.years, grant.event.reload.retain_core_event_until
+    assert_equal captured_at + 4.years, withdrawal.reload.retain_core_event_until
+
+    travel_to captured_at + 3.years + 1.day do
+      planner = Clickwrap::Retention::Planner.new(created_by: @operator)
+      plan = planner.call
+      planned_event_ids = planner.due_items.select { |item| item.part == :core_event }.map(&:event_id)
+
+      assert_includes planned_event_ids, grant.event_id
+      assert_not_includes planned_event_ids, withdrawal.id
+
+      Clickwrap::Retention::Applier.new(plan, applied_by: @operator).call
+
+      assert grant.event.reload.disposed?
+      assert_not withdrawal.reload.disposed?
+
+      state = Clickwrap::StatementState.find_by!(current_event_id: withdrawal.id)
+      assert_equal "withdrawn", state.state
+
+      error = assert_raises(Clickwrap::IntegrityCheckFailed) do
+        Clickwrap::CurrentState.rebuild_for!(actor_reference: @user.clickwrap_actor_reference)
+      end
+      assert_match(/depends on disposed root event #{grant.event_id}/, error.message)
+      assert_equal withdrawal.id, Clickwrap::StatementState.find(state.id).current_event_id
+
+      tombstone = Clickwrap::Event.find(grant.event.core_event_disposition_event_id)
+      assert_equal "disposition", tombstone.event_type
+      assert_nil tombstone.retain_core_event_until
+      assert_nil tombstone.retention_rule_name
+    end
+
+    travel_to captured_at + 4.years + 1.day do
+      planner = Clickwrap::Retention::Planner.new(created_by: @operator)
+      plan = planner.call
+      planned_event_ids = planner.due_items.select { |item| item.part == :core_event }.map(&:event_id)
+
+      assert_includes planned_event_ids, withdrawal.id
+      assert_empty Clickwrap::Event.where(event_type: "disposition", id: planned_event_ids)
+
+      Clickwrap::Retention::Applier.new(plan, applied_by: @operator).call
+
+      assert withdrawal.reload.disposed?
+      assert_not Clickwrap::StatementState.exists?(current_event_id: withdrawal.id)
     end
   end
 
@@ -143,7 +282,7 @@ class RetentionTest < ActiveSupport::TestCase
                                                because: "Scheduled retention run").call
       # Every part except an unsubmitted presentation documents its own removal
       # with an appended event, so the count is knowable before the run.
-      expected = plan.scope.to_h["items"].count { |item| item["part"] != "presentation" }
+      expected = plan.disposition_scope.to_h["items"].count { |item| item["part"] != "presentation" }
       result = nil
 
       assert_difference -> { Clickwrap::Event.where(event_type: "disposition").count }, expected do
@@ -171,6 +310,65 @@ class RetentionTest < ActiveSupport::TestCase
     end
   end
 
+  test "a failed annex-disposition event rolls the value deletion back and a retry succeeds" do
+    record_request_evidence_by_default!
+    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    annex = receipt.event.reload.request_evidence
+    original_ip_address = annex.ip_address
+
+    Clickwrap::Testing.fail_next_event_write do
+      assert_raises(Clickwrap::EventWriteFailed) do
+        Clickwrap.delete_recorded_ip_address!(
+          receipt,
+          because: "The reviewed request-evidence period ended"
+        )
+      end
+    end
+
+    assert_equal original_ip_address, annex.reload.ip_address
+    assert_nil annex.ip_address_deleted_at
+    assert_equal :verified, receipt.event.reload.request_evidence_binding_status
+    assert_equal 0, Clickwrap::Event.where(event_type: "disposition").count
+
+    disposition = Clickwrap.delete_recorded_ip_address!(
+      receipt,
+      because: "The reviewed request-evidence period ended"
+    )
+
+    assert disposition.persisted?
+    assert_nil annex.reload.ip_address
+    assert annex.ip_address_was_deleted?
+  end
+
+  test "a failed core-disposition event leaves the payload intact and a retry succeeds" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    Clickwrap::Testing.fail_next_event_write do
+      assert_raises(Clickwrap::EventWriteFailed) do
+        Clickwrap::Retention::Disposition.dispose_core_event!(
+          receipt.event,
+          because: "The reviewed core-evidence period ended"
+        )
+      end
+    end
+
+    event = receipt.event.reload
+    assert_not event.disposed?
+    assert event.digest_verified?
+    assert event.actor_reference.present?
+    assert event.statements.any?
+    assert event.documents.any?
+    assert_equal 0, Clickwrap::Event.where(event_type: "disposition").count
+
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      event,
+      because: "The reviewed core-evidence period ended"
+    )
+
+    assert event.reload.disposed?
+    assert event.documented_core_disposition?
+  end
+
   test "applying a plan that expired or was already applied is refused by name" do
     capture_clickwrap(:signup, actor: @user)
 
@@ -184,7 +382,7 @@ class RetentionTest < ActiveSupport::TestCase
       assert_match(/already applied/, error.message)
 
       superseded = Clickwrap::Retention::Planner.new(created_by: @operator).call
-      superseded.update!(state: "superseded")
+      superseded.supersede!(because: "A newer review replaces this one", by: @operator)
 
       assert_raises(Clickwrap::DispositionPlanInvalid) do
         Clickwrap::Retention::Applier.new(superseded, applied_by: @operator).call
@@ -208,15 +406,115 @@ class RetentionTest < ActiveSupport::TestCase
     end
   end
 
+  test "a crashed application can be reclaimed only after an explicit stale threshold and reason" do
+    capture_clickwrap(:signup, actor: @user)
+
+    travel_to 7.years.from_now do
+      plan = Clickwrap::Retention::Planner.new(
+        created_by: @operator,
+        because: "Scheduled retention run"
+      ).call
+      plan.claim_for_application!(by_reference: @operator.clickwrap_actor_reference)
+
+      error = assert_raises(Clickwrap::DispositionPlanInvalid) do
+        Clickwrap::Retention::Applier.new(
+          plan,
+          applied_by: @operator,
+          recover_application_if_stale_for: 30.minutes,
+          because_recovery_is_needed: "The previous worker crashed"
+        ).call
+      end
+      assert_match(/not older than/, error.message)
+
+      travel 31.minutes
+      assert_raises(Clickwrap::DispositionPlanInvalid) do
+        Clickwrap::Retention::Applier.new(
+          plan,
+          applied_by: @operator,
+          recover_application_if_stale_for: 30.minutes
+        ).call
+      end
+
+      result = Clickwrap::Retention::Applier.new(
+        plan,
+        applied_by: @operator,
+        recover_application_if_stale_for: 30.minutes,
+        because_recovery_is_needed: "The previous worker crashed after claiming the plan"
+      ).call
+
+      assert result.clean?
+      assert plan.reload.applied?
+      assert_equal 2, plan.application_attempt_count
+      recovery = plan.application_recoveries.fetch(0)
+      assert_equal "The previous worker crashed after claiming the plan", recovery.fetch("reason")
+      assert_equal @operator.clickwrap_actor_reference, recovery.fetch("recovered_by_reference")
+    end
+  end
+
+  test "recovering a partially applied plan rechecks every item instead of deleting it twice" do
+    first = capture_clickwrap(:signup, actor: @user)
+    second = capture_clickwrap(:signup, actor: create_user)
+
+    travel_to 7.years.from_now do
+      plan = Clickwrap::Retention::Planner.new(
+        created_by: @operator,
+        because: "Scheduled retention run"
+      ).call
+      plan.claim_for_application!(by_reference: @operator.clickwrap_actor_reference)
+
+      # Simulate a process dying after one item committed but before the plan
+      # wrote its final outcome.
+      Clickwrap::Retention::Disposition.dispose_core_event!(
+        first.event,
+        because: "The first worker applied this item before it crashed"
+      )
+
+      travel 31.minutes
+      result = Clickwrap::Retention::Applier.new(
+        plan,
+        applied_by: @operator,
+        recover_application_if_stale_for: 30.minutes,
+        because_recovery_is_needed: "Recovering the crashed retention worker"
+      ).call
+
+      assert(result.skipped_changed.any? { |item| item.event_id == first.event_id })
+      assert(result.applied.any? { |item| item.event_id == second.event_id })
+      assert first.event.reload.disposed?
+      assert second.event.reload.disposed?
+      assert_equal 2,
+                   Clickwrap::Event.where(
+                     event_type: "disposition",
+                     predecessor_event_id: first.event_id
+                   ).count + Clickwrap::Event.where(
+                     event_type: "disposition",
+                     predecessor_event_id: second.event_id
+                   ).count
+    end
+  end
+
+  test "applying destructive work requires a named operator reference" do
+    capture_clickwrap(:signup, actor: @user)
+
+    travel_to 7.years.from_now do
+      plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
+      error = assert_raises(Clickwrap::DispositionPlanInvalid) do
+        Clickwrap::Retention::Applier.new(plan, applied_by: nil).call
+      end
+
+      assert_match(/stable reference of the operator/, error.message)
+      assert_equal "open", plan.reload.state
+    end
+  end
+
   test "a legal hold placed after the plan was reviewed stops that item at apply time" do
     receipt = capture_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
-      assert_includes plan.scope.to_h["items"].map { |item| item["event_id"] }, receipt.event_id
+      assert_includes plan.disposition_scope.to_h["items"].map { |item| item["event_id"] }, receipt.event_id
 
       receipt.place_on_legal_hold!(because: "Dispute raised after the plan was reviewed",
-                                   placed_by: @operator, review_on: 6.months.from_now)
+                                   placed_by: @operator, review_at: 6.months.from_now)
 
       result = Clickwrap::Retention::Applier.new(plan, applied_by: @operator).call
       skipped = result.skipped_held.find { |outcome| outcome.event_id == receipt.event_id }
@@ -265,15 +563,23 @@ class RetentionTest < ActiveSupport::TestCase
     assert event.disposed?
     assert event.core_event_disposed_at.present?
 
-    # An auditor must find a documented disposition rather than a hole where an
-    # agreement used to be, so the row, its statements, and its documents stay.
+    # An auditor must find a documented tombstone rather than a hole where an
+    # agreement used to be. The root row and its chain position stay, while the
+    # personal payload and document/statement bindings are actually removed.
     assert Clickwrap::Event.exists?(id: receipt.event_id)
-    assert_equal 2, event.statements.count
-    assert_equal 2, event.documents.count
+    assert_empty event.statements
+    assert_empty event.documents
+    assert_equal({}, event.actor_snapshot)
+    assert_equal "", event.actor_reference
 
     disposition = Clickwrap::Event.where(event_type: "disposition").last
     assert_equal receipt.event_id, disposition.predecessor_event_id
     assert_match(/The six-year period ended/, disposition.reason)
+    facts = disposition.protected_outcome.fetch("core_event_disposition")
+    assert_equal receipt.event_id, facts.fetch("event_id")
+    assert_equal event.event_digest, facts.fetch("original_event_digest")
+    assert_equal 2, facts.fetch("removed_statement_count")
+    assert_equal 2, facts.fetch("removed_document_binding_count")
 
     # Disposing twice would put an event in the record describing nothing.
     assert_nil Clickwrap::Retention::Disposition.dispose_core_event!(event, because: "Running the job again")
@@ -287,7 +593,7 @@ class RetentionTest < ActiveSupport::TestCase
     end
 
     receipt.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
-                                 review_on: 6.months.from_now)
+                                 review_at: 6.months.from_now)
 
     # A hold that scheduled disposition could quietly step over would not be a
     # hold.
@@ -327,6 +633,10 @@ class RetentionTest < ActiveSupport::TestCase
       config.reason_for_recording_browser_user_agents_by_default = "Corroborate the client context"
       config.delete_recorded_browser_user_agents_after = 90.days
     end
+
+    Clickwrap::Services::LoadPolicies.new(
+      root: Rails.root.to_s, paths: ["config/clickwrap.rb"]
+    ).call
   end
 
   def fake_http_request

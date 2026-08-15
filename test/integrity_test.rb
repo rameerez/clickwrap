@@ -9,6 +9,73 @@ require "test_helper"
 # events and their digests together, and nothing here — the walk, the adapters,
 # or the receipt — is permitted to say otherwise.
 class IntegrityTest < ActiveSupport::TestCase
+  class VerifiedTimestampAdapter
+    def timestamp(digest)
+      {
+        issued: true,
+        token: "test-token-for-#{digest}",
+        digest: digest,
+        provider_name: "test_timestamp_authority",
+        protocol: "test-only",
+        provider_reported_time: Time.current
+      }
+    end
+
+    def verify(token, digest)
+      {
+        checked: true,
+        verified: token == "test-token-for-#{digest}",
+        provider_name: "test_timestamp_authority",
+        provider_reported_status: "valid"
+      }
+    end
+
+    def capabilities
+      { name: "test_timestamp_authority", independently_verifiable: true }
+    end
+  end
+
+  class MismatchedTimestampAdapter < VerifiedTimestampAdapter
+    def timestamp(_digest)
+      {
+        issued: true,
+        token: "wrong",
+        digest: "sha256:#{"0" * 64}",
+        provider_name: "mismatch"
+      }
+    end
+  end
+
+  class RaisingTimestampAdapter < VerifiedTimestampAdapter
+    def timestamp(_digest) = raise("timestamp provider unavailable")
+  end
+
+  class VerifiedAnchorAdapter
+    attr_reader :verified_publication
+
+    def anchor(chain_head)
+      {
+        anchored: true,
+        reference: "immutable://test/#{chain_head.last_event_id}",
+        published_at: Time.current,
+        provider_name: "test_anchor"
+      }
+    end
+
+    def verify(publication, chain_head)
+      @verified_publication = publication
+      {
+        checked: true,
+        verified: publication["reference"] == "immutable://test/#{chain_head.last_event_id}",
+        provider_name: "test_anchor"
+      }
+    end
+
+    def capabilities
+      { name: "test_anchor", publishes_outside_primary_database: true }
+    end
+  end
+
   setup do
     @user = create_user
   end
@@ -41,7 +108,7 @@ class IntegrityTest < ActiveSupport::TestCase
     # nils, and a chain of nils reports every scope as intact.
     head = Clickwrap::ChainHead.find_by(chain_scope: "global/signup")
     assert_equal second_event.event_digest, head.last_event_digest
-    assert_equal 2, head.sequence
+    assert_equal 2, head.chain_sequence
   end
 
   test "chaining is off unless it is configured" do
@@ -106,6 +173,24 @@ class IntegrityTest < ActiveSupport::TestCase
     assert_equal 3, broken.counts["checked"]
   end
 
+  test "the chain counts documented core dispositions without calling their deleted digests verified" do
+    chain_event_history!
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      receipt.event,
+      because: "The reviewed retention period ended"
+    )
+
+    result = Clickwrap::Integrity::Chain.verify
+
+    assert result.success?
+    assert_equal 2, result.counts["checked"]
+    assert_equal 1, result.counts["verified"]
+    assert_equal 1, result.counts["documented_dispositions"]
+    assert_equal :documented_core_disposition, receipt.event.reload.digest_integrity_status
+  end
+
   test "an event whose stored digest is replaced stops linking to its successor" do
     chain_event_history!
 
@@ -130,6 +215,42 @@ class IntegrityTest < ActiveSupport::TestCase
     link_break = result.breaks.find { |candidate| candidate.reason == :previous_digest_does_not_link }
     assert_equal second.event_id, link_break.event_id
     assert_match(/no longer form a chain/, link_break.detail)
+  end
+
+  test "deleting the newest event is detected against the durable chain head" do
+    chain_event_history!
+
+    first = capture_clickwrap(:signup, actor: @user)
+    removed = capture_clickwrap(:signup, actor: create_user)
+    connection = ActiveRecord::Base.connection
+    connection.disable_referential_integrity do
+      Clickwrap::Event.where(id: removed.event_id).delete_all
+    end
+
+    result = Clickwrap::Integrity::Chain.verify(scope: "global/signup")
+
+    assert_not result.success?
+    assert_equal 1, result.counts["checked"]
+    assert_equal first.event_id, result.first_break.event_id
+    assert_includes result.breaks.map(&:reason), :chain_tail_missing
+    assert_includes result.breaks.map(&:reason), :chain_head_event_mismatch
+    assert_includes result.breaks.map(&:reason), :chain_head_digest_mismatch
+  end
+
+  test "deleting every event still leaves a detectable chain-head discrepancy" do
+    chain_event_history!
+    removed = capture_clickwrap(:signup, actor: @user)
+
+    ActiveRecord::Base.connection.disable_referential_integrity do
+      Clickwrap::Event.where(id: removed.event_id).delete_all
+    end
+
+    result = Clickwrap::Integrity::Chain.verify(scope: "global/signup")
+
+    assert_not result.success?
+    assert_equal 0, result.counts["checked"]
+    assert_equal :chain_tail_missing, result.first_break.reason
+    assert_match(/has no event rows/, result.first_break.detail)
   end
 
   test "a bounded walk reports that it started mid-chain instead of calling it a break" do
@@ -164,17 +285,17 @@ class IntegrityTest < ActiveSupport::TestCase
 
   test "the no-op anchor reports the absence of an anchor rather than failing" do
     anchor = Clickwrap::Integrity::Anchor.new
-    head = Clickwrap::ChainHead.create!(chain_scope: "global/signup", sequence: 0)
+    head = Clickwrap::ChainHead.create!(chain_scope: "global/signup", chain_sequence: 0)
 
     publication = anchor.anchor(head)
-    verification = anchor.verify(head)
+    verification = anchor.verify(publication, head)
 
     # "Not anchored" is an ordinary outcome, not an error: a no-op adapter, an
     # outage, and a queue that has not drained all mean the same thing, and the
     # record says so instead of leaving a caller to infer it.
     assert_not publication.anchored
     assert_equal "no_anchor", publication.provider_name
-    assert_match(/No anchor is configured/, publication.to_h["detail"])
+    assert_match(/publishes nowhere/, publication.to_h["detail"])
 
     # "We could not check" and "we checked and it does not match" are different
     # answers, which is why `checked` exists alongside `verified`.
@@ -209,6 +330,115 @@ class IntegrityTest < ActiveSupport::TestCase
     assert_no_match(/trusted time/i, provider.capabilities.to_s)
   end
 
+  test "a verified timestamp is immutable, digest-bound, and independently checkable as a receipt record" do
+    adapter = VerifiedTimestampAdapter.new
+    Clickwrap.config.timestamp_receipts_with = adapter
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    attestation = Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
+
+    assert attestation.verified_for?(receipt.event)
+    assert attestation.digest_verified?
+    assert_equal receipt.event.event_digest, attestation.subject_digest
+    assert_equal "third_party_timestamp", receipt.to_h.dig("integrity", "tier")
+    assert_raises(Clickwrap::ImmutableEvidenceError) { attestation.update!(state: "failed") }
+    assert_raises(Clickwrap::ImmutableEvidenceError) { attestation.destroy! }
+
+    result = Clickwrap::ReceiptVerifier.verify(
+      receipt.to_canonical_json,
+      documents: document_artifacts_for(receipt)
+    )
+    assert result.success?, result.to_s
+    assert(
+      result.checks.any? do |check|
+        check.name.start_with?("integrity_attestation") && check.passed?
+      end
+    )
+  end
+
+  test "a timestamp result for a different digest is recorded as failed and never upgrades the tier" do
+    Clickwrap.config.timestamp_receipts_with = MismatchedTimestampAdapter.new
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    attestation = Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
+
+    assert_equal "failed", attestation.state
+    refute attestation.verified?
+    assert_equal "baseline", receipt.to_h.dig("integrity", "tier")
+    assert_match(/different digest/, attestation.verification.fetch("detail"))
+  end
+
+  test "an integrity-provider exception leaves a failed immutable attempt and reports the outage" do
+    reported = []
+    Clickwrap.config.timestamp_receipts_with = RaisingTimestampAdapter.new
+    Clickwrap.config.report_after_commit_failure_with =
+      ->(error, event) { reported << [error, event.id] }
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
+
+    attestation = receipt.event.integrity_attestations.last
+    assert_equal "failed", attestation.state
+    assert_equal "RuntimeError", attestation.provider_result.fetch("error_class")
+    assert_equal([["timestamp provider unavailable", receipt.event_id]],
+                 reported.map { |error, event_id| [error.message, event_id] })
+  end
+
+  test "an anchor verifier receives the exact publication it is asked to substantiate" do
+    adapter = VerifiedAnchorAdapter.new
+    chain_event_history!
+    Clickwrap.config.anchor_event_history_with = adapter
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    attestation = Clickwrap::Integrity::Attestor.new(receipt.event).anchor_event
+
+    assert attestation.verified_for?(receipt.event)
+    assert_equal attestation.provider_result, adapter.verified_publication
+    assert_equal "external_event_anchoring", receipt.to_h.dig("integrity", "tier")
+  end
+
+  test "missing timestamp attestations can be reconciled without duplicating recorded attempts" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    Clickwrap.config.timestamp_receipts_with = VerifiedTimestampAdapter.new
+
+    first = Clickwrap.reconcile_missing_integrity_attestations!
+    second = Clickwrap.reconcile_missing_integrity_attestations!
+
+    assert_equal({ "attempted" => 1, "recorded" => 1, "not_recorded" => 0 }, first.counts)
+    assert first.clean?
+    assert_equal 0, second.attempted
+
+    attestation = receipt.event.integrity_attestations.find_by!(kind: "third_party_timestamp")
+    assert attestation.verified_for?(receipt.event)
+  end
+
+  test "failed attestations are retried only when the caller says so" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    Clickwrap.config.timestamp_receipts_with = RaisingTimestampAdapter.new
+
+    first = Clickwrap.reconcile_missing_integrity_attestations!
+    ordinary_rerun = Clickwrap.reconcile_missing_integrity_attestations!
+    explicit_retry = Clickwrap.reconcile_missing_integrity_attestations!(retry_failed_attestations: true)
+
+    assert_equal 1, first.attempted
+    assert_equal 0, ordinary_rerun.attempted
+    assert_equal 1, explicit_retry.attempted
+    assert_equal %w[failed failed], receipt.event.integrity_attestations.order(:attempted_at, :id).pluck(:state)
+  end
+
+  test "anchor reconciliation touches only events that were actually chained" do
+    unchained = capture_clickwrap(:signup, actor: @user)
+    chain_event_history!
+    chained = capture_clickwrap(:signup, actor: create_user)
+    Clickwrap.config.anchor_event_history_with = VerifiedAnchorAdapter.new
+
+    result = Clickwrap.reconcile_missing_integrity_attestations!
+
+    assert_equal 1, result.attempted
+    assert_empty unchained.event.integrity_attestations
+    assert chained.event.integrity_attestations.find_by!(kind: "event_anchor").verified_for?(chained.event)
+  end
+
   # --- What the receipt is allowed to say -------------------------------------
 
   test "a receipt states the chained tier only when its event is actually chained" do
@@ -236,5 +466,15 @@ class IntegrityTest < ActiveSupport::TestCase
 
   def chain_event_history!
     Clickwrap.configure { |config| config.chain_event_history_with = :sha256 }
+  end
+
+  def document_artifacts_for(receipt)
+    receipt.documents.to_h do |binding|
+      version = Clickwrap::DocumentVersion.find(binding.document_version_id)
+      [
+        "#{binding.document_key}@#{binding.version_label}",
+        { source: version.content_bytes, rendered: version.rendered_bytes }
+      ]
+    end
   end
 end

@@ -1,15 +1,15 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # One immutable evidence event.
+  # One digest-bound evidence event with fixed, named post-write transitions.
   #
   # A capture, a withdrawal, a correction, an expiry, a consumption, a
   # disposition, a hold — each is a row here, linked to what it acts on. The
-  # table is append-only, and this class enforces that rather than trusting
-  # everyone who ever writes application code against it: `update` and `destroy`
-  # raise, and the two legitimate mutations (marking the core event disposed,
-  # flagging a legal hold) go through named methods that append their own event
-  # explaining what happened and why.
+  # ordinary `update` and `destroy` calls are refused. Finalization, pointer
+  # nullification, request-evidence linking, legal-hold state, and reviewed core
+  # disposition use explicit fixed write sets; lifecycle and disposition facts
+  # append linked events explaining what happened and why. Optional PostgreSQL
+  # hardening enforces those same sets below the model layer.
   #
   # What an event proves is bounded and stated in the receipt: the server
   # generated and accepted a particular presentation, an explicit action was
@@ -27,7 +27,44 @@ module Clickwrap
     # there is no `updated_at`, no counter cache, and no lock version.
     self.record_timestamps = false
 
-    MUTABLE_COLUMNS = %w[core_event_disposed_at on_legal_hold request_evidence_id].freeze
+    # MySQL does not permit a default on a native JSON column. Keep the
+    # portable NOT NULL guarantee by assigning the empty binding manifest in
+    # the model for lifecycle/import events that have no request annex.
+    attribute :request_evidence_category_binding_digests, default: -> { {} }
+
+    # Named write sets used by the opt-in PostgreSQL hardening migration. They
+    # document every post-INSERT path the gem itself needs, so the migration can
+    # refuse to install if its trigger policy ever drifts from runtime code.
+    FINALIZATION_COLUMNS = %w[
+      chain_scope chain_sequence previous_event_digest event_digest
+      digest_algorithm canonical_schema_version
+    ].freeze
+    POINTER_NULLIFICATION_COLUMNS = %w[
+      actor_type actor_id represented_party_type represented_party_id
+      subject_type subject_id
+    ].freeze
+    DISPOSITION_COLUMNS = %w[
+      actor_type actor_id actor_reference actor_snapshot
+      represented_party_type represented_party_id represented_party_reference
+      authority_source authority_role authority_verified_at authority_details
+      tenant_key subject_type subject_id subject_key subject_fingerprint
+      authentication_method authentication_context idempotency_key
+      http_request_id http_route_name presentation_id presentation_manifest
+      presentation_manifest_digest protected_outcome provider_receipt
+      provider_verification reason core_event_disposed_at
+      core_event_disposition_event_id
+    ].freeze
+    MODEL_CALLBACK_MUTABLE_COLUMNS = %w[
+      core_event_disposed_at core_event_disposition_event_id on_legal_hold request_evidence_id
+    ].freeze
+    MUTABLE_COLUMNS = MODEL_CALLBACK_MUTABLE_COLUMNS
+    DATABASE_HARDENING_WRITE_SETS = {
+      "finalization" => FINALIZATION_COLUMNS,
+      "pointer_nullification" => POINTER_NULLIFICATION_COLUMNS,
+      "disposition" => DISPOSITION_COLUMNS,
+      "legal_hold" => %w[on_legal_hold].freeze,
+      "request_evidence_link" => %w[request_evidence_id].freeze
+    }.transform_values { |columns| columns.map(&:to_s).sort.freeze }.freeze
 
     belongs_to :policy_revision,
                class_name: "Clickwrap::PolicyRevision",
@@ -75,6 +112,13 @@ module Clickwrap
              inverse_of: :event,
              dependent: :restrict_with_error
 
+    has_many :integrity_attestations,
+             -> { order(:attempted_at, :id) },
+             class_name: "Clickwrap::IntegrityAttestation",
+             foreign_key: :event_id,
+             inverse_of: :event,
+             dependent: :restrict_with_error
+
     has_one :external_action,
             class_name: "Clickwrap::ExternalAction",
             foreign_key: :event_id,
@@ -95,11 +139,19 @@ module Clickwrap
     validates :attribution_method, inclusion: { in: Vocabulary::ATTRIBUTION_METHODS }
     validates :policy_key, :actor_reference, :recorded_at_by_server, presence: true
     validates :canonical_schema_version, :gem_version, presence: true
+    validate :represented_party_has_complete_authority
 
     before_validation :assign_identifier, on: :create
-    before_create :assign_digest
-
+    before_validation :assign_retention_schedule_from_class, on: :create
+    # Reserve a chain position before INSERTing this event or any autosaved
+    # statement/document rows. InnoDB can otherwise deadlock two first writers:
+    # each transaction holds evidence-row locks and then both try to create the
+    # same previously-absent chain head. Taking the one chain-head lock first
+    # gives PostgreSQL and MySQL the same lock order for captures, lifecycle
+    # events, and imports.
+    before_create :assign_chain_position!
     before_update :refuse_ordinary_update
+    before_commit :ensure_integrity_was_finalized, on: :create
 
     # `prepend: true` matters. The `dependent: :restrict_with_error` callbacks
     # on the associations above are themselves `before_destroy` hooks, and they
@@ -119,7 +171,8 @@ module Clickwrap
     # A failure here is reported and swallowed. By the time it runs, the
     # evidence and the action it protected are durable, and an analytics outage
     # must not be able to undo them.
-    after_commit :run_after_commit_hook, on: :create
+    after_commit :at_apparent_commit_boundary, on: :create
+    after_rollback :invalidate_pending_receipts_after_rollback!, on: :create
 
     scope :captures, -> { where(event_type: "capture") }
     scope :human_actions, -> { where(event_type: Vocabulary::HUMAN_ACTION_EVENT_TYPES) }
@@ -131,7 +184,7 @@ module Clickwrap
     scope :chronological, -> { order(:recorded_at_by_server, :id) }
 
     scope :due_for_core_disposition, lambda { |at = Clickwrap.now|
-      not_disposed.where(on_legal_hold: false).where(retain_core_event_until: ...at)
+      not_disposed.where(on_legal_hold: false).where(retain_core_event_until: ..at)
     }
 
     # Questions an `after_event_is_committed` hook actually asks. A host wiring
@@ -180,21 +233,35 @@ module Clickwrap
         "subject" => canonical_subject,
         "capture_channel" => capture_channel,
         "authentication_method" => authentication_method,
+        "authentication_context" => authentication_context.presence,
         "recorded_at_by_server" => Receipt.format_time(recorded_at_by_server),
         "occurred_at" => Receipt.format_time(occurred_at),
         "idempotency_key" => idempotency_key,
         "http_request_id" => http_request_id,
+        "http_route_name" => http_route_name,
         "acts" => statements.map(&:canonical_fragment),
         "documents" => documents.map(&:canonical_fragment),
         "presentation" => canonical_presentation,
         "protected_outcome" => protected_outcome.presence,
         "provider" => canonical_provider,
-        "request_evidence_digest" => request_evidence_digest,
+        "request_evidence" => canonical_request_evidence_binding,
         "predecessor_event_id" => predecessor_event_id,
         "root_event_id" => root_event_id,
         "reason" => reason,
+        "retention" => {
+          "class" => retention_class_key,
+          "retain_core_event_until" => Receipt.format_time(retain_core_event_until),
+          "rule" => retention_rule_name
+        }.compact.presence,
+        "chain" => {
+          "scope" => chain_scope,
+          "sequence" => chain_sequence,
+          "previous_event_digest" => previous_event_digest
+        }.compact.presence,
         "gem_version" => gem_version,
-        "application_version" => application_version
+        "application_version" => application_version,
+        "template_version" => template_version,
+        "created_at" => Receipt.format_time(created_at)
       }.compact
     end
 
@@ -211,13 +278,195 @@ module Clickwrap
       Digest.secure_compare?(compute_digest, event_digest)
     end
 
+    # A disposed core payload cannot be recomputed: the point of disposition is
+    # that those bytes are gone. Keep that state separate from a verifying
+    # digest. A valid, digest-bound disposition event can account for the
+    # mismatch, while an unexplained marker or altered row remains a failure.
+    def digest_integrity_status
+      if disposed?
+        return :documented_core_disposition if documented_core_disposition?
+
+        return :unaccounted_mismatch
+      end
+
+      return :verified if digest_verified?
+
+      :unaccounted_mismatch
+    end
+
+    def digest_integrity_accounted_for?
+      digest_integrity_status != :unaccounted_mismatch
+    end
+
+    # The optional annex has its own keyed binding. A permitted category
+    # disposition makes the original HMAC no longer recomputable; that state is
+    # accepted only when every deletion timestamp has a valid linked
+    # disposition event naming the category.
+    def request_evidence_binding_status
+      annex = request_evidence
+      digests = request_evidence_category_binding_digests.to_h
+      has_binding = digests.present? || request_evidence_key_id.present? ||
+                    request_evidence_digest_algorithm.present?
+
+      return :not_recorded if annex.nil? && !has_binding
+      return :missing_annex_or_binding if annex.nil? || !has_binding
+      return :missing_annex_or_binding unless digests.keys.sort == RequestEvidence::CATEGORIES.map(&:to_s).sort
+
+      return :binding_key_unavailable unless annex.binding_key_available?(request_evidence_key_id)
+
+      disposed = false
+      RequestEvidence::CATEGORIES.each do |category|
+        if annex.deleted_for?(category)
+          disposed = true
+          return :undocumented_disposition unless request_evidence_disposition_documented?(annex, category)
+
+          next
+        end
+
+        verified = annex.category_binding_digest_verified?(
+          category: category,
+          digest: digests[category.to_s],
+          algorithm: request_evidence_digest_algorithm,
+          key_id: request_evidence_key_id
+        )
+        return :digest_mismatch unless verified
+      end
+
+      disposed ? :disposed_with_documented_events : :verified
+    rescue ::ActiveRecord::Encryption::Errors::Base
+      # Losing or rotating away an encryption key is different from a digest
+      # mismatch. The annex cannot currently be read, so verification reports
+      # that limited fact instead of crashing or calling the bytes modified.
+      :annex_unreadable
+    end
+
+    def evidence_integrity_verified?
+      digest_verified? && %i[
+        not_recorded verified disposed_with_documented_events
+      ].include?(request_evidence_binding_status)
+    end
+
+    # Finalization is deliberately explicit and happens only after every child
+    # statement/document, protected outcome, registration binding, retention
+    # decision, and chain position exists. Computing this in `before_create`
+    # produced digests for a half-built event and made normal successful
+    # captures fail their own integrity check.
+    def finalize_integrity!
+      raise EventWriteFailed, "Event #{id} has not been persisted, so it cannot be finalized." unless persisted?
+      if event_digest.present?
+        raise EventWriteFailed,
+              "Event #{id} was already finalized and cannot be finalized twice."
+      end
+
+      # Normally assigned by the before-create callback so chain contention is
+      # the first database lock this event takes. Keep this idempotent call as a
+      # defensive invariant for a host that deliberately bypassed callbacks
+      # while constructing an internal event.
+      assign_chain_position!
+      self.event_digest = compute_digest
+
+      update_columns(
+        chain_scope: chain_scope,
+        chain_sequence: chain_sequence,
+        previous_event_digest: previous_event_digest,
+        event_digest: event_digest,
+        digest_algorithm: digest_algorithm,
+        canonical_schema_version: canonical_schema_version
+      )
+
+      ChainHead.record!(chain_scope: chain_scope, event_id: id, event_digest: event_digest) if chain_scope.present?
+      self
+    end
+
+    def track_pending_receipt(pending_receipt)
+      (@pending_receipts ||= []) << pending_receipt
+      pending_receipt
+    end
+
+    # Called only once durable commit is no longer capable of being rolled
+    # back. Public because DurableCommitCallback invokes it through Active
+    # Record's transaction-record protocol; it is not host application API.
+    def finalize_durable_commit!
+      commit_pending_receipts
+      run_after_commit_hook
+      run_integrity_attestors
+      self
+    end
+
+    def invalidate_pending_receipts_after_rollback!
+      Array(@pending_receipts).each(&:mark_rolled_back!)
+      self
+    end
+
     # --- The two permitted mutations -----------------------------------------
 
     # Marks the core event as disposed of under a retention rule. The row stays:
     # what disappears is the payload, and the disposition is itself recorded as
     # a linked event, so an auditor sees a documented deletion rather than a gap.
-    def mark_core_event_disposed!(at: Clickwrap.now)
-      update_columns(core_event_disposed_at: at)
+    def dispose_core_payload!(disposition_event:, at: Clickwrap.now)
+      transaction do
+        # Mark and link the documented disposition first. The PostgreSQL
+        # hardening tier permits child DELETEs only while their parent carries
+        # this marker. If any later deletion fails, this transaction rolls the
+        # marker back as well, so callers can never observe a half-disposed row.
+        update_columns(
+          actor_type: nil,
+          actor_id: nil,
+          actor_reference: "",
+          actor_snapshot: {},
+          represented_party_type: nil,
+          represented_party_id: nil,
+          represented_party_reference: "",
+          authority_source: nil,
+          authority_role: nil,
+          authority_verified_at: nil,
+          authority_details: {},
+          tenant_key: "",
+          subject_type: nil,
+          subject_id: nil,
+          subject_key: "",
+          subject_fingerprint: nil,
+          authentication_method: nil,
+          authentication_context: {},
+          idempotency_key: nil,
+          http_request_id: nil,
+          http_route_name: nil,
+          presentation_id: nil,
+          presentation_manifest: nil,
+          presentation_manifest_digest: nil,
+          protected_outcome: nil,
+          provider_receipt: nil,
+          provider_verification: nil,
+          reason: nil,
+          core_event_disposed_at: at,
+          core_event_disposition_event_id: disposition_event.id
+        )
+
+        # Calling `delete_all` through a `has_many` association asks Active
+        # Record to null the foreign key. These evidence children have an
+        # intentionally non-null foreign key, so issue real, scoped DELETEs.
+        EventStatement.where(event_id: id).delete_all
+        EventDocument.where(event_id: id).delete_all
+        # A root and its later lifecycle events are independently retained
+        # evidence payloads. Disposing the root must not erase a projection that
+        # now points at a still-retained correction, renewal, withdrawal, or
+        # other successor. Remove only projections for which this exact event is
+        # current; a later successor removes its own projection when its own
+        # schedule becomes due.
+        StatementState.where(current_event_id: id).delete_all
+      end
+      self
+    end
+
+    def documented_core_disposition?
+      return false unless disposed? && core_event_disposition_event_id.present?
+
+      disposition = Event.find_by(id: core_event_disposition_event_id)
+      facts = disposition&.protected_outcome.to_h["core_event_disposition"].to_h
+      disposition_event_links_to_self?(disposition) && disposition.digest_verified? &&
+        facts["event_id"] == id &&
+        facts["original_event_digest"] == event_digest &&
+        facts["disposed_at"] == Receipt.format_time(core_event_disposed_at)
     end
 
     def set_legal_hold!(held)
@@ -245,8 +494,31 @@ module Clickwrap
       self.digest_algorithm ||= Clickwrap.config.digest_canonical_receipts_with.to_s
     end
 
-    def assign_digest
-      self.event_digest = compute_digest
+    # Freeze every event's core-payload schedule when the event is written.
+    # Captures, imports, exemptions, and lifecycle events all pass through this
+    # callback, so none silently falls back to a retention class that may have
+    # changed years later. Each lifecycle event starts from its own
+    # `recorded_at_by_server`; disposing a root therefore never implies that a
+    # later successor is due too.
+    #
+    # Disposition events deliberately carry no further disposal schedule. Their
+    # small, digest-bound payload is the tombstone that explains why an earlier
+    # event no longer has its original body. Disposing that explanation would
+    # make the earlier lawful deletion indistinguishable from damage and would
+    # create an endless chain of disposition-of-disposition events.
+    def assign_retention_schedule_from_class
+      return if retention_class_key.blank?
+      return if event_type == "disposition"
+      return if retain_core_event_until.present? || retention_rule_name.present?
+
+      rule = Clickwrap.retention_class!(retention_class_key).rule_for(:core_event)
+      return if rule.nil?
+
+      if rule.duration?
+        self.retain_core_event_until = recorded_at_by_server + rule.duration
+      else
+        self.retention_rule_name = rule.host_event_name.to_s
+      end
     end
 
     # Deliberately built from `actor_reference` alone, not from the polymorphic
@@ -267,15 +539,19 @@ module Clickwrap
           "authenticated" => attribution_method == "authenticated_session"
         },
         "snapshot" => actor_snapshot.presence,
-        "represented_party" => represented_party_reference,
-        "authority" => { "source" => authority_source, "role" => authority_role }.compact.presence
+        "represented_party" => if represented_party_reference.present?
+                                 {
+                                   "type" => represented_party_type,
+                                   "reference" => represented_party_reference
+                                 }.compact
+                               end,
+        "authority" => {
+          "source" => authority_source,
+          "role" => authority_role,
+          "verified_at" => Receipt.format_time(authority_verified_at),
+          "details" => authority_details.presence
+        }.compact.presence
       }.compact
-    end
-
-    def represented_party_reference
-      return nil if represented_party_type.blank?
-
-      "#{represented_party_type}/#{represented_party_id}"
     end
 
     def canonical_subject
@@ -289,8 +565,7 @@ module Clickwrap
 
       {
         "manifest_digest" => presentation_manifest_digest,
-        "submit_button_text" => presentation_manifest&.dig("submit_button_text"),
-        "offered_at" => presentation_manifest&.dig("issued_at")
+        "manifest" => presentation_manifest.presence
       }.compact
     end
 
@@ -300,8 +575,57 @@ module Clickwrap
       {
         "name" => provider_name,
         "event_id" => provider_event_id,
+        "receipt" => provider_receipt.presence,
         "verification" => provider_verification.presence
       }.compact
+    end
+
+    def canonical_request_evidence_binding
+      digests = request_evidence_category_binding_digests.to_h
+      return nil if digests.empty?
+
+      {
+        "category_digests" => digests,
+        "algorithm" => request_evidence_digest_algorithm,
+        "key_id" => request_evidence_key_id
+      }.compact
+    end
+
+    def assign_chain_position!
+      return unless Clickwrap.config.chain_event_history_with
+      return if chain_scope.present? || chain_sequence.present? || previous_event_digest.present?
+
+      self.chain_scope = [tenant_key.presence || "global", policy_key].join("/")
+      self.previous_event_digest, self.chain_sequence = ChainHead.reserve!(chain_scope: chain_scope)
+    end
+
+    def ensure_integrity_was_finalized
+      return if event_digest.present? && digest_verified?
+
+      raise EventWriteFailed,
+            "Clickwrap event #{id} reached the commit boundary without a valid finalized digest. " \
+            "Every writer must append all covered facts and call `finalize_integrity!` before commit."
+    end
+
+    def represented_party_has_complete_authority
+      if represented_party_reference.blank?
+        facts = [authority_source, authority_role, authority_verified_at, authority_details.presence]
+        errors.add(:represented_party_reference, "is missing while authority facts are present") if facts.any?
+        return
+      end
+
+      missing = {
+        authority_source: authority_source,
+        authority_role: authority_role,
+        authority_verified_at: authority_verified_at
+      }.select { |_, value| value.blank? }.keys
+      return if missing.empty?
+
+      errors.add(:represented_party_reference, "requires #{missing.join(", ")}")
+    end
+
+    def commit_pending_receipts
+      Array(@pending_receipts).each(&:mark_committed!)
     end
 
     def run_after_commit_hook
@@ -310,12 +634,44 @@ module Clickwrap
       Clickwrap.report_after_commit_failure(error, self)
     end
 
+    def run_integrity_attestors
+      Integrity::Attestor.attest_after_commit(self)
+    end
+
+    def at_apparent_commit_boundary
+      connection = ::ActiveRecord::Base.connection
+
+      if connection.transaction_open?
+        @durable_commit_callback ||= DurableCommitCallback.defer(self)
+      else
+        finalize_durable_commit!
+      end
+    end
+
+    def request_evidence_disposition_documented?(annex, category)
+      events = Event.where(root_event_id: root_event_id || id, event_type: "disposition").to_a
+
+      events.any? do |candidate|
+        disposition = candidate.protected_outcome.to_h["request_evidence_disposition"].to_h
+        disposition_event_links_to_self?(candidate) && candidate.digest_verified? &&
+          disposition["category"] == category.to_s &&
+          disposition["annex_id"].to_s == annex.id.to_s &&
+          disposition["disposed_at"].to_s == Receipt.format_time(annex.public_send(:"#{category}_deleted_at"))
+      end
+    end
+
+    def disposition_event_links_to_self?(candidate)
+      candidate&.event_type == "disposition" &&
+        candidate.predecessor_event_id.to_s == id.to_s &&
+        candidate.root_event_id.to_s == (root_event_id.presence || id).to_s
+    end
+
     def refuse_ordinary_update
       touched = changed - MUTABLE_COLUMNS
       return if touched.empty?
 
       raise EventWriteFailed,
-            "Clickwrap events are append-only, so #{touched.join(", ")} cannot be updated on " \
+            "Clickwrap events refuse ordinary mutation, so #{touched.join(", ")} cannot be updated on " \
             "event #{id}. Corrections, withdrawals, expiries, and supersessions are new linked " \
             "events; that is what keeps a receipt able to show what was true at the time as " \
             "well as what is true now."
@@ -323,7 +679,8 @@ module Clickwrap
 
     def refuse_destroy
       raise EventWriteFailed,
-            "Clickwrap events are append-only, so event #{id} cannot be destroyed. Disposition " \
+            "Clickwrap events cannot be destroyed through the ordinary model API. Event #{id} " \
+            "must remain at its chain position. Disposition " \
             "runs through Clickwrap::Retention with a reason and its own recorded event."
     end
   end

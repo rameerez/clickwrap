@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # "Show me exactly what happened."
+  # "Show me exactly what the application recorded."
   #
   # Every screen here answers that question about one recorded event, and every
   # screen here goes through the host's authorization callback to do it. There
@@ -18,8 +18,9 @@ module Clickwrap
   # an outsider that the id they guessed exists, and existence is itself
   # information about someone.
   class ReceiptsController < ApplicationController
-    # An honest page size rather than an unbounded query. History is
-    # append-only, so this list only grows.
+    # An honest page size rather than an unbounded query. A production actor can
+    # accumulate years of retained history even when optional annex data is
+    # disposed on a separate schedule.
     PER_PAGE = 50
 
     def index
@@ -50,7 +51,7 @@ module Clickwrap
     end
 
     def actor_reference
-      Clickwrap.config.identify_actor_with.call(clickwrap_current_actor)
+      Reference.actor(clickwrap_current_actor)
     end
 
     def find_readable_event

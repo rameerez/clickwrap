@@ -74,7 +74,7 @@ module Clickwrap
           build_statements(event, now)
 
           event.save!
-          CurrentState.apply!(event.reload)
+          event.finalize_integrity!
         end
 
         event
@@ -206,16 +206,11 @@ module Clickwrap
         "Recorded from #{provider_name}'s receipt #{provider_event_id}: it states that this " \
           "actor #{Vocabulary.initial_action_for(statement.kind)} #{statement.key}. " \
           "#{provider_name} owned the presentation, so the exact wording, controls, and call to " \
-          "action shown are theirs and were not recorded here."
+          "action belong to that provider and were not recorded here."
       end
 
       def actor_reference
-        @actor_reference ||=
-          if actor.is_a?(String)
-            actor
-          else
-            Clickwrap.config.identify_actor_with.call(actor)
-          end
+        @actor_reference ||= Reference.actor(actor)
       end
 
       # Provider timestamps arrive as whatever the API client handed over — a

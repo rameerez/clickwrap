@@ -18,6 +18,8 @@ Rails.application.routes.draw do
   # its structured `clickwrap_required` response (JSON) are exercised through a
   # real request rather than by calling the private helper.
   get "/billing", to: "billing#show", as: :billing
+  get "/withdrawal_reviews/:id", to: "withdrawal_reviews#show", as: :withdrawal_review
+  get "/settings/privacy", to: "sessions#home", as: :privacy_settings
 
   root to: "sessions#home"
 end

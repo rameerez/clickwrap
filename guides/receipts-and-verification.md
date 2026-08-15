@@ -1,6 +1,6 @@
 # Receipts and verification
 
-A receipt is the answer to "show me exactly what happened." There is one canonical JSON body
+A receipt answers "show me exactly what the application recorded." There is one canonical JSON body
 per event and one HTML projection of the same facts — never a different set of facts, and never
 a stronger claim than the JSON makes.
 
@@ -20,9 +20,9 @@ you need one.
 
 ## Anatomy
 
-Everything below comes from `Clickwrap::Receipt#build_body` at commit `a1ffe9b`. Keys whose
-value would be empty are omitted rather than written as `null` — the one exception being
-request evidence, which always reports an explicit state object.
+Everything below describes the released receipt schema. Keys whose value would be empty are
+omitted rather than written as `null` — the one exception being request evidence, which always
+reports an explicit state object.
 
 ### Top level
 
@@ -48,7 +48,7 @@ request evidence, which always reports an explicit state object.
 | Key | What it holds |
 |---|---|
 | `type` | The actor model's class name |
-| `reference` | The stable reference produced by `config.identify_actor_with`. A GlobalID by default, so it survives the row being deleted |
+| `reference` | The stable reference produced by `config.identify_actor_with`: a model's `clickwrap_actor_reference`, otherwise GlobalID when available, otherwise `ClassName/id`. The recorded string survives the row being deleted |
 | `attribution.method` | One of `authenticated_session`, `account_registration`, `operator_session`, `api_credential`, `anonymous_identifier`, `system_process`, `imported_provider`, `unknown`. None of these is an identity claim; each says which application-supplied context was recorded |
 | `attribution.authenticated` | True only when the method was `authenticated_session` |
 | `authentication_method` | The host's own description from `config.describe_authentication_with` |
@@ -67,7 +67,7 @@ but the statements never collapse into one meaning.
 | `statement` | The statement key |
 | `kind` | `agreement`, `acknowledgment`, `consent`, `declaration`, `attestation`, or `authorization` |
 | `action` | What was recorded for this kind — see [the lifecycle guide](consent-and-lifecycle.md) |
-| `assertion` | The **resolved sentence** that was shown, not an I18n key. A key's meaning can change in a later deploy; then the receipt no longer says what the person was asked |
+| `assertion` | The **resolved sentence** bound to the generated presentation, not an I18n key. A key's meaning can change in a later deploy; then the receipt no longer says what the server asked |
 | `locale` | The locale that sentence was resolved in |
 | `required` / `answered` / `answer` | Whether the statement was required, whether it was answered, and what the answer was |
 | `purpose` | The purpose key, for consent |
@@ -80,9 +80,11 @@ but the statements never collapse into one meaning.
 | Key | What it holds |
 |---|---|
 | `statement` | Which statement this document was attached to |
-| `key`, `version`, `locale`, `media_type` | Which exact document version was bound |
-| `digest` | The digest of the original source bytes, as they stood at capture |
-| `rendered_digest` | The digest of the rendered representation actually offered, when a source format was transformed for display |
+| `key`, `version`, `locale` | Which exact document version was bound |
+| `source_media_type` / `source_digest` | The media type and digest of the original source bytes, as they stood at capture |
+| `rendered_media_type` / `rendered_digest` | The media type and digest of the rendered representation actually offered |
+| `renderer` | The named renderer and sanitizer versions that produced the rendered bytes, when applicable |
+| `ordinal` | The document's order within the presentation |
 
 Two digests, because "this Markdown file existed" and "this rendered representation was
 offered" are different claims. The digests are copied onto the event rather than only
@@ -108,8 +110,18 @@ named policy, bound subject, evidence event, and block committed together — Cl
 guess what a host method meant.
 
 `lifecycle` carries `root_event_id`, `predecessor_event_id`, and every successor event with its
-type, time, and reason. This is where a withdrawal, correction, supersession, expiry,
-consumption, or disposition shows up. Nothing overwrites the original.
+type, time, reason, canonical event body, and event digest. This is where a withdrawal,
+correction, supersession, expiry, consumption, or disposition shows up. Ordinary lifecycle
+changes append instead of overwriting the earlier event; reviewed core disposition is the named
+exception that removes a fixed payload while retaining a linked tombstone.
+
+That makes an exported receipt a projection at the moment it was exported. A later export may
+add lifecycle successors or integrity attestations, so its top-level `receipt_digest` may be
+different even though both exports are valid. The embedded canonical `event` object and its
+`integrity.event_digest` are the stable historical anchor for the original event: lifecycle
+history grows by appending linked events rather than changing that body. Keep an exported file
+if the exact export itself matters; do not use byte equality between exports as a current-state
+test.
 
 `provider` appears only on imported external receipts, and carries the provider name, its event
 ID, its verification status, and a `note` stating plainly that Clickwrap did not present this
@@ -123,10 +135,9 @@ dictionary. What matters here is that raw values are **not** in the canonical bo
 They live in a separately encrypted annex with its own authorization, retention, hold, and
 disposition state, and the body carries only a keyed digest binding the two.
 
-That boundary is the whole reason the annex exists. Welding an IP address into the immutable
-event would force a choice between ignoring a lawful deletion and destroying the historical
-record of an agreement. Here the annex can go on its own clock while the agreement stays intact
-and verifiable.
+That boundary is the whole reason the annex exists. Welding an IP address into the core event
+would force its schedule to match the agreement payload. Here each annex category can go on its
+own clock while the retained core event stays intact and verifiable.
 
 An export that reveals request evidence is a different document from a redacted one, so it
 carries a different `receipt_digest`. That is correct: each file verifies as the file it
@@ -152,30 +163,29 @@ verification result means.
 
 | | `integrity.receipt_digest` | `integrity.event_digest` |
 |---|---|---|
-| Covers | This receipt body, with the top-level `integrity` key removed, canonicalized per RFC 8785 | The **event's own** canonical body: a different object, with different keys, built from the row when the event was written |
+| Covers | This receipt body, with only `integrity.receipt_digest` removed, canonicalized per RFC 8785 | The **event's own** canonical body embedded at top-level `event`: a different object, with different keys, built when the event was written |
 | Computed | When the receipt is produced, by whoever produced it | Once, at capture, and stored on the event row |
-| Checkable from a file alone | **Yes.** This is what `clickwrap verify` checks | **No.** A standalone file cannot re-derive it |
-| Answers | "Have these bytes changed since this digest was taken?" | "Has the row this file describes changed since it was written?" |
+| Checkable from a file alone | **Yes.** | **Yes while the event payload is retained.** After reviewed core disposition, the verifier checks the retained tombstone and exact digest-linked disposition successor instead and labels the original digest check incomplete |
+| Answers | "Has this exported projection changed since this digest was taken?" | "Does the embedded historical event body match the digest recorded when that event was finalized?" In-app verification additionally compares against the database row |
 
 The exclusion of `integrity` is not a convenience. A digest cannot cover itself: the moment it
 is written into the object, the object's bytes change and no amount of recomputation converges.
-So the digest is taken over the body *before* `integrity` is attached, and verification
-reproduces that by removing exactly that one top-level key. Everything else — including
-`verifier_instructions` and any host `x_`-prefixed extension — is inside the digest. A key
+So the digest is taken over the body before `integrity.receipt_digest` is attached, and
+verification reproduces that by removing exactly that field. Everything else — including the
+rest of `integrity`, `verifier_instructions`, and any host `x_`-prefixed extension — is inside the digest. A key
 excluded without being named would be a key anyone could edit freely.
 
-Why `event_digest` is not re-derivable from a file: the event's canonical body contains fields
-the receipt body does not carry in the same shape, deliberately omits the two mutable columns
-(`on_legal_hold` and `core_event_disposed_at`, because whether a hold is in effect today is a
-fact about today, not about what was recorded), and is keyed differently throughout. Checking
-it requires the row. Do that with `receipt.verify` or `bin/rails clickwrap:verify` inside the
-application; the standalone verifier reports the value and says plainly that only
-`receipt_digest` was checked.
+The receipt embeds the event's canonical body under `event`, so the standalone verifier re-derives
+`event_digest` and also checks every duplicated receipt projection against it. If reviewed
+retention has removed the original payload, it cannot truthfully re-derive those deleted bytes;
+it instead requires a minimal tombstone and exactly one digest-checked `disposition` successor
+whose event ID, predecessor/root link, original digest, and disposition time agree. That check is
+reported as incomplete/documented disposition, never as an ordinary verifying event digest.
 
 `integrity` also carries `previous_event_digest`, `chain_scope`, and `chain_sequence` when
-chaining is on; `request_evidence_digest` and `request_evidence_digest_algorithm` binding the
-annex; and `tier` plus `detects`, which state in the receipt itself exactly what the assurance
-level detects. See [the integrity guide](integrity.md).
+chaining is on; per-category request-evidence binding digests, algorithm, key ID, and binding
+status; immutable timestamp/anchor attestation results; and `tier` plus `detects`, which state in
+the receipt itself exactly what the assurance level detects. See [the integrity guide](integrity.md).
 
 ---
 
@@ -270,14 +280,17 @@ database, no engine, no host application, no policy source, no network. A verifi
 boot the application which produced the evidence could only ever tell you that the application
 agrees with itself.
 
-It runs five checks and reports each one as passed, failed, or **skipped**:
+It runs the applicable checks below and reports each one as passed, failed, or **skipped**:
 
 | Check | What it does |
 |---|---|
 | `json_parses` | The file is a JSON object |
 | `known_schema` | The `schema` value is one this verifier knows. An unknown schema **stops** verification rather than guessing at the meaning of a newer format |
 | `canonical_bytes` | Whether the bytes are already canonical. Non-canonical bytes are re-canonicalized and reported, not failed — pretty-printing a receipt on its way through a bug tracker changes formatting, not meaning |
-| `receipt_digest` | The recorded digest matches the canonicalized body with `integrity` excluded |
+| `receipt_digest` | The recorded digest matches the canonicalized body with only `integrity.receipt_digest` excluded |
+| `event_digest` | The embedded canonical event and every duplicated projection match the recorded event digest; disposed payloads take the documented-disposition path described above |
+| `lifecycle:<event_id>` | Every embedded successor's canonical body, digest, type, and root/predecessor relationship agree |
+| `integrity_attestation:<id>` | Every included attestation digest verifies and an upgraded tier has the exact verified capability it claims |
 | `document:<key>@<version>` | Each supplied file hashes to the digest the receipt recorded. A document whose bytes you did not bring is reported `not_supplied` |
 | `chain_linkage` | Chain fields, when present, are internally coherent. Not chained is reported as a configuration fact, not a finding |
 
@@ -289,7 +302,8 @@ Files are matched to documents by key, version, and locale, most specific first:
 `terms-2026-08-15-en.md`, then `terms-2026-08-15.md`, then `terms.en.md`, then `terms.md`, then
 any file whose basename starts with `terms-`.
 
-Exit status is `0` when every check that ran passed, `1` otherwise.
+Exit status is `0` when every required check passed, `1` when any check failed, and `2` when no
+check failed but a required document artifact was not supplied.
 
 ---
 
@@ -301,6 +315,9 @@ It **does** establish:
 - its bytes are canonical under RFC 8785, so two readers digest the same thing;
 - the digest the receipt carries matches the body it travels with, so accidental or ordinary
   modification of those bytes is detected;
+- the embedded event body and duplicated receipt projections match the event digest, or the
+  receipt contains a coherent documented core disposition instead of pretending deleted bytes
+  were re-derived;
 - each document file you supplied hashes to the digest the receipt recorded for it; and
 - any chain links present are consistent with each other.
 
@@ -320,9 +337,9 @@ It does **not** establish:
 - **that any of it is sufficient, adequately presented, or admissible anywhere.** That is not a
   property of a file.
 
-Origin and time evidence come from things this verifier cannot supply on its own: an
-independent anchor holding the chain head outside the operator's control, an RFC 3161 or trust
-service token, or a provider's own signed receipt. Where those exist they are reported as
+Origin and time evidence come from things this verifier cannot supply on its own: a verified
+outside publication of the exact event-chain snapshot, an RFC 3161 or trust-service token over
+the exact event digest, or a provider's own signed receipt. Where those exist they are reported as
 exactly the assurance they supply. Where they do not, their absence is visible rather than
 papered over by a check mark. Every result, in both the library and the CLI, prints that caveat
 alongside the verdict.
@@ -389,5 +406,4 @@ installed application; upgrades add migrations and report their exact effects.
 | [RFC 8785, JSON Canonicalization Scheme](https://www.rfc-editor.org/rfc/rfc8785) | Technical standard |
 | [NIST FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final) — SHA-2 is a hash standard, not a signature, identity, or time source | Technical standard |
 | [RFC 3161](https://www.rfc-editor.org/info/rfc3161/) — a separate time-stamp protocol | Technical standard |
-| `lib/clickwrap/receipt.rb`, `lib/clickwrap/receipt_verifier.rb`, `lib/clickwrap/canonical_json.rb`, `lib/clickwrap/digest.rb`, `lib/clickwrap/models/event.rb`, `exe/clickwrap` at commit `a1ffe9b` | Pinned source code |
 | The profile rules, the two-digest split, and the export design | Product-design inference |

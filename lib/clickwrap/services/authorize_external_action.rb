@@ -69,7 +69,11 @@ module Clickwrap
       def call
         action = nil
 
-        receipt = Capture.new(policy: policy, **capture_options).capture_and! do |pending|
+        receipt = Capture.new(
+          policy: policy,
+          **capture_options,
+          consume_one_time_authorizations: false
+        ).capture_and! do |pending|
           action = create_pending_action!(pending)
         end
 
@@ -102,7 +106,7 @@ module Clickwrap
           ),
           provider_name: provider_name,
           state: "pending",
-          attempts: 0,
+          attempt_count: 0,
           requested_at: now,
           created_at: now,
           updated_at: now

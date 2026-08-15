@@ -5,7 +5,7 @@ module Clickwrap
   #
   # Policies are written in Ruby because that is what a reviewer can read in a
   # pull request. But an export has to stay intelligible after the source has
-  # moved on, so the first time a revision is presented or captured its compiled
+  # moved on, so the first time a revision is offered or captured its compiled
   # form is written here and never changed. An event points at the revision it
   # was captured under, so a receipt explains itself without a checkout of the
   # application at the right commit.

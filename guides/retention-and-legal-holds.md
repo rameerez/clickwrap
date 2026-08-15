@@ -5,8 +5,12 @@ it does is make a reviewed decision executable and auditable, keep the core even
 separate from the optional personal request evidence attached to it, and support the
 event-based rules that real record-keeping obligations actually use.
 
-Every policy names a retention class. There is no default, no fallback, and no keep-forever
-option anywhere in the gem.
+Every policy names a retention class. There is no default or fallback for captured payloads or
+optional request evidence, and Clickwrap never picks a period. After a reviewed core disposition,
+a minimal row and its digest-linked disposition successor remain without another disposal
+schedule. Those tombstones document the deletion itself and are deliberately excluded from
+future disposition plans; recursively deleting the proof of deletion would recreate the hole
+the tombstone exists to prevent.
 
 ---
 
@@ -35,7 +39,7 @@ without parsing the noun.
 
 A retention class that never says how long to keep the core event raises a `DefinitionError` at
 boot, naming both forms. A rule whose duration is zero or negative raises too. Clickwrap will
-not pick a period for you and will not silently keep something forever.
+not pick a payload-retention period for you.
 
 ---
 
@@ -97,10 +101,18 @@ reason attached rather than crashing the run: it returns `nil`, it is not regist
 raises. A disposition run that dies on one row, or that guesses a date to keep going, is worse
 than one that says which rows it could not evaluate.
 
-Note which schedule the planner reads for the annex: **the one recorded on the row at capture**,
-not today's policy. The person whose IP address it is was told the period that applied then.
-Changing a policy changes what future captures record; it does not silently reschedule
-deletions that were already promised.
+Note which schedules the planner reads: **the ones recorded on each row when that row was
+created**, not today's policy. The capture event, a later withdrawal, and a still-later expiry
+each freeze their own core schedule. The annex freezes each enabled category's schedule. Changing
+a policy changes future events; it does not silently reschedule records already written.
+
+Linked events age independently. Disposing of a root event does not cascade to a retained
+withdrawal, expiry, consumption, correction, or other successor. A current-state projection is
+removed only when the exact event it points at is disposed of. This prevents an older root's
+deadline from erasing a newer lifecycle fact early.
+
+The deadline boundary is inclusive: an item is due when its recorded or resolved deadline is
+less than or equal to the planner's `at` time. It does not wait for a later clock tick.
 
 ---
 
@@ -146,6 +158,7 @@ than one. The reasons it can refuse:
 | The record was already deleted, or no longer exists | Skipped as changed |
 | The plan expired | The whole run refuses. Plans live 24 hours by default |
 | The plan was already applied, or superseded by a newer one | The whole run refuses, naming which |
+| A worker died after claiming the plan | The plan stays claimed. Recovery requires an explicit stale duration, a new operator reference, and a plain-English recovery reason; every item is rechecked, so already-committed dispositions are reported rather than repeated |
 
 Each refusal names its specific reason, so an operator sees "the plan expired" or "this was
 already applied" rather than a generic decline. The run exits non-zero if anything was skipped
@@ -206,10 +219,21 @@ capture stays as written, and after deletion it no longer recomputes from the an
 the expected result of a permitted deletion, not a sign of interference, and the receipt says
 which by reporting the field as `deleted_after_retention` with its timestamp.
 
-**Disposing of the core event** works the same way. The row stays; `core_event_disposed_at` is
-set, a linked `disposition` event explains it, and an auditor reads a documented disposition
-rather than finding a hole where an agreement used to be. Verification of the surrounding chain
-still works.
+**Disposing of the core event** is deliberately different from deleting one annex value. In one
+transaction Clickwrap appends a digest-checked `disposition` successor, records its ID and time
+on the original row, clears the fixed core payload and statement/document bindings, and leaves
+the original row at its chain position. The original digest can no longer be re-derived from a
+payload that was intentionally removed, so verification reports a
+`documented_core_disposition` separately from an ordinary verifying digest. A bare disposition
+marker, a lookalike event, a wrong predecessor/root link, or mismatched original digest fails
+closed as an integrity error. The surrounding chain can still be walked using the retained
+original digest and the linked successor.
+
+One operational boundary follows from intentional deletion: current state can be rebuilt from
+retained event payloads, but not from personal statement identity that a reviewed root
+disposition removed. `CurrentState.rebuild_for!` refuses before deleting an existing projection
+when it can see that dependency. Do not drop `clickwrap_statement_states` after core disposition
+has begun and expect disposed identity facts to reappear; that would defeat the disposition.
 
 A retained digest is described as a **retained linkable digest**, never automatically called
 anonymous. The binding digest is keyed rather than a plain hash for a concrete reason: an IPv4
@@ -226,7 +250,7 @@ way under your own privacy model.
 receipt.place_on_legal_hold!(
   because: "Pending dispute 2026-184",
   placed_by: current_operator,
-  review_on: 6.months.from_now
+  review_at: 6.months.from_now
 )
 
 receipt.release_legal_hold!(
@@ -239,11 +263,11 @@ All three arguments are required, and each one is load-bearing:
 
 - **`because:`** — an indefinite hold nobody can explain is indistinguishable from a bug.
 - **`placed_by:`** — a hold with no owner has nobody to ask about it.
-- **`review_on:`** — a hold nobody revisits is exactly how "we'll delete it later" becomes "we
+- **`review_at:`** — a hold nobody revisits is exactly how "we'll delete it later" becomes "we
   kept everything forever." A retention policy that can be suspended invisibly is not a
   retention policy.
 
-Holds are themselves append-only evidence. Placing one appends a `legal_hold_placed` event;
+Hold history uses named append transitions. Placing one appends a `legal_hold_placed` event;
 releasing one appends a `legal_hold_released` event and records who released it and why. They
 come in three scopes — `event`, `actor`, and `policy` — and all three are checked before any
 deletion. A hold on an actor's whole file is not weaker than one on a single receipt.
@@ -264,7 +288,8 @@ belongs to you rather than to a foreign key.
 
 Instead: the installer generates restrictive or nullifying relationships, the association
 nullifies the actor link, and the evidence keeps the stable pseudonymous reference produced by
-`config.identify_actor_with` (a GlobalID by default). What happens next is whatever your
+`config.identify_actor_with` (a model override, GlobalID when available, or a stable class/id
+fallback). What happens next is whatever your
 retention policy says.
 
 For an erasure request, the tooling produces a reviewable plan rather than a verdict:
@@ -356,7 +381,7 @@ The IP address is `due`. The core event is `unresolved` — the calculation retu
 Clickwrap.receipt(event_id).place_on_legal_hold!(
   because: "Pending dispute 2026-184",
   placed_by: current_operator,
-  review_on: 6.months.from_now
+  review_at: 6.months.from_now
 )
 ```
 
@@ -407,7 +432,6 @@ set, another `disposition` event explains it, and the row stays where an auditor
 | [Order TED/815/2023, Article 14.12](https://www.boe.es/eli/es/o/2023/07/18/ted815) — retention until at least three years after liquidation | Law |
 | [GDPR Article 5](https://eur-lex.europa.eu/eli/reg/2016/679/art_5/oj/eng) (storage limitation), [Article 17](https://eur-lex.europa.eu/eli/reg/2016/679/art_17/oj/eng) (erasure, with its exceptions including legal claims) | Law |
 | [RFC 791](https://www.rfc-editor.org/info/rfc791/) — IPv4 addresses are 32 bits | Technical standard |
-| `lib/clickwrap/retention_class.rb`, `lib/clickwrap/dsl/retention_builder.rb`, `lib/clickwrap/retention/planner.rb`, `lib/clickwrap/retention/applier.rb`, `lib/clickwrap/retention/disposition.rb`, `lib/clickwrap/models/legal_hold.rb`, `lib/clickwrap/models/disposition_plan.rb` at commit `a1ffe9b` | Pinned source code |
 | The plan/apply split, the three-category report, and the hold requirements | Product-design inference |
 
 The periods in every example above are placeholders. Clickwrap does not know your jurisdiction,

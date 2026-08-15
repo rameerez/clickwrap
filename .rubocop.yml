@@ -6,6 +6,8 @@ inherit_mode:
 
 AllCops:
   TargetRubyVersion: 3.2
+  NewCops: enable
+  SuggestExtensions: false
   Exclude:
     # The dummy host app mirrors what a real application looks like, including
     # migrations copied verbatim from the install generator's templates —

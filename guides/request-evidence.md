@@ -54,7 +54,7 @@ Four tables follow, one per group. Columns are the same in each:
 - **What it is** — one sentence.
 - **Where it comes from** — the reader, resolver, or computation that produced it.
 - **Does not establish** — the overclaim this field invites, said out loud.
-- **Encrypted** — whether the value itself is encrypted at rest at commit `a1ffe9b`.
+- **Encrypted** — whether the value itself is encrypted at rest for this recorded annex.
 - **Who can read it** — who gets the value rather than a state word.
 - **In a default export** — whether `to_canonical_json` / `Clickwrap.export_receipt` with no
   `include_*` flags contains it.
@@ -371,6 +371,7 @@ bundle add trackdown
 ```
 
 ```ruby
+# clickwrap-doc-test: syntax-only — requires the optional trackdown gem installed above
 Clickwrap.configure do |config|
   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 end
@@ -486,5 +487,4 @@ can never undo or stand in for the Clickwrap event. Clickwrap ships no Footprint
 | [RFC 791](https://www.rfc-editor.org/info/rfc791/) — IPv4 addresses are 32 bits, which is why the annex binding digest is keyed rather than a plain hash | Technical standard |
 | [Trackdown pinned result object](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/location_result.rb#L5-L55), [pinned Cloudflare provider](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/providers/cloudflare_provider.rb#L29-L64) | Pinned source code |
 | [Footprinted pinned model](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/footprint.rb#L7-L52), [tracking concern](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/model.rb#L7-L65) | Pinned source code |
-| `lib/clickwrap/models/request_evidence.rb`, `lib/clickwrap/request_evidence_extractor.rb`, `lib/clickwrap/ip_geolocation/trackdown_resolver.rb`, `lib/clickwrap/receipt.rb` at commit `a1ffe9b` | Pinned source code |
 | The field selection, the ordering of evidentiary priority, and every API prescription above | Product-design inference |

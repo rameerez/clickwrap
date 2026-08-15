@@ -1,19 +1,30 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # Projects immutable events onto the current-state table.
+  # Projects retained event payloads onto the current-state table.
   #
-  # Everything here is derived. If `clickwrap_statement_states` were dropped
-  # entirely it could be rebuilt from `clickwrap_events`, and `rebuild_for!`
-  # does exactly that. Keeping the projection strictly downstream of the events
-  # is what lets it be mutable and fast without any of that leaking into the
-  # record of what actually happened.
+  # Everything here is derived from retained event payloads. `rebuild_for!`
+  # replays them while they still contain the affected statement identity. A
+  # reviewed core disposition deliberately removes that identity, so rebuilding
+  # through a disposed root would invent or silently lose state. The method
+  # refuses first and leaves the existing projection untouched in that case.
   module CurrentState
+    INITIAL_EVENT_TYPES = (Vocabulary::HUMAN_ACTION_EVENT_TYPES + %w[exemption]).freeze
+    TRANSITION_STATE_BY_EVENT_TYPE = {
+      "withdrawal" => "withdrawn",
+      "supersession" => "superseded",
+      "expiry" => "expired",
+      "consumption" => "consumed",
+      "revocation" => "revoked"
+    }.freeze
+
     class << self
       # Applies one event to the projection. Runs inside the capture's
       # transaction, so a failure here rolls the capture back rather than
       # leaving evidence whose current state nobody can query.
       def apply!(event)
+        return event unless INITIAL_EVENT_TYPES.include?(event.event_type)
+
         event.statements.each { |statement| apply_statement!(event, statement) }
       end
 
@@ -23,41 +34,45 @@ module Clickwrap
           statement_key: statement.statement_key,
           actor_reference: event.actor_reference,
           tenant_key: event.tenant_key,
-          subject_key: event.subject_key
+          subject_key: event.subject_key,
+          represented_party_reference: event.represented_party_reference
         )
 
-        state = StatementState.find_or_initialize_by(identity)
+        loop do
+          return StatementState.transaction(requires_new: true) do
+            state = StatementState.find_or_initialize_by(identity)
 
-        # A previous grant for the same identity is superseded rather than
-        # overwritten. The projection moves on; the event that recorded the
-        # earlier act stays exactly where it was.
-        state.assign_attributes(
-          kind: statement.kind,
-          purpose_key: statement.purpose_key,
-          actor_type: event.actor_type,
-          actor_id: event.actor_id,
-          subject_type: event.subject_type,
-          subject_id: event.subject_id,
-          subject_fingerprint: statement.subject_fingerprint,
-          state: state_for(event, statement),
-          current_action: statement.action,
-          current_event_id: event.id,
-          root_event_id: event.root_event_id || event.id,
-          policy_revision_id: event.policy_revision_id,
-          effective_at: statement.valid_from || event.recorded_at_by_server,
-          expires_at: statement.expires_at,
-          one_time: statement.one_time,
-          document_version_ids: document_version_ids_for(event, statement)
-        )
+            # A previous grant for the same identity is superseded rather
+            # than overwritten. The projection moves on; the event that
+            # recorded the earlier act stays exactly where it was.
+            state.assign_attributes(
+              kind: statement.kind,
+              purpose_key: statement.purpose_key,
+              actor_type: event.actor_type,
+              actor_id: event.actor_id,
+              subject_type: event.subject_type,
+              subject_id: event.subject_id,
+              subject_fingerprint: statement.subject_fingerprint,
+              represented_party_reference: event.represented_party_reference.to_s,
+              state: state_for(event, statement),
+              current_action: statement.action,
+              current_event_id: event.id,
+              root_event_id: event.root_event_id || event.id,
+              policy_revision_id: event.policy_revision_id,
+              effective_at: statement.valid_from || event.recorded_at_by_server,
+              expires_at: statement.expires_at,
+              one_time: statement.one_time,
+              document_version_ids: document_version_ids_for(event, statement)
+            )
 
-        apply_lifecycle_timestamps(state, event, statement)
-
-        state.save!
-        state
-      rescue ::ActiveRecord::RecordNotUnique
-        # Two concurrent captures for the same identity: the unique index did
-        # its job. Re-read and let the second one apply on top of the first.
-        retry
+            apply_lifecycle_timestamps(state, event, statement)
+            state.save!
+            state
+          end
+        rescue ::ActiveRecord::RecordNotUnique
+          # PostgreSQL marks a transaction failed after a uniqueness error.
+          # The requires_new savepoint above absorbs that state before retry.
+        end
       end
 
       # Marks a statement's projection with a lifecycle outcome, without
@@ -88,19 +103,77 @@ module Clickwrap
         end
       end
 
-      # Rebuilds the projection for one actor from their events. Useful after a
-      # restore, after a bug, or to prove that the projection really is derived.
+      # Rebuilds the projection for one actor from retained event payloads.
+      # Refuses before deleting anything when an existing state depends on a
+      # disposed root whose statement identity can no longer be reconstructed.
       def rebuild_for!(actor_reference:)
-        StatementState.for_actor(actor_reference).delete_all
+        StatementState.transaction do
+          existing_states = StatementState.for_actor(actor_reference).lock.to_a
+          ensure_rebuildable!(existing_states, actor_reference)
+          StatementState.for_actor(actor_reference).delete_all
 
-        Event.for_actor(actor_reference)
-             .where(event_type: Vocabulary::HUMAN_ACTION_EVENT_TYPES)
-             .chronological
-             .includes(:statements)
-             .find_each { |event| apply!(event) }
+          Event.for_actor(actor_reference)
+               .chronological
+               .includes(:statements)
+               .to_a
+               .each { |event| replay!(event) }
+        end
       end
 
       private
+
+      def ensure_rebuildable!(states, actor_reference)
+        root_ids = states.map(&:root_event_id).compact.uniq
+        disposed_root_id = Event.where(id: root_ids).where.not(core_event_disposed_at: nil).pick(:id)
+        return unless disposed_root_id
+
+        raise IntegrityCheckFailed,
+              "Current state for #{actor_reference} depends on disposed root event #{disposed_root_id}. " \
+              "Clickwrap refused to delete the existing projection because the reviewed disposition " \
+              "removed the statement identity needed to rebuild it."
+      end
+
+      def replay!(event)
+        return if event.disposed?
+        unless event.digest_verified?
+          raise IntegrityCheckFailed,
+                "Event #{event.id} failed its digest during state rebuild."
+        end
+
+        if INITIAL_EVENT_TYPES.include?(event.event_type)
+          apply!(event)
+          return
+        end
+
+        destination = TRANSITION_STATE_BY_EVENT_TYPE[event.event_type]
+        return unless destination
+
+        root = Event.find_by(id: event.root_event_id)
+        unless root&.digest_verified?
+          raise IntegrityCheckFailed,
+                "Lifecycle event #{event.id} does not have a verifiable root event, so its " \
+                "statement identity cannot be rebuilt safely."
+        end
+
+        event.statements.each do |statement|
+          identity = StatementState.identity_for(
+            policy_key: event.policy_key,
+            statement_key: statement.statement_key,
+            # A withdrawal, expiry, consumption, or revocation may be appended
+            # by a system/operator actor. That actor performed the lifecycle
+            # transition; it is not the human whose statement is affected.
+            # The immutable root event owns the statement identity.
+            actor_reference: root.actor_reference,
+            tenant_key: root.tenant_key,
+            subject_key: root.subject_key,
+            represented_party_reference: root.represented_party_reference
+          )
+          state = StatementState.find_by(identity)
+          next unless state
+
+          transition!(state, to: destination, event: event, at: statement.valid_from)
+        end
+      end
 
       def state_for(event, statement)
         return "exempted" if event.event_type == "exemption"

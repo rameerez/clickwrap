@@ -27,6 +27,8 @@ module Clickwrap
       ".pdf" => "application/pdf"
     }.freeze
 
+    REFUSED_VERSION_LABELS = %w[unversioned current latest head none default].freeze
+
     attr_reader :key, :version_label, :locale, :media_type, :effective_at,
                 :tenant_key, :source_kind, :source_reference, :inline_content,
                 :resolver, :renderer
@@ -131,8 +133,6 @@ module Clickwrap
     # SHA are all fine — but it refuses the placeholder labels applications
     # reach for when they have not really versioned anything, because a policy
     # that requires a current version cannot be satisfied by "unversioned".
-    REFUSED_VERSION_LABELS = %w[unversioned current latest head none default].freeze
-
     def normalize_version(value)
       normalized = value.to_s.strip
 

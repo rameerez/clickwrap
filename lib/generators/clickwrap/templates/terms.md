@@ -12,11 +12,11 @@ that — and text that merely *looked* plausible would be worse than this file,
 because someone would ship it.
 
 What the gem does own is the mechanics around whatever you put here: the exact
-bytes and their digest, the version and locale, the wording that appeared beside
-the control, the call to action, the answer, the time your server recorded it,
-and a receipt that can be reproduced and verified years later. What the words
-say, whether they are fair, whether they are complete, and whether they do what
-you need them to do is yours and your counsel's.
+bytes and their digest, the version and locale, the wording and call to action
+in the server-generated offer, the submitted answer, the time your server
+recorded it, and a receipt that can be reproduced and verified years later.
+What the words say, whether they are fair, whether they are complete, and
+whether they do what you need them to do is yours and your counsel's.
 
 ## What to do now
 
@@ -25,8 +25,8 @@ you need them to do is yours and your counsel's.
    to choose; reusing one for different bytes is refused rather than accepted.
 3. Run `bin/rails clickwrap:publish` to freeze an immutable snapshot.
 4. Publish a NEW version whenever the text changes. Published bytes are never
-   edited in place — that is what lets a receipt from three years ago still show
-   exactly what was on screen that day.
+   edited in place — that is what lets a receipt from three years ago reproduce
+   the exact document version its accepted server offer bound.
 
 If this text ever reaches a real person, something went wrong: check that this
 file was replaced, and that `clickwrap:publish` ran against the replacement.

@@ -60,7 +60,7 @@ module Clickwrap
 
       def find_existing(definition)
         document = ::Clickwrap::Document.find_by(
-          key: definition.key, tenant_key: definition.tenant_key
+          document_key: definition.key, tenant_key: definition.tenant_key
         )
         return nil unless document
 
@@ -74,29 +74,37 @@ module Clickwrap
       # The refusal a version label exists to make possible.
       def conflict(definition, existing, digest)
         raise DocumentVersionConflictError,
-              "Document #{definition} was already published with different bytes.\n" \
-              "  published: #{existing.content_digest}\n" \
-              "  on disk:   #{digest}\n\n" \
+              "Document #{definition} was already published with different bytes.\n  " \
+              "published: #{existing.content_digest}\n  " \
+              "on disk:   #{digest}\n\n" \
               "Reusing a version label for different content would silently change what every " \
-              "receipt that cites this version says the person was shown. Publish the new text " \
+              "receipt that cites this version says the server offered. Publish the new text " \
               "under a new version label instead."
       end
 
       def create_version(definition, bytes, digest)
+        rendered = render(definition, bytes)
+        backend = storage_backend_for(definition)
+
+        # Active Storage uploads may perform object-store network I/O. Finish
+        # that work before opening the evidence transaction; otherwise a slow
+        # S3 request holds database locks for its entire duration. If the
+        # subsequent database write fails, purge the just-created blob so a
+        # failed publication does not quietly accumulate unattached evidence
+        # objects.
+        uploaded_blob = backend == "active_storage" ? store_in_active_storage(definition, bytes) : nil
+
         ::ActiveRecord::Base.transaction do
           document = ::Clickwrap::Document.find_or_create_by!(
-            key: definition.key, tenant_key: definition.tenant_key
+            document_key: definition.key, tenant_key: definition.tenant_key
           ) { |record| record.created_at = Clickwrap.now }
-
-          rendered = render(definition, bytes)
-          backend = storage_backend_for(definition)
 
           document.versions.create!(
             version_label: definition.version_label,
             locale: definition.locale,
             media_type: definition.media_type,
             content: backend == "database" ? text_for_database(definition, bytes) : nil,
-            storage_locator: backend == "active_storage" ? store_in_active_storage(definition, bytes) : nil,
+            storage_locator: uploaded_blob&.signed_id,
             content_byte_size: bytes.bytesize,
             content_digest_algorithm: digest_algorithm,
             content_digest: digest,
@@ -114,12 +122,15 @@ module Clickwrap
             # "which version is current" a deterministic question: PostgreSQL
             # sorts NULLs first in a descending order and SQLite sorts them
             # last, so a nullable column here would mean two databases
-            # disagreeing about which document a person was shown.
+            # disagreeing about which document the server offered.
             effective_at: definition.effective_at || Clickwrap.now,
             published_at: Clickwrap.now,
             created_at: Clickwrap.now
           )
         end
+      rescue StandardError => error
+        purge_failed_upload(uploaded_blob, original_error: error)
+        raise
       end
 
       # When a source format is transformed for display, the rendered bytes are
@@ -143,6 +154,12 @@ module Clickwrap
           raise ConfigurationError,
                 "A document renderer must return the exact rendered bytes as a String (or a Hash " \
                 "with a :bytes key). It returned #{result[:bytes].class}."
+        end
+
+        if result.fetch(:media_type, "").to_s.start_with?("text/html")
+          result[:bytes] = DocumentRenderer.sanitize_html(result[:bytes])
+          result[:sanitizer_name] = DocumentRenderer::SANITIZER_NAME
+          result[:sanitizer_version] = DocumentRenderer::SANITIZER_VERSION
         end
 
         result
@@ -195,14 +212,29 @@ module Clickwrap
                 ":database."
         end
 
-        blob = ::ActiveStorage::Blob.create_and_upload!(
+        ::ActiveStorage::Blob.create_and_upload!(
           io: StringIO.new(bytes),
           filename: "#{definition.key}-#{definition.version_label}-#{definition.locale}",
           content_type: definition.media_type,
           identify: false
         )
+      end
 
-        blob.signed_id
+      def purge_failed_upload(blob, original_error:)
+        return if blob.nil?
+
+        blob.purge
+      rescue StandardError => error
+        if defined?(::Rails) && ::Rails.respond_to?(:error)
+          ::Rails.error.report(
+            error,
+            handled: true,
+            context: {
+              clickwrap_operation: "purge_failed_document_upload",
+              original_error_class: original_error.class.name
+            }
+          )
+        end
       end
 
       def digest_algorithm = Clickwrap.config.digest_canonical_receipts_with.to_s

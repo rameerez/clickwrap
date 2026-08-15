@@ -4,8 +4,8 @@
 # The :<%= policy_key %> policy
 # ==============================================================================
 #
-# A policy is a server-owned offer: exactly what will be presented, and exactly
-# what will be accepted back. It compiles at boot, so a mistake here is a
+# A policy is a server-owned offer: exactly what the server will generate, and
+# exactly what it will accept back. It compiles at boot, so a mistake here is a
 # startup failure with an explanation rather than a surprise during a signup.
 #
 # Render it with:
@@ -17,123 +17,15 @@
 # ==============================================================================
 
 Clickwrap.policy :<%= policy_key %> do
-  # --- Choose the verb for each act -------------------------------------------
-  #
-  # The verb is not decoration. It decides the lifecycle, the predicate that
-  # answers questions about it later, and what the receipt claims happened.
-  # Uncomment the ones this policy actually needs and delete the rest.
-  #
-  #   agree_to     assent to contractual terms
-  #                → agreed, until a new version supersedes it
-  #
-  #   acknowledge  affirmative receipt of a notice or a risk — information the
-  #                person is entitled to, not something they assent to
-  #                → acknowledged, can expire or be superseded
-  #
-  #   consent_to   purpose-specific permission, where YOU have decided consent
-  #                is the right basis. Optional, unselected, withdrawable.
-  #                → granted / declined / withdrawn / renewed / scope changed
-  #
-  #   declare      a statement of fact made by the actor. It can expire without
-  #                implying it was false when it was made.
-  #                → declared / corrected / superseded / expired
-  #
-  #   attest       an operational fact affirmed by an authorized actor, usually
-  #                an operator rather than an end user
-  #                → attested / corrected / superseded
-  #
-  #   authorize    narrow permission bound to one protected action
-  #                → authorized / consumed / revoked / expired
+  # The verb controls the lifecycle, so the generator required you to choose it
+  # explicitly. The statement is the exact first-person sentence stored in the
+  # receipt; review both as product/legal copy, not as incidental labels.
+  <%= policy_verb %> :<%= statement_key %>,
+<% statement_options.each_with_index do |option, index| -%>
+    <%= option %><%= "," unless index == statement_options.length - 1 %>
+<% end -%>
 
-  # agree_to :terms
-
-  # acknowledge :<%= policy_key %>_requirements
-
-  # A declaration bound to a subject. The fingerprint is what stops evidence
-  # gathered about one record from silently covering another one: change the
-  # thing being declared about and the old declaration no longer matches.
-  #
-  # declare :information_is_accurate,
-  #   document: :<%= policy_key %>,
-  #   statement: "I declare that the information above is accurate.",
-  #   valid_for: 1.year,
-  #   subject_fingerprint_with: ->(subject) { subject.evidence_fingerprint }
-
-  # A one-time authorization is the difference between "this person once
-  # accepted something" and "this exact evidence authorized this exact
-  # operation". `capture_and!` locks and consumes it in the same transaction as
-  # the action it protects, so a replay, a changed subject, or a concurrent
-  # submit cannot reuse it.
-  #
-  # authorize :<%= policy_key %>,
-  #   one_time: true,
-  #   valid_for: 10.minutes,
-  #   requires: %i[information_is_accurate],
-  #   record_protected_outcome_with: lambda { |subject|
-  #     {
-  #       action: :submitted,
-  #       reference: subject.to_gid.to_s,
-  #       fingerprint: subject.evidence_fingerprint
-  #     }
-  #   }
-
-  # An optional consent, if this policy needs one. Never preselected, never
-  # required, and never bundled with the acts above — and Clickwrap will refuse
-  # to compile a consent with no way to withdraw it.
-  #
-  # consent_to :product_updates,
-  #   document: :marketing_notice,
-  #   optional: true,
-  #   withdrawal_path: "/settings/privacy"
-
-  # --- Retention --------------------------------------------------------------
-  #
-  # Every policy names a retention class declared in config/clickwrap.rb. The
-  # core event and the optional personal request evidence keep separate clocks,
-  # so the annex can be disposed of on schedule while the agreement itself
-  # stays intact and verifiable.
-  retain_with :ordinary_agreement_evidence
-
-  # --- Request evidence, if this policy genuinely needs it --------------------
-  #
-  # Uncommenting any of this collects personal data for this policy. Each field
-  # is named separately, each needs a purpose in your own words, and each needs
-  # a retention decision — the policy will not compile otherwise.
-  #
-  # IP geolocation is provider-estimated network context. It is not identity,
-  # not GPS, and not proof of where anyone was; the provider, source, estimated
-  # state, and accuracy provenance are stored with every value so a later reader
-  # can see how uncertain it is.
-  #
-  # review_request_evidence_configuration_on Date.new(<%= Date.today.next_year.year %>, <%= Date.today.month %>, <%= Date.today.day %>)
-  #
-  # record_ip_address(
-  #   encrypted: true,
-  #   delete_after: 90.days,
-  #   because: "TODO: replace with your reviewed purpose",
-  #   legal_basis_reference: nil
-  # )
-  #
-  # record_browser_user_agent(
-  #   encrypted: true,
-  #   delete_after: 90.days,
-  #   because: "TODO: replace with your reviewed purpose",
-  #   legal_basis_reference: nil
-  # )
-  #
-  # record_ip_geolocation(
-  #   country: true,
-  #   region: false,
-  #   city: false,
-  #   postal_code: false,
-  #   latitude_and_longitude: false,
-  #   timezone: false,
-  #   continent: false,
-  #   metro_code: false,
-  #   accuracy_radius_in_kilometers: true,
-  #   using: :trackdown,
-  #   delete_after: 90.days,
-  #   because: "TODO: replace with your reviewed purpose",
-  #   legal_basis_reference: nil
-  # )
+  # This class must already exist in a Clickwrap.retention declaration. The
+  # generator names it; Clickwrap never invents or silently defaults a period.
+  retain_with :<%= retention_class_key %>
 end

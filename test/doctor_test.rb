@@ -65,10 +65,8 @@ class DoctorTest < ActiveSupport::TestCase
     assert_match(/country, city without a review date/, warning)
     assert_match(/review_request_evidence_configuration_on/, warning)
 
-    # And a policy asking for geolocation with nothing configured to resolve it
-    # is reported as a warning, not a failure: capture still succeeds and the
-    # field is recorded as unavailable, which is the honest outcome.
-    assert warning?(findings, /no\s+`ip_geolocation_resolver` is configured/)
+    # Resolver capability mismatches are compiler failures now; the doctor is
+    # responsible for the operational review date that can change with time.
   end
 
   test "a review date that has passed is a warning naming the policy and the date" do
@@ -83,11 +81,14 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "recording IP addresses with no reviewed proxy configuration is a warning" do
-    Clickwrap.configure do |config|
-      config.record_ip_address_by_default = true
-      config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"
-      config.delete_recorded_ip_addresses_after = 90.days
-    end
+    # Normal `Clickwrap.configure` now refuses this incomplete state. Mutating
+    # individual setters can still create it temporarily (for example in a
+    # console or during a staged initializer migration), so Doctor continues to
+    # diagnose it instead of assuming only boot-valid states are observable.
+    Clickwrap.config.trusted_proxy_configuration_digest = nil
+    Clickwrap.config.record_ip_address_by_default = true
+    Clickwrap.config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"
+    Clickwrap.config.delete_recorded_ip_addresses_after = 90.days
 
     findings = Clickwrap::Doctor.new.report
 
@@ -98,7 +99,8 @@ class DoctorTest < ActiveSupport::TestCase
     assert warning?(findings, /recorded by default for every policy/)
     assert warning?(findings, /no\s+`review_default_request_evidence_configuration_on` date/)
 
-    Clickwrap.config.trusted_proxy_configuration_digest = "sha256:reviewed-2026-08"
+    Clickwrap.config.trusted_proxy_configuration_digest =
+      Clickwrap::Digest.digest("reviewed trusted proxy configuration 2026-08")
     assert ok?(Clickwrap::Doctor.new.report, /trusted-proxy configuration digest is recorded/)
   end
 
@@ -107,15 +109,14 @@ class DoctorTest < ActiveSupport::TestCase
   test "a document whose stored bytes no longer match its recorded digest is a problem" do
     capture_clickwrap(:signup, actor: @user)
 
-    Clickwrap::Document.find_by(key: "terms").current_version
+    Clickwrap::Document.find_by(document_key: "terms").current_version
                        .update_columns(content: "rewritten after it was published")
 
     findings = Clickwrap::Doctor.new.report
     problem = findings.find(&:problem?)
 
-    # Every receipt citing that version says it presented bytes that are no
-    # longer there, so this is a problem rather than a warning: the evidence
-    # cannot be reproduced.
+    # Every receipt citing that version binds bytes that are no longer there, so
+    # this is a problem rather than a warning: the evidence cannot be reproduced.
     assert problem, "an edited published document must be reported as a problem"
     assert_match(/no longer match the digest recorded when it was published/, problem.message)
     assert_match(/cannot be reproduced/, problem.message)
@@ -138,11 +139,66 @@ class DoctorTest < ActiveSupport::TestCase
     assert_match(/it does not on its own say who changed them/, problem.message)
   end
 
+  test "a documented core disposition is reported separately from a digest mismatch" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    Clickwrap::Retention::Disposition.dispose_core_event!(
+      receipt.event,
+      because: "The reviewed retention period ended"
+    )
+
+    findings = Clickwrap::Doctor.new.report
+    digest_finding = findings.find { |finding| finding.message.include?("core disposition") }
+
+    assert digest_finding&.ok?
+    assert_match(/1 core disposition is documented by valid linked events/, digest_finding.message)
+    assert_match(/no mismatch is unexplained/, digest_finding.message)
+    assert_empty(findings.select { |finding| finding.problem? && finding.message.include?("event digests") })
+  end
+
+  test "an unexplained disposition marker remains an integrity problem" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    Clickwrap::Event.where(id: receipt.event_id).update_all(core_event_disposed_at: Clickwrap.now)
+
+    finding = Clickwrap::Doctor.new.report.find do |candidate|
+      candidate.problem? && candidate.message.include?("event digests")
+    end
+
+    assert finding
+    assert_match(/no valid linked disposition event/, finding.message)
+    assert_match(/unexplained disposition marker/, finding.message)
+  end
+
+  test "configured integrity work missing after commit is visible until it is reconciled" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+    adapter = Class.new do
+      def timestamp(digest)
+        { issued: true, token: "doctor-token", digest: digest, provider_name: "doctor_test" }
+      end
+
+      def verify(token, _digest)
+        { checked: true, verified: token == "doctor-token" }
+      end
+
+      def capabilities = { name: "doctor_test", independently_verifiable: true }
+    end.new
+    Clickwrap.config.timestamp_receipts_with = adapter
+
+    findings = Clickwrap::Doctor.new.report
+    assert warning?(findings, /integrity attestation attempt is missing/)
+    assert_match(/clickwrap:integrity:attest_missing/, message_for(findings, /attestation attempt is missing/))
+
+    Clickwrap.reconcile_missing_integrity_attestations!
+    reconciled = Clickwrap::Doctor.new.report
+
+    assert ok?(reconciled, /every eligible event has an attestation attempt/)
+    assert receipt.event.integrity_attestations.exists?(kind: "third_party_timestamp")
+  end
+
   test "records past a retention rule and holds past their review date are warnings" do
     capture_clickwrap(:signup, actor: @user)
     held = capture_clickwrap(:signup, actor: create_user)
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
-                              review_on: 1.month.from_now)
+                              review_at: 1.month.from_now)
 
     assert ok?(Clickwrap::Doctor.new.report, /legal hold in effect, none past review/)
 
@@ -199,7 +255,7 @@ class DoctorTest < ActiveSupport::TestCase
     # Run the checks under the conditions that produce the most text: warnings,
     # problems, and the data findings all at once.
     capture_clickwrap(:signup, actor: @user)
-    Clickwrap::Document.find_by(key: "terms").current_version.update_columns(content: "rewritten")
+    Clickwrap::Document.find_by(document_key: "terms").current_version.update_columns(content: "rewritten")
 
     printed = travel_to(Date.new(2028, 1, 1)) { Clickwrap::Doctor.new.to_s.downcase }
 

@@ -10,6 +10,8 @@ require "test_helper"
 # These tests hold it to both halves of that — the description has to be
 # complete enough to be useful, and it has to stay a description.
 class PrivacyTest < ActiveSupport::TestCase
+  use_real_database_commits!
+
   setup do
     @user = create_user
     @operator = create_security_operator
@@ -177,12 +179,12 @@ class PrivacyTest < ActiveSupport::TestCase
                                                           answers: { regulated_action: "1" })
     held = capture_clickwrap(:signup, actor: @user)
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
-                              review_on: 6.months.from_now)
+                              review_at: 6.months.from_now)
 
     plan = Clickwrap::Privacy.plan_disposition_for(@user, requested_by: @operator,
                                                           because: "Verified erasure request DSAR-2026-41")
     summary = plan.summary.to_h
-    items = plan.scope.to_h["items"]
+    items = plan.disposition_scope.to_h["items"]
 
     assert_equal "actor_privacy", plan.kind
     assert_equal "Verified erasure request DSAR-2026-41", plan.reason

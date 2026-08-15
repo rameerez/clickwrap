@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # The exact bytes of one published document version.
+  # The exact rendered bytes of one published document version.
   #
   # This is where every document link in every presentation points, and where an
   # auditor reading a three-year-old receipt ends up. Both get the same response
@@ -25,13 +25,24 @@ module Clickwrap
       version = DocumentVersion.find_by(id: params[:id])
       return head :not_found if version.nil? || !version.published?
 
-      # A document is data, not markup this application vouches for: tell the
-      # browser to respect the recorded media type instead of sniffing its own.
+      # The linked representation is the exact rendered snapshot bound into the
+      # presentation, not mutable source and never raw unsanitized HTML.
       response.headers["X-Content-Type-Options"] = "nosniff"
+      response.headers["Content-Security-Policy"] =
+        "default-src 'none'; img-src data:; style-src 'unsafe-inline'; " \
+        "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox"
+      response.headers["Referrer-Policy"] = "no-referrer"
+      response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
 
-      send_data version.content_bytes,
-                type: version.media_type,
-                filename: download_filename(version),
+      # A published representation is derived from a specific source artifact.
+      # Refuse to serve either half of a version whose other half has stopped
+      # matching its publication digest; otherwise a corrupt source row could
+      # remain publicly vouched for merely because the rendered snapshot was
+      # untouched.
+      version.content_bytes
+      send_data version.rendered_bytes,
+                type: version.rendered_media_type.presence || version.media_type,
+                filename: download_filename(version, version.rendered_media_type.presence || version.media_type),
                 disposition: "inline"
     rescue DocumentDigestMismatchError
       # The stored bytes no longer match their recorded digest. Serving them
@@ -41,14 +52,14 @@ module Clickwrap
 
     private
 
-    def download_filename(version)
-      base = [version.document&.key, version.version_label, version.locale].compact.join("-")
+    def download_filename(version, media_type)
+      base = [version.document&.document_key, version.version_label, version.locale].compact.join("-")
 
-      "#{base.parameterize}#{extension_for(version.media_type)}"
+      "#{base.parameterize}#{extension_for(media_type)}"
     end
 
     def extension_for(media_type)
-      case media_type.to_s
+      case media_type.to_s.split(";", 2).first
       when "text/markdown" then ".md"
       when "text/html" then ".html"
       when "text/plain" then ".txt"

@@ -19,6 +19,10 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     @other_actor = create_user
   end
 
+  teardown do
+    ApplicationController.require_current_terms_everywhere = false
+  end
+
   # --- Completing a policy on the standalone screen ---------------------------
 
   test "the capture screen renders the policy and records nothing until it is submitted" do
@@ -100,6 +104,67 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_no_clickwrap_event :signup, actor: @user
   end
 
+  test "malformed submission envelopes are refused as input errors instead of crashing" do
+    login_as @user
+
+    ["not-an-object", %w[not an object]].each do |malformed|
+      assert_no_difference -> { Clickwrap::Event.count } do
+        post "/legal/policies/signup", params: { clickwrap_submission: malformed }
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "p.clickwrap-flash--alert"
+    end
+  end
+
+  test "a malformed answers value is refused as an input error instead of crashing" do
+    login_as @user
+    get "/legal/policies/signup"
+
+    assert_no_difference -> { Clickwrap::Event.count } do
+      post "/legal/policies/signup", params: {
+        clickwrap_submission: {
+          presentation_token: presentation_token,
+          answers: "not-an-object"
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+  end
+
+  test "a changed replay is offered a fresh presentation instead of becoming a server error" do
+    login_as @user
+    get "/legal/policies/signup"
+    token = presentation_token
+
+    post "/legal/policies/signup", params: {
+      clickwrap_submission: {
+        presentation_token: token,
+        answers: { terms: "1", privacy_notice: "1" }
+      }
+    }
+    assert_redirected_to "/legal/"
+
+    assert_no_difference -> { Clickwrap::Event.count } do
+      post "/legal/policies/signup", params: {
+        clickwrap_submission: {
+          presentation_token: token,
+          answers: { terms: "true", privacy_notice: "true" }
+        }
+      }
+    end
+
+    assert_response :unprocessable_entity
+    assert_select "input[name='clickwrap_submission[presentation_token]']"
+  end
+
+  test "the standalone capture screen answers an unauthenticated request without crashing" do
+    get "/legal/policies/signup"
+
+    assert_response :unauthorized
+  end
+
   test "a policy this application does not declare is not found" do
     login_as @user
 
@@ -148,16 +213,18 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
 
   # --- Reading a document ------------------------------------------------------
 
-  test "a document link serves the exact published bytes under the recorded media type" do
+  test "a document link serves the exact rendered snapshot under its recorded media type" do
     version = published_version_of(:terms)
 
     get "/legal/documents/#{version.id}"
 
     assert_response :success
-    assert_equal version.content_bytes, response.body
-    assert_equal version.media_type, response.media_type
-    # A document is data, not markup this application vouches for.
+    assert_equal version.rendered_bytes, response.body
+    assert_equal "text/html", response.media_type
+    # The rendered snapshot is inert, tightly sandboxed markup rather than a
+    # page that can inherit the host application's capabilities.
     assert_equal "nosniff", response.headers["X-Content-Type-Options"]
+    assert_includes response.headers["Content-Security-Policy"], "sandbox"
   end
 
   test "a published document is readable before anyone is signed in" do
@@ -249,12 +316,43 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
 
     get "/billing"
 
-    assert_redirected_to "/legal/policies/current_terms?return_to=%2Fbilling"
+    assert_equal "/legal/policies/current_terms", remediation_redirect_uri.path
+    assert remediation_redirect_token.present?
 
     capture_clickwrap(:current_terms, actor: @user)
     get "/billing"
 
     # A gate that blocks an action with no route to unblocking it is a dead end.
+    assert_response :success
+    assert_equal "billing statement", response.body
+  end
+
+  test "an app-wide gate leaves its own remediation and document screens reachable" do
+    login_as @user
+    ApplicationController.require_current_terms_everywhere = true
+
+    get "/billing"
+    assert_equal "/legal/policies/current_terms", remediation_redirect_uri.path
+
+    follow_redirect!
+    assert_response :success
+    assert_select "input[name='clickwrap_submission[presentation_token]']", count: 1
+
+    terms = published_version_of(:terms)
+    get "/legal/documents/#{terms.id}"
+    assert_response :success
+
+    get "/legal/policies/current_terms", params: { return_to: "/billing" }
+    post "/legal/policies/current_terms", params: {
+      return_to: "/billing",
+      clickwrap_submission: {
+        presentation_token: presentation_token,
+        answers: { terms: "1" }
+      }
+    }
+
+    assert_redirected_to "/billing"
+    follow_redirect!
     assert_response :success
     assert_equal "billing statement", response.body
   end
@@ -270,7 +368,105 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     # never an HTML redirect an API client would follow into a login page.
     assert_equal "clickwrap_required", body["error"]
     assert_equal "current_terms", body["policy"]
-    assert_equal "/legal/policies/current_terms", body["presentation_url"]
+    uri = URI.parse(body.fetch("presentation_url"))
+    assert_equal "/legal/policies/current_terms", uri.path
+    assert URI.decode_www_form(uri.query.to_s).to_h.fetch("remediation_token").present?
+  end
+
+  test "a signed-out HTML visitor to a host gate receives an HTML-shaped unauthorized response" do
+    get "/billing"
+
+    assert_response :unauthorized
+    assert_empty response.body
+    refute_equal "application/json", response.media_type
+  end
+
+  test "a signed-out JSON client to a host gate receives the structured actor-required response" do
+    get "/billing", as: :json
+
+    assert_response :unauthorized
+    assert_equal({ "error" => "clickwrap_actor_required", "policy" => "current_terms" },
+                 JSON.parse(response.body))
+  end
+
+  test "a subject-bound gate remediates the exact server-owned subject and returns to the blocked action" do
+    withdrawal = create_withdrawal(user: @user)
+    login_as @user
+
+    get "/withdrawal_reviews/#{withdrawal.id}"
+
+    token = remediation_redirect_token
+    assert_equal "/legal/policies/driver_declaration", remediation_redirect_uri.path
+
+    follow_redirect!
+    assert_response :success
+    assert_equal token, css_select("input[name=remediation_token]").first["value"]
+
+    post "/legal/policies/driver_declaration", params: {
+      remediation_token: token,
+      # This browser-owned value conflicts with the signed route and therefore
+      # must lose. The server returns to the blocked action in the token.
+      return_to: "/billing",
+      clickwrap_submission: {
+        presentation_token: presentation_token,
+        answers: { non_professional_driver: "1" }
+      }
+    }
+
+    assert_redirected_to "/withdrawal_reviews/#{withdrawal.id}"
+    assert Clickwrap.current?(:driver_declaration, actor: @user, subject: withdrawal)
+
+    get "/withdrawal_reviews/#{withdrawal.id}"
+    assert_response :success
+  end
+
+  test "a subject-bound remediation token cannot be used by another actor" do
+    withdrawal = create_withdrawal(user: @user)
+    login_as @user
+    get "/withdrawal_reviews/#{withdrawal.id}"
+    destination = response.location
+
+    login_as @other_actor
+    get destination
+
+    assert_response :not_found
+    assert_no_clickwrap_event :driver_declaration, actor: @other_actor
+  end
+
+  test "a subject-bound gate does not disclose another actor's subject" do
+    withdrawal = create_withdrawal(user: @user)
+    login_as @other_actor
+
+    get "/withdrawal_reviews/#{withdrawal.id}"
+
+    assert_response :not_found
+    assert_no_clickwrap_event :driver_declaration, actor: @other_actor
+  end
+
+  test "a remediation token is invalid after its subject changes" do
+    withdrawal = create_withdrawal(user: @user)
+    login_as @user
+    get "/withdrawal_reviews/#{withdrawal.id}"
+    destination = response.location
+
+    withdrawal.update!(amount_cents: withdrawal.amount_cents + 1)
+    get destination
+
+    assert_response :not_found
+    assert_no_clickwrap_event :driver_declaration, actor: @user
+  end
+
+  test "a remediation token is invalid after its subject is deleted" do
+    withdrawal = create_withdrawal(user: @user)
+    login_as @user
+    get "/withdrawal_reviews/#{withdrawal.id}"
+    destination = response.location
+
+    withdrawal.destroy!
+    get destination
+
+    assert_response :not_found
+    assert_no_clickwrap_event :driver_declaration, actor: @user
   end
 
   # --- Withdrawing a consent ---------------------------------------------------
@@ -325,6 +521,22 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     refute @user.clickwraps.consented_to?(:product_updates)
   end
 
+  test "the engine withdraws a consent inside the current tenant instead of searching globally" do
+    organization = create_organization
+    capture_clickwrap(
+      :marketing_preferences,
+      actor: @user,
+      tenant: organization,
+      answers: { product_updates: "1" }
+    )
+    login_as @user, organization: organization
+
+    post "/legal/consents/product_updates/withdrawal"
+
+    assert_redirected_to "/legal/"
+    refute @user.clickwraps.consented_to?(:product_updates, tenant: organization)
+  end
+
   test "withdrawing something that is not withdrawable says so instead of pretending" do
     capture_clickwrap(:signup, actor: @user)
     login_as @user
@@ -344,6 +556,14 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   def published_version_of(document_key)
-    Clickwrap::Document.find_by(key: document_key.to_s).current_version(locale: "en")
+    Clickwrap::Document.find_by(document_key: document_key.to_s).current_version(locale: "en")
+  end
+
+  def remediation_redirect_uri
+    URI.parse(response.location)
+  end
+
+  def remediation_redirect_token
+    URI.decode_www_form(remediation_redirect_uri.query.to_s).to_h.fetch("remediation_token")
   end
 end

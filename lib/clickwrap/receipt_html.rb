@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require "erb"
-require "cgi"
+require "cgi/escape"
 
 module Clickwrap
   # The human-readable projection of a receipt.
@@ -16,14 +16,13 @@ module Clickwrap
   # asset, and no JavaScript, because a receipt frequently ends up saved to disk,
   # attached to an email, or printed, and it has to still make sense there.
   class ReceiptHtml
-    def initialize(receipt, reveal: [], view_context: nil)
+    def initialize(receipt, view_context: nil, body: nil)
       @receipt = receipt
-      @reveal = reveal
       @view_context = view_context
-      @body = receipt.to_h(reveal: reveal)
+      @body = body || receipt.to_h
     end
 
-    attr_reader :receipt, :reveal, :body
+    attr_reader :receipt, :body
 
     def render
       ERB.new(TEMPLATE, trim_mode: "-").result(binding)
@@ -73,7 +72,7 @@ module Clickwrap
         "A #{name} was recorded. It is not shown to this viewer."
       when "deleted_after_retention"
         "The #{name} was recorded and has since been deleted under the retention policy" \
-          "#{fragment["deleted_at"] ? " on #{h(fragment["deleted_at"])}" : ""}."
+        "#{" on #{h(fragment["deleted_at"])}" if fragment["deleted_at"]}."
       when "held"
         "A #{name} was recorded and is under a legal hold."
       else
@@ -81,6 +80,8 @@ module Clickwrap
       end
     end
 
+    # The long template is kept beside the private render helpers it calls, then
+    # made genuinely private with `private_constant` below.
     TEMPLATE = <<~HTML
       <!DOCTYPE html>
       <html lang="en">
@@ -130,7 +131,12 @@ module Clickwrap
         <% documents.each do |document| %>
           <li><%= h(document["key"]) %> version <%= h(document["version"]) %>
             (<%= h(document["locale"]) %>)<br>
-            <span class="subtle"><code><%= h(document["digest"]) %></code></span></li>
+            <span class="subtle">
+              Source (<%= h(document["source_media_type"]) %>):
+              <code><%= h(document["source_digest"]) %></code><br>
+              Rendered (<%= h(document["rendered_media_type"]) %>):
+              <code><%= h(document["rendered_digest"]) %></code>
+            </span></li>
         <% end %>
         </ul>
 
@@ -147,7 +153,7 @@ module Clickwrap
         </dl>
 
         <% unless presentation.empty? %>
-          <h2>What was on screen</h2>
+          <h2>What the application offered</h2>
           <dl>
             <dt>Call to action</dt><dd><%= h(presentation["submit_button_text"]) %></dd>
             <dt>Locale</dt><dd><%= h(presentation["locale"]) %></dd>
@@ -220,5 +226,6 @@ module Clickwrap
       </body>
       </html>
     HTML
+    private_constant :TEMPLATE
   end
 end

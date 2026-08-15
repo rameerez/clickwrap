@@ -48,6 +48,8 @@ en:
       answer_not_accepted: "This answer was not accepted. Please check it and try again."
       presentation_no_longer_valid: "This page expired before it was submitted, so it has been
         offered again. Please check your answers and submit once more."
+      temporarily_unavailable: "This could not be recorded because the database was temporarily
+        busy. Nothing was accepted. Please check your answers and try again."
 
     captures:
       title: "Before you continue"
@@ -75,14 +77,14 @@ en:
       event_id: "Record ID"
       event_type: "What happened"
       recorded_at_by_server: "Recorded by the server at"
-      submit_button_text: "Button that was pressed"
-      acts: "What was asked and answered"
-      documents: "Documents as they were at the time"
+      submit_button_text: "Call to action in the server offer"
+      acts: "Recorded statements and answers"
+      documents: "Document versions bound to this record"
       offered_and_not_taken: "offered, not taken"
       canonical_json: "Download the canonical JSON"
-      what_this_records: "This record shows what this application presented, in the exact wording
-        and document versions used at the time, and what was submitted back. It does not show that
-        anyone read or understood the documents, and it is not a legal opinion about them."
+      what_this_records: "This record shows the exact wording and document versions this application
+        generated as an offer, and what was submitted back. It does not show that anyone read or
+        understood the documents, and it is not a legal opinion about them."
 
     # The six kinds, for display. This taxonomy is product design; naming an act
     # an agreement or a consent does not decide its legal effect.

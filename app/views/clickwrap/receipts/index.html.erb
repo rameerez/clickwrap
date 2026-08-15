@@ -21,7 +21,7 @@
           </a>
           <%# Deliberately a plain UTC timestamp rather than `l()`: many hosts do
               not bundle rails-i18n, and a time recorded by a server is clearest
-              when it is shown exactly as it was recorded. %>
+              when it is displayed without a silent timezone conversion. %>
           <span class="clickwrap-receipts__meta">
             <%= t("clickwrap.receipts.recorded_at_by_server") %>
             <%= event.recorded_at_by_server&.utc&.strftime("%Y-%m-%d %H:%M UTC") %>

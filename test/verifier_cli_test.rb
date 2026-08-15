@@ -31,22 +31,24 @@ class VerifierCliTest < ActiveSupport::TestCase
     @receipt = capture_clickwrap(:signup, actor: @user)
   end
 
-  test "verifying a real exported receipt exits zero and says which checks passed" do
+  test "verifying a receipt without its cited artifacts is visibly incomplete and exits two" do
     in_a_bundle do |directory|
       path = write_receipt(directory, @receipt.to_canonical_json)
 
       output, error, status = run_clickwrap("verify", path)
 
-      assert_equal 0, status.exitstatus, "expected a clean verification, got: #{error}"
+      assert_equal 2, status.exitstatus, error
       assert_match(/Receipt #{@receipt.event_id}/, output)
       assert_match(/✓ json_parses/, output)
       assert_match(/✓ known_schema/, output)
       assert_match(/✓ receipt_digest/, output)
 
-      # A document nobody supplied is neither a pass nor a failure, and the
-      # command keeps the three states apart rather than reporting two.
-      assert_match(/– document:terms/, output)
+      # A document nobody supplied is neither reported as a digest mismatch nor
+      # allowed to produce a fully verified exit status.
+      assert_match(/– document:terms@2026-08-15@en:source/, output)
+      assert_match(/– document:terms@2026-08-15@en:rendered/, output)
       assert_match(/no document files were supplied/, output)
+      assert_match(/INCOMPLETE/, output)
 
       # And the bounded claim travels with the green result, every time.
       assert_match(/does not establish who/, output)
@@ -62,16 +64,17 @@ class VerifierCliTest < ActiveSupport::TestCase
 
       @receipt.documents.each do |binding|
         version = Clickwrap::DocumentVersion.find(binding.document_version_id)
-        File.write(File.join(documents, "#{binding.document_key}-#{binding.version_label}-#{binding.locale}.md"),
-                   version.content)
+        basename = "#{binding.document_key}-#{binding.version_label}-#{binding.locale}"
+        File.binwrite(File.join(documents, "#{basename}.source.md"), version.content_bytes)
+        File.binwrite(File.join(documents, "#{basename}.rendered.html"), version.rendered_bytes)
       end
 
       output, error, status = run_clickwrap("verify", path, "--documents", documents)
 
       assert_equal 0, status.exitstatus, error
-      assert_match(/✓ document:terms@2026-08-15/, output)
-      assert_match(/✓ document:privacy_notice@2026-08-15/, output)
-      assert_match(/document terms read from terms-2026-08-15-en\.md/, output)
+      assert_match(/✓ document:terms@2026-08-15@en:source/, output)
+      assert_match(/✓ document:terms@2026-08-15@en:rendered/, output)
+      assert_match(/document terms@2026-08-15@en:source read from terms-2026-08-15-en\.source\.md/, output)
     end
   end
 
@@ -156,6 +159,34 @@ class VerifierCliTest < ActiveSupport::TestCase
     assert_equal "[nil, nil, nil]", output.strip
   end
 
+  test "canonical JSON can be required directly in a bare Ruby process" do
+    script = <<~RUBY
+      $LOAD_PATH.unshift(#{LIBRARY.inspect})
+      require "clickwrap/canonical_json"
+      puts Clickwrap::CanonicalJson.generate({"answer" => 42})
+    RUBY
+
+    output, error, status = run_ruby("-e", script)
+
+    assert_equal 0, status.exitstatus, error
+    assert_equal '{"answer":42}', output.strip
+  end
+
+  test "hostile canonical numbers become failed findings instead of exceptions" do
+    oversized = @receipt.to_canonical_json.sub(/\}\z/, ',"x_host_number":9007199254740992}')
+    infinite = @receipt.to_canonical_json.sub(/\}\z/, ',"x_host_number":1e999}')
+
+    [oversized, infinite].each do |json|
+      result = Clickwrap::ReceiptVerifier.verify(json)
+
+      assert result.failed?
+      assert_equal "failed", result.status
+      finding = result.failures.find { |check| check.name == "verifier_input" }
+      assert finding, result.to_s
+      assert_match(/could not be verified safely/, finding.detail)
+    end
+  end
+
   private
 
   def in_a_bundle(&) = Dir.mktmpdir("clickwrap-receipt", &)
@@ -166,9 +197,9 @@ class VerifierCliTest < ActiveSupport::TestCase
     path
   end
 
-  def run_clickwrap(*arguments) = run_ruby(EXECUTABLE, *arguments)
+  def run_clickwrap(*) = run_ruby(EXECUTABLE, *)
 
-  def run_ruby(*arguments)
-    Open3.capture3(WITHOUT_BUNDLER, RbConfig.ruby, *arguments, chdir: GEM_ROOT)
+  def run_ruby(*)
+    Open3.capture3(WITHOUT_BUNDLER, RbConfig.ruby, *, chdir: GEM_ROOT)
   end
 end

@@ -8,6 +8,8 @@ require "test_helper"
 # The required-tests list in `docs/strategy/02-request-evidence.md` is the source
 # for most of this file.
 class RequestEvidenceTest < ActiveSupport::TestCase
+  use_real_database_commits!
+
   setup do
     @user = create_user
     @http_request = fake_http_request
@@ -19,7 +21,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert_nil receipt.event.request_evidence
-    assert_nil receipt.event.request_evidence_digest
+    assert_empty receipt.event.request_evidence_category_binding_digests
+    assert_nil receipt.event.request_evidence_digest_algorithm
+    assert_nil receipt.event.request_evidence_key_id
 
     receipt.to_h["request_evidence"].each_value do |fragment|
       assert_equal "not_configured", fragment["state"]
@@ -63,6 +67,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "enabling geolocation with no resolver fails at boot" do
     error = assert_raises(Clickwrap::ConfigurationError) do
       Clickwrap.configure do |config|
+        config.ip_geolocation_resolver = nil
         config.record_ip_geolocation_country_by_default = true
         config.reason_for_recording_ip_geolocation_by_default = "Corroborate anomalous access"
         config.delete_recorded_ip_geolocation_after = 90.days
@@ -232,6 +237,127 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     assert_equal "40.4168", receipt.event.reload.request_evidence.ip_geolocation_latitude
   end
 
+  test "editing any retained annex fact breaks that category's event binding" do
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(
+      :regulated_authorization,
+      actor: @user,
+      subject: withdrawal,
+      http_request: @http_request,
+      answers: { regulated_action: "1" }
+    )
+
+    assert_equal :verified, receipt.event.reload.request_evidence_binding_status
+
+    Clickwrap::RequestEvidence.where(id: receipt.request_evidence.id)
+                              .update_all(ip_address_reader_name: "rewritten_reader")
+
+    assert_equal :digest_mismatch, receipt.event.reload.request_evidence_binding_status
+    refute receipt.event.evidence_integrity_verified?
+  end
+
+  test "historical key IDs keep old annexes verifiable across binding-key rotation" do
+    keys = {
+      "request-evidence-2026-01" => "a" * 32,
+      "request-evidence-2026-09" => "b" * 32
+    }
+    Clickwrap.config.current_request_evidence_binding_key_id = "request-evidence-2026-01"
+    Clickwrap.config.find_request_evidence_binding_key_with = ->(key_id) { keys[key_id] }
+    configure_static_resolver!
+    first_withdrawal = create_withdrawal(user: @user)
+    first = capture_clickwrap(
+      :regulated_authorization,
+      actor: @user,
+      subject: first_withdrawal,
+      http_request: @http_request,
+      answers: { regulated_action: "1" }
+    )
+
+    Clickwrap.config.current_request_evidence_binding_key_id = "request-evidence-2026-09"
+    second_withdrawal = create_withdrawal(user: @user)
+    second = capture_clickwrap(
+      :regulated_authorization,
+      actor: @user,
+      subject: second_withdrawal,
+      http_request: @http_request,
+      answers: { regulated_action: "1" }
+    )
+
+    assert_equal "request-evidence-2026-01", first.event.request_evidence_key_id
+    assert_equal "request-evidence-2026-09", second.event.request_evidence_key_id
+    assert_equal :verified, first.event.reload.request_evidence_binding_status
+    assert_equal :verified, second.event.reload.request_evidence_binding_status
+
+    keys.delete("request-evidence-2026-01")
+    assert_equal :binding_key_unavailable, first.event.reload.request_evidence_binding_status
+    assert_equal :verified, second.event.reload.request_evidence_binding_status
+  end
+
+  test "an unavailable encryption key is an unreadable annex finding instead of a crash" do
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(
+      :regulated_authorization,
+      actor: @user,
+      subject: withdrawal,
+      http_request: @http_request,
+      answers: { regulated_action: "1" }
+    )
+    Clickwrap::RequestEvidence.any_instance
+                              .stubs(:category_binding_digest_verified?)
+                              .raises(ActiveRecord::Encryption::Errors::Decryption,
+                                      "the historical key is unavailable")
+
+    event = receipt.event.reload
+    assert_equal :annex_unreadable, event.request_evidence_binding_status
+    refute event.evidence_integrity_verified?
+
+    result = Clickwrap.verify(event.id)
+    assert_not result.success?
+    assert_equal :integrity_check_failed, result.error
+    assert_equal "annex_unreadable", result.details.fetch("request_evidence_binding")
+  end
+
+  test "a wrong historical binding key fails closed instead of accepting a new key" do
+    keys = { "request-evidence-2026-01" => "a" * 32 }
+    Clickwrap.config.current_request_evidence_binding_key_id = "request-evidence-2026-01"
+    Clickwrap.config.find_request_evidence_binding_key_with = ->(key_id) { keys[key_id] }
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(
+      :regulated_authorization,
+      actor: @user,
+      subject: withdrawal,
+      http_request: @http_request,
+      answers: { regulated_action: "1" }
+    )
+
+    keys["request-evidence-2026-01"] = "z" * 32
+
+    assert_equal :digest_mismatch, receipt.event.reload.request_evidence_binding_status
+  end
+
+  test "a binding key shorter than 32 bytes refuses capture before evidence is written" do
+    Clickwrap.config.current_request_evidence_binding_key_id = "too-short"
+    Clickwrap.config.find_request_evidence_binding_key_with = ->(_key_id) { "short" }
+    configure_static_resolver!
+    withdrawal = create_withdrawal(user: @user)
+
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      capture_clickwrap(
+        :regulated_authorization,
+        actor: @user,
+        subject: withdrawal,
+        http_request: @http_request,
+        answers: { regulated_action: "1" }
+      )
+    end
+
+    assert_match(/at least 32 bytes/, error.message)
+    assert_no_clickwrap_event :regulated_authorization, actor: @user
+  end
+
   # --- The annex is separately disposable ------------------------------------
 
   test "deleting a recorded IP address leaves the core event intact and verifiable" do
@@ -298,7 +424,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
 
     receipt.place_on_legal_hold!(because: "Pending dispute 2026-184",
                                  placed_by: create_security_operator,
-                                 review_on: 6.months.from_now)
+                                 review_at: 6.months.from_now)
 
     assert_raises(Clickwrap::LegalHoldInEffect) do
       Clickwrap.delete_recorded_ip_address!(receipt, because: "Retention period ended")

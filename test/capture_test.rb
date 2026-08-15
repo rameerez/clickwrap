@@ -43,10 +43,10 @@ class CaptureTest < ActiveSupport::TestCase
     receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     terms_document = receipt.documents.find { |document| document.document_key == "terms" }
-    version = Clickwrap::Document.find_by(key: "terms").current_version
+    version = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     assert_equal version.version_label, terms_document.version_label
-    assert_equal version.content_digest, terms_document.content_digest
+    assert_equal version.content_digest, terms_document.source_content_digest
     assert terms_document.still_matches_stored_version?
   end
 
@@ -200,7 +200,9 @@ class CaptureTest < ActiveSupport::TestCase
 
     assert_equal first.event_id, second.event_id
     assert_equal 1, runs, "the protected action must not run a second time"
-    assert_equal 1, Clickwrap::Event.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
+    assert_equal 1, Clickwrap::Event.for_policy("withdrawal_authorization")
+                                    .where(event_type: "consumption").count
   end
 
   test "reusing a presentation with different answers is rejected as a replay" do
@@ -280,7 +282,7 @@ class CaptureTest < ActiveSupport::TestCase
   test "a deploy that publishes a new document version between render and submit is refused" do
     presentation = present_clickwrap(:signup, actor: @user)
     publish_new_document_version!(:terms, version: "2026-09-01")
-    Clickwrap::Document.find_by(key: "terms").versions.find_by(version_label: "2026-08-15")
+    Clickwrap::Document.find_by(document_key: "terms").versions.find_by(version_label: "2026-08-15")
                        .update_columns(content: "rewritten bytes")
 
     # The server must never record a version the person was not offered.

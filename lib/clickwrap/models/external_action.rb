@@ -24,6 +24,9 @@ module Clickwrap
     validates :idempotency_key, uniqueness: true
     validates :state, inclusion: { in: STATES }
 
+    before_update :refuse_ordinary_update
+    before_destroy :refuse_destroy, prepend: true
+
     scope :pending, -> { where(state: "pending") }
     scope :unresolved, -> { where(state: %w[pending unknown]) }
     scope :needing_reconciliation, lambda { |older_than = 15.minutes.ago|
@@ -61,7 +64,21 @@ module Clickwrap
       transaction do
         reload.lock!
 
-        return self if state == new_state
+        if state == new_state
+          return self if same_provider_resolution?(
+            provider_receipt: provider_receipt,
+            failure_reason: failure_reason
+          )
+
+          # Unknown is an observation, not a terminal result. A later
+          # reconciliation attempt may still be unknown for a different
+          # documented reason; append that attempt instead of erasing the first.
+          unless new_state == "unknown"
+            raise ExternalActionAlreadyResolved,
+                  "External action #{idempotency_key} is already #{state}, but the repeated provider " \
+                  "result carries different evidence. The original outcome is not silently overwritten."
+          end
+        end
 
         if resolved? && new_state != state
           raise ExternalActionAlreadyResolved,
@@ -69,18 +86,65 @@ module Clickwrap
                 "become #{new_state}. Appending a new event is the way to record a later change."
         end
 
-        update!(
+        update_columns(
           state: new_state,
           provider_receipt: provider_receipt || self.provider_receipt,
           failure_reason: failure_reason,
-          attempts: attempts + 1,
-          resolved_at: resolved ? Clickwrap.now : nil
+          attempt_count: attempt_count + 1,
+          resolved_at: resolved ? Clickwrap.now : nil,
+          updated_at: Clickwrap.now
+        )
+
+        Lifecycle.append_lifecycle_event!(
+          event: event,
+          event_type: "provider_outcome",
+          reason: provider_outcome_reason(new_state, failure_reason),
+          extra: {
+            protected_outcome: {
+              "external_action" => {
+                "external_action_id" => id.to_s,
+                "idempotency_key" => idempotency_key,
+                "provider_name" => provider_name,
+                "state" => new_state,
+                "provider_receipt" => provider_receipt,
+                "failure_reason" => failure_reason
+              }.compact
+            }
+          }
         )
 
         yield if block_given?
       end
 
       self
+    end
+
+    def provider_outcome_reason(new_state, failure_reason)
+      ["External action was recorded as #{new_state}.", failure_reason].compact.join(" ")
+    end
+
+    def same_provider_resolution?(provider_receipt:, failure_reason:)
+      receipt_matches = provider_receipt.nil? ||
+                        canonical_value(provider_receipt) == canonical_value(self.provider_receipt)
+      reason_matches = failure_reason.to_s == self.failure_reason.to_s
+
+      receipt_matches && reason_matches
+    end
+
+    def canonical_value(value)
+      CanonicalJson.generate(value)
+    rescue CanonicalJson::SerializationError
+      value
+    end
+
+    def refuse_ordinary_update
+      raise ImmutableEvidenceError,
+            "External action outcomes are changed only through the named provider-result methods."
+    end
+
+    def refuse_destroy
+      raise ImmutableEvidenceError,
+            "External actions are durable outbox records and cannot be destroyed."
     end
   end
 end

@@ -58,19 +58,6 @@ Clickwrap.retention :regulated_evidence do
   retain_recorded_ip_geolocation_until :security_evidence_retention_ends
 end
 
-Clickwrap.configure do |config|
-  config.calculate_retention_time_for :regulated_evidence_retention_ends do |event|
-    [
-      event.recorded_at_by_server + 5.years,
-      event.subject.respond_to?(:liquidated_at) ? event.subject.liquidated_at&.+(3.years) : nil
-    ].compact.max
-  end
-
-  config.calculate_retention_time_for :security_evidence_retention_ends do |event|
-    event.recorded_at_by_server + 2.years
-  end
-end
-
 # --- Policies ----------------------------------------------------------------
 
 # The five-minute path. Note the two different verbs: Terms are agreed to, a
@@ -126,6 +113,7 @@ Clickwrap.policy :driver_declaration do
           document: :driver_declaration,
           statement: "I declare that I drive privately and not as a professional driver.",
           valid_for: 1.year,
+          subject_fingerprint_version: "withdrawal-evidence-v1",
           subject_fingerprint_with: ->(scheme) { scheme.evidence_fingerprint }
 
   retain_with :regulated_evidence
@@ -141,6 +129,7 @@ Clickwrap.policy :withdrawal_authorization do
   declare :ride_exclusivity,
           document: :withdrawal_requirements,
           statement: "I declare that these rides have not been claimed for any other payout.",
+          subject_fingerprint_version: "covered-rides-v1",
           subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_rides_fingerprint }
 
   authorize :withdrawal,
@@ -149,6 +138,7 @@ Clickwrap.policy :withdrawal_authorization do
             one_time: true,
             valid_for: 10.minutes,
             requires: %i[withdrawal_requirements ride_exclusivity],
+            protected_outcome_version: "submitted-withdrawal-v1",
             record_protected_outcome_with: lambda { |withdrawal|
               {
                 action: :submitted,

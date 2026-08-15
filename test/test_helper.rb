@@ -7,6 +7,12 @@ require "simplecov"
 # Configure Rails Environment
 ENV["RAILS_ENV"] = "test"
 
+# Devise is a test-only compatibility dependency. Its Railtie must register
+# before the dummy application initializes; requiring it from one test file
+# makes the result depend on whether that file happened to load first. The
+# Clickwrap runtime never requires Devise and the gemspec does not depend on it.
+require "devise"
+
 require File.expand_path("dummy/config/environment.rb", __dir__)
 ActiveRecord::Migrator.migrations_paths = [
   File.expand_path("dummy/db/migrate", __dir__)
@@ -39,6 +45,12 @@ module ActiveSupport
       config.current_actor_method_name = :current_user
       config.parent_controller_class_name = "ApplicationController"
       config.application_version = -> { "dummy-test" }
+      config.trusted_proxy_configuration_digest =
+        Clickwrap::Digest.digest("dummy-host-reviewed-trusted-proxy-configuration-v1")
+      config.ip_geolocation_resolver = DummyIpGeolocationResolver.new
+      config.find_current_tenant_with = lambda do |controller|
+        controller.current_organization if controller.respond_to?(:current_organization)
+      end
 
       config.authorize_receipt_access_with = lambda do |controller, receipt|
         controller.current_user&.clickwrap_actor_reference == receipt.actor_reference
@@ -47,6 +59,15 @@ module ActiveSupport
       config.authorize_unredacted_request_evidence_access_with = lambda do |requested_by, _receipt, because|
         requested_by.respond_to?(:security_operator?) && requested_by.security_operator? && because.present?
       end
+
+      config.authorize_clickwrap_remediation_subject_with = lambda do |actor:, subject:, policy:, controller:|
+        subject.nil? || (subject.respond_to?(:user_id) && subject.user_id == actor&.id)
+      end
+
+      config.authorize_clickwrap_remediation_represented_party_with =
+        lambda do |actor:, represented_party:, policy:, controller:|
+          represented_party.nil? || controller.current_organization == represented_party
+        end
 
       config.calculate_retention_time_for :regulated_evidence_retention_ends do |event|
         [

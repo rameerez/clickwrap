@@ -2,7 +2,7 @@
 
 This file provides guidance to AI Agents (like OpenAI's Codex, Cursor Agent, Claude Code, etc) when working with code in this repository.
 
-Please read the `README.md` for a full overview of the gem's API and philosophy, and the `guides/` directory for the detailed integration guides. The product research corpus lives in `docs/`, which is deliberately git-ignored; read it if it is present locally, and never publish it.
+The public `README.md` is the short, house-style introduction to the gem. The full north-star product contract — the exhaustive description of every capability, claim, and boundary that `README.md` used to be — now lives in `docs/north-star-readme.md`; read it before designing or changing any public behavior, and keep it updated when public behavior changes. The `guides/` directory has the detailed integration guides. The product research corpus lives in `docs/`, which is deliberately git-ignored; read it if it is present locally, and never publish it.
 
 This gem is part of a coherent ecosystem (`railsfast`, `sessions`, `chats`, `moderate`, `organizations`, `pricing_plans`, `usage_credits`, `wallets`, `api_keys`). Match the ecosystem conventions exactly: a single `Clickwrap.configure do |config| … end` block, `has_*`/verb-style class macros, adapter objects + no-op-default hook procs, string class names constantized lazily, adaptive install migrations, Minitest with a `test/dummy` app, SimpleCov, and the README/docs voice.
 
@@ -25,3 +25,5 @@ Clickwrap's value is evidence that is still true and still verifiable years afte
 - Prefer explaining a refusal in a full sentence over raising a terse error. The policy compiler's job is to tell a developer what is wrong and what to do about it.
 - Do not add a runtime dependency. Every integration is an optional adapter with a working no-op default.
 - Do not publish, push, or create anything outside this repository without the owner asking for it.
+
+> **Release-candidate record:** the independent audit findings are resolved in the implementation and tracked in `docs/reviews/2026-08-15-production-release-checklist.md`. The remaining remote-CI, downstream proof, unfamiliar-developer, legal/privacy, and publication gates are recorded there; do not collapse them into a generic “production ready” claim.

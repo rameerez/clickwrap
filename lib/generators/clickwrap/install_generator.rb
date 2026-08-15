@@ -18,12 +18,13 @@ module Clickwrap
     # side effect of something else.
     #
     # Second, it refuses to guess. The actor class is inferred only when it is
-    # unambiguous, legal text is never invented, and no purpose or legal basis is
-    # written on the host's behalf: those come out as TODO placeholders that a
-    # human has to replace.
+    # unambiguous, legal text is never invented, and no purpose, retention
+    # period, trusted-proxy digest, or resolver is written on the host's behalf.
+    # An incomplete personal-data choice stops the generator before it writes a
+    # file.
     #
-    # The `--request-evidence-recipe` flag is SCAFFOLDING ONLY. It expands into
-    # the individual settings written into the initializer and then disappears;
+    # The only `--request-evidence-recipe` is `privacy-minimized`, a convenient
+    # spelling of the off-by-default posture. It disappears after generation;
     # it is deliberately not a runtime concept. There is no
     # `record_network_context`, `record_everything`, `full_evidence`, or
     # regulation-named mode switch anywhere in this gem, because a flag that
@@ -38,13 +39,7 @@ module Clickwrap
       # The adapters the gem's portable core behavior is tested against.
       SUPPORTED_ADAPTERS = %w[sqlite sqlite3 postgresql postgis mysql mysql2 trilogy].freeze
 
-      # Used only when a request-evidence field is enabled and nobody named a
-      # period. It is a placeholder to be reviewed, not a recommended period:
-      # Clickwrap does not know your jurisdiction, your disputes, or your
-      # obligations, and it will not pretend to.
-      DEFAULT_RETENTION_DAYS = 90
-
-      RECIPES = %w[privacy-minimized evidence-rich].freeze
+      RECIPES = %w[privacy-minimized].freeze
 
       # The command-line flags name IP-geolocation fields in the plural, the way
       # a person says them out loud ("record cities"); the configuration names
@@ -98,11 +93,26 @@ module Clickwrap
       class_option :delete_recorded_ip_geolocation_after_days,
                    type: :numeric, desc: "Delete recorded IP geolocation after N days"
 
+      class_option :reason_for_recording_ip_addresses_by_default,
+                   type: :string,
+                   desc: "Plain-English reason for recording IP addresses by default"
+      class_option :reason_for_recording_browser_user_agents_by_default,
+                   type: :string,
+                   desc: "Plain-English reason for recording browser User-Agent strings by default"
+      class_option :reason_for_recording_ip_geolocation_by_default,
+                   type: :string,
+                   desc: "Plain-English reason for recording IP geolocation by default"
+      class_option :trusted_proxy_configuration_digest,
+                   type: :string,
+                   desc: "Prefixed SHA-2 digest of the reviewed trusted-proxy configuration"
+      class_option :ip_geolocation_resolver_class_name,
+                   type: :string,
+                   desc: "Resolver class to instantiate when IP geolocation is enabled"
+
       class_option :request_evidence_recipe,
                    type: :string, enum: RECIPES,
-                   desc: "Scaffold the individual settings above (privacy-minimized or " \
-                         "evidence-rich). Generator-only: a recipe expands into settings and " \
-                         "does not survive as a runtime concept."
+                   desc: "Use the privacy-minimized, all-fields-off scaffold. " \
+                         "Generator-only: it does not survive as a runtime concept."
 
       class_option :actor_class,
                    type: :string,
@@ -154,6 +164,7 @@ module Clickwrap
       # the question rather than in a document they will read later.
       def ask_about_request_evidence
         ask_request_evidence_questions unless skip_request_evidence_questions?
+        validate_request_evidence_choices!
 
         # The summary prints in every mode, before any file is written, so the
         # operator sees every enabled field, purpose, encryption choice,
@@ -249,12 +260,9 @@ module Clickwrap
         end
 
         if any_ip_geolocation_field?
-          say "  #{step + 1}. Install an IP-geolocation resolver — the initializer configures one", :yellow
-          say "     because you enabled IP-geolocation fields, and Clickwrap refuses to boot", :yellow
-          say "     with fields it cannot resolve:", :yellow
-          say "       bundle add trackdown", :yellow
-          say "     (or set `config.ip_geolocation_resolver` to your own adapter, or turn the", :yellow
-          say "     fields back off)", :yellow
+          say "  #{step + 1}. Ensure #{ip_geolocation_resolver_class_name} and its data source", :yellow
+          say "     are available in every environment. The initializer uses the resolver you", :yellow
+          say "     explicitly selected; Clickwrap refuses to boot with fields it cannot resolve.", :yellow
         end
 
         print_review_checklist
@@ -461,10 +469,6 @@ module Clickwrap
         options[:request_evidence_recipe]
       end
 
-      def evidence_rich_recipe?
-        recipe == "evidence-rich"
-      end
-
       def privacy_minimized_recipe?
         recipe == "privacy-minimized"
       end
@@ -477,13 +481,11 @@ module Clickwrap
         ]
       end
 
-      # A recipe or an explicit flag is already an answer. Asking again would be
-      # asking someone to repeat themselves.
+      # Privacy-minimized and --skip-questions are complete postures. Individual
+      # flags are not: in an interactive run, Clickwrap still asks about every
+      # category the operator did not explicitly decide.
       def skip_request_evidence_questions?
-        return true if options[:skip_questions]
-        return true if recipe
-
-        request_evidence_option_keys.any? { |key| !options[key].nil? }
+        options[:skip_questions] || privacy_minimized_recipe?
       end
 
       def ask_request_evidence_questions
@@ -493,6 +495,8 @@ module Clickwrap
         ask_about_ip_addresses
         ask_about_browser_user_agents
         ask_about_ip_geolocation
+        ask_about_trusted_proxy_configuration
+        ask_about_ip_geolocation_resolver
       end
 
       # Thor's prompt escapes newlines, so a multi-line question handed straight
@@ -508,32 +512,49 @@ module Clickwrap
       end
 
       def ask_about_ip_addresses
-        answers[:ip_address] = ask_question(<<~QUESTION)
-          Should Clickwrap record IP addresses by default?
-          IP addresses can help investigate disputes, but they are personal data and
-          need a documented purpose, access policy, and deletion schedule. [y/N]
-        QUESTION
+        if options[:record_ip_addresses_by_default].nil?
+          answers[:ip_address] = ask_question(<<~QUESTION)
+            Should Clickwrap record IP addresses by default?
+            IP addresses can help investigate disputes, but they are personal data and
+            need a documented purpose, access policy, and deletion schedule. [y/N]
+          QUESTION
+        end
 
-        return unless answers[:ip_address]
+        return unless record_ip_addresses?
 
-        answers[:ip_address_purpose] = ask_purpose("recording IP addresses")
+        if options[:reason_for_recording_ip_addresses_by_default].nil?
+          answers[:ip_address_purpose] = ask_purpose("recording IP addresses")
+        end
+        return unless options[:delete_recorded_ip_addresses_after_days].nil?
+
         answers[:ip_address_days] = ask_retention_days("recorded IP addresses")
       end
 
       def ask_about_browser_user_agents
-        answers[:browser_user_agent] = ask_question(<<~QUESTION)
-          Should Clickwrap record browser User-Agent headers by default?
-          The value is supplied by the browser, may be spoofed, and is not a unique
-          device identity. [y/N]
-        QUESTION
+        if options[:record_browser_user_agents_by_default].nil?
+          answers[:browser_user_agent] = ask_question(<<~QUESTION)
+            Should Clickwrap record browser User-Agent headers by default?
+            The value is supplied by the browser, may be spoofed, and is not a unique
+            device identity. [y/N]
+          QUESTION
+        end
 
-        return unless answers[:browser_user_agent]
+        return unless record_browser_user_agents?
 
-        answers[:browser_user_agent_purpose] = ask_purpose("recording browser User-Agent strings")
+        if options[:reason_for_recording_browser_user_agents_by_default].nil?
+          answers[:browser_user_agent_purpose] = ask_purpose("recording browser User-Agent strings")
+        end
+        return unless options[:delete_recorded_browser_user_agents_after_days].nil?
+
         answers[:browser_user_agent_days] = ask_retention_days("recorded browser User-Agent strings")
       end
 
       def ask_about_ip_geolocation
+        # Supplying any geolocation field on the command line makes that list an
+        # explicit allowlist. Asking about the remaining fields would make a
+        # non-interactive-looking command unexpectedly collect more data.
+        return if ip_geolocation_options_supplied?
+
         answers["country"] = ask_question(<<~QUESTION)
           Should Clickwrap estimate and record a country from each IP address?
           This is an estimate for the IP address, not the person's physical location.
@@ -584,30 +605,50 @@ module Clickwrap
       # the fields are separate decisions about what to keep, but they are all
       # resolved from the same address by the same provider at the same moment.
       def ask_about_ip_geolocation_purpose
-        return unless ip_geolocation_fields.any? { |field| answers[field] == true }
+        return unless any_ip_geolocation_field?
 
-        answers[:ip_geolocation_purpose] = ask_purpose("recording IP geolocation")
+        if options[:reason_for_recording_ip_geolocation_by_default].nil?
+          answers[:ip_geolocation_purpose] = ask_purpose("recording IP geolocation")
+        end
+        return unless options[:delete_recorded_ip_geolocation_after_days].nil?
+
         answers[:ip_geolocation_days] = ask_retention_days("recorded IP geolocation")
       end
 
-      # A purpose typed by the operator is the operator's sentence. A blank
-      # answer becomes a TODO, never a sentence this generator made up.
       def ask_purpose(label)
         say "\n  Why does the application need #{label}? One plain sentence, in your own"
-        say "  words — it goes into the initializer and the privacy inventory, and an"
-        say "  empty answer is left as a TODO rather than filled in for you."
+        say "  words — it goes into the initializer and the privacy inventory. A blank"
+        say "  or scaffolding answer stops generation before Clickwrap writes any files."
         ask("  Purpose:").to_s.strip
       end
 
       def ask_retention_days(label)
         say "\n  After how many days should Clickwrap delete #{label}?"
-        say "  Nothing is kept forever here, so this cannot be blank. #{DEFAULT_RETENTION_DAYS} is only a"
-        say "  placeholder to replace with your reviewed period."
-        days = ask("  Days [#{DEFAULT_RETENTION_DAYS}]:").to_s.strip.to_i
-        days.positive? ? days : DEFAULT_RETENTION_DAYS
+        say "  Clickwrap does not invent a period. Enter the positive number your application"
+        say "  has reviewed; a blank or zero answer stops generation before files are written."
+        ask("  Days:").to_s.strip.to_i
       end
 
-      # --- Resolved answers (flag > recipe > question > off) --------------------
+      def ask_about_trusted_proxy_configuration
+        return unless records_ip_derived_request_evidence?
+        return unless options[:trusted_proxy_configuration_digest].nil?
+
+        say "\n  What is the prefixed SHA-2 digest of the trusted-proxy configuration you reviewed?"
+        say "  Clickwrap stores it beside IP-derived evidence so a later reader can identify"
+        say "  the proxy decision in force. It does not claim the configuration was correct."
+        answers[:trusted_proxy_configuration_digest] = ask("  Digest (sha256:...):").to_s.strip
+      end
+
+      def ask_about_ip_geolocation_resolver
+        return unless any_ip_geolocation_field?
+        return unless options[:ip_geolocation_resolver_class_name].nil?
+
+        say "\n  Which resolver class should Clickwrap instantiate for IP geolocation?"
+        say "  Example: Clickwrap::IpGeolocation::TrackdownResolver (requires `trackdown`)."
+        answers[:ip_geolocation_resolver_class_name] = ask("  Resolver class:").to_s.strip
+      end
+
+      # --- Resolved answers (flag > question > privacy-minimized/off) -----------
 
       def record_ip_addresses?
         resolve_record_choice(:record_ip_addresses_by_default, :ip_address)
@@ -624,7 +665,6 @@ module Clickwrap
 
       def resolve_record_choice(option_key, answer_key)
         return options[option_key] unless options[option_key].nil?
-        return true if evidence_rich_recipe?
         return false if privacy_minimized_recipe?
 
         answers.fetch(answer_key, false) == true
@@ -646,6 +686,16 @@ module Clickwrap
         record_ip_addresses? || record_browser_user_agents? || any_ip_geolocation_field?
       end
 
+      def records_ip_derived_request_evidence?
+        record_ip_addresses? || any_ip_geolocation_field?
+      end
+
+      def ip_geolocation_options_supplied?
+        request_evidence_option_keys
+          .grep(/record_ip_geolocation/)
+          .any? { |key| !options[key].nil? }
+      end
+
       def delete_recorded_ip_addresses_after_days
         retention_days(:delete_recorded_ip_addresses_after_days, :ip_address_days)
       end
@@ -659,29 +709,122 @@ module Clickwrap
       end
 
       def retention_days(option_key, answer_key)
-        days = options[option_key] || answers[answer_key] || DEFAULT_RETENTION_DAYS
-        days.to_i
+        (options[option_key] || answers[answer_key]).to_i
       end
 
-      # The generator never writes a purpose it made up. Either the operator
-      # typed one, or the line says out loud that a human still has to.
-      def purpose_for(answer_key, subject)
-        typed = answers[answer_key].to_s.strip
-        return typed unless typed.empty?
-
-        "TODO: replace with your reviewed purpose for #{subject}"
+      def purpose_for(option_key, answer_key)
+        (options[option_key] || answers[answer_key]).to_s.strip
       end
 
       def reason_for_recording_ip_addresses
-        purpose_for(:ip_address_purpose, "recording IP addresses")
+        purpose_for(:reason_for_recording_ip_addresses_by_default, :ip_address_purpose)
       end
 
       def reason_for_recording_browser_user_agents
-        purpose_for(:browser_user_agent_purpose, "recording browser User-Agent strings")
+        purpose_for(:reason_for_recording_browser_user_agents_by_default, :browser_user_agent_purpose)
       end
 
       def reason_for_recording_ip_geolocation
-        purpose_for(:ip_geolocation_purpose, "recording IP geolocation")
+        purpose_for(:reason_for_recording_ip_geolocation_by_default, :ip_geolocation_purpose)
+      end
+
+      def trusted_proxy_configuration_digest
+        (options[:trusted_proxy_configuration_digest] ||
+          answers[:trusted_proxy_configuration_digest]).to_s.strip.presence
+      end
+
+      def ip_geolocation_resolver_class_name
+        (options[:ip_geolocation_resolver_class_name] ||
+          answers[:ip_geolocation_resolver_class_name]).to_s.strip.presence
+      end
+
+      # Every enabled personal-data category must be complete before Thor moves
+      # on to its first file-writing task. This makes the command atomic from the
+      # host developer's point of view: either it writes a bootable initializer
+      # containing their decisions, or it writes nothing.
+      def validate_request_evidence_choices!
+        validate_enabled_category!(
+          "IP addresses",
+          enabled: record_ip_addresses?,
+          because: reason_for_recording_ip_addresses,
+          delete_after_days: delete_recorded_ip_addresses_after_days,
+          reason_option: "--reason-for-recording-ip-addresses-by-default",
+          retention_option: "--delete-recorded-ip-addresses-after-days"
+        )
+        validate_enabled_category!(
+          "browser User-Agent strings",
+          enabled: record_browser_user_agents?,
+          because: reason_for_recording_browser_user_agents,
+          delete_after_days: delete_recorded_browser_user_agents_after_days,
+          reason_option: "--reason-for-recording-browser-user-agents-by-default",
+          retention_option: "--delete-recorded-browser-user-agents-after-days"
+        )
+        validate_enabled_category!(
+          "IP geolocation",
+          enabled: any_ip_geolocation_field?,
+          because: reason_for_recording_ip_geolocation,
+          delete_after_days: delete_recorded_ip_geolocation_after_days,
+          reason_option: "--reason-for-recording-ip-geolocation-by-default",
+          retention_option: "--delete-recorded-ip-geolocation-after-days"
+        )
+        validate_ip_geolocation_coordinates!
+        validate_trusted_proxy_configuration!
+        validate_ip_geolocation_resolver_class_name!
+      end
+
+      def validate_enabled_category!(label, enabled:, because:, delete_after_days:,
+                                     reason_option:, retention_option:)
+        return unless enabled
+
+        unless Clickwrap::ReviewedText.present_and_reviewed?(because)
+          raise Thor::Error,
+                "Clickwrap cannot enable #{label} with a blank or scaffolding reason. " \
+                "Give the application's reviewed, present-tense reason with " \
+                "#{reason_option}=\"...\", or turn that category off. No files were written."
+        end
+
+        return if delete_after_days.positive?
+
+        raise Thor::Error,
+              "Clickwrap cannot enable #{label} without a positive deletion period. " \
+              "Set #{retention_option}=DAYS to the period your application reviewed, or " \
+              "turn that category off. No files were written."
+      end
+
+      def validate_ip_geolocation_coordinates!
+        return unless record_ip_geolocation_field?("latitude_and_longitude")
+        return if record_ip_geolocation_field?("accuracy_radius_in_kilometers")
+
+        raise Thor::Error,
+              "Clickwrap cannot record provider-estimated latitude and longitude without " \
+              "their accuracy radius. Add " \
+              "--record-ip-geolocation-accuracy-radius-in-kilometers-by-default, or turn " \
+              "coordinates off. No files were written."
+      end
+
+      def validate_trusted_proxy_configuration!
+        digest = trusted_proxy_configuration_digest
+        return if digest.nil? && !records_ip_derived_request_evidence?
+        return if digest && Clickwrap::Digest.well_formed?(digest)
+
+        raise Thor::Error,
+              "Recording an IP address or deriving IP geolocation requires " \
+              "--trusted-proxy-configuration-digest with a complete prefixed SHA-2 digest " \
+              "(for example sha256: followed by 64 lowercase hexadecimal characters). " \
+              "Review the deployment's proxy topology, digest that exact decision, and try " \
+              "again. No files were written."
+      end
+
+      def validate_ip_geolocation_resolver_class_name!
+        class_name = ip_geolocation_resolver_class_name
+        return if class_name.nil? && !any_ip_geolocation_field?
+        return if class_name&.match?(/\A[A-Z]\w*(?:::[A-Z]\w*)*\z/)
+
+        raise Thor::Error,
+              "Recording IP geolocation requires --ip-geolocation-resolver-class-name with " \
+              "a Ruby class name such as Clickwrap::IpGeolocation::TrackdownResolver. " \
+              "Clickwrap will not choose a provider or dependency for the application. " \
+              "No files were written."
       end
 
       # A date one year out, so an enabled field gets looked at again by someone
@@ -727,8 +870,8 @@ module Clickwrap
         say "              `authorize_unredacted_request_evidence_access_with`; every export"
         say "              needs a human-readable reason and appends an access event."
         say "  review on:  #{review_request_evidence_configuration_on.iso8601}"
-        say "\n  These are settings, not a verdict. Read every purpose and period above and"
-        say "  replace anything that is still a TODO before you rely on it.", :yellow
+        say "\n  These are the explicit settings you supplied, not a legal verdict. Review"
+        say "  them in the generated initializer before relying on them.", :yellow
         say "  The recipe flag, if you used one, stops here: it expanded into the individual", :yellow
         say "  settings written into the initializer and does not exist at runtime.", :yellow
       end
