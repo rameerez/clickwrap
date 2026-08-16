@@ -182,7 +182,11 @@ class CreateClickwrapTables < ActiveRecord::Migration<%= migration_version %>
     # ---------------------------------------------------------------------------
     # Intentionally only the generated primary key: this row is ordering
     # machinery, not a second event timestamp or a second evidence payload.
-    create_table :clickwrap_recording_sequences do |_t|
+    # This one table deliberately does NOT inherit a UUID host application's
+    # default primary-key type. Its generated numeric key is the private total
+    # order referenced by `clickwrap_events.recording_sequence`; the public
+    # event identifier remains the non-enumerable ULID.
+    create_table :clickwrap_recording_sequences, id: :primary_key do |_t|
     end
 
     create_table :clickwrap_events, id: :string, limit: 26 do |t|

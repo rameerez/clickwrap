@@ -82,6 +82,13 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       assert_match(/primary_key_type, foreign_key_type = primary_and_foreign_key_types/, migration)
       assert_match(/config\.options\[config\.orm\]\[:primary_key_type\]/, migration)
 
+      # Event chronology is a private numeric database sequence even in an app
+      # whose ordinary model ids are UUIDs. The event's public id remains a
+      # ULID; allowing this table to inherit `primary_key_type` would leave a
+      # UUID primary key behind a bigint foreign key and fail at migration time.
+      assert_match(/create_table :clickwrap_recording_sequences, id: :primary_key/, migration)
+      assert_match(/t\.bigint :recording_sequence, null: false/, migration)
+
       # Column types resolve at MIGRATION RUN time, so one file works across the
       # dev/prod database split as well as across the CI matrix.
       assert_match(%r{return :jsonb if connection\.adapter_name\.downcase\.match\?\(/postg/\)}, migration)
@@ -396,6 +403,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
         # application's routes before the Clickwrap engine itself was loaded.
         config.root = File.dirname(ARGV.fetch(1))
         config.eager_load = false
+        config.generators.orm :active_record, primary_key_type: :uuid
       end
 
       ClickwrapScratchApplication.initialize!
@@ -406,7 +414,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
 
       expected = %w[
         clickwrap_documents clickwrap_document_versions clickwrap_policy_revisions
-        clickwrap_presentations clickwrap_events clickwrap_event_statements
+        clickwrap_presentations clickwrap_recording_sequences clickwrap_events clickwrap_event_statements
         clickwrap_event_documents clickwrap_statement_states
         clickwrap_statement_identity_locks clickwrap_request_evidence
         clickwrap_legal_holds clickwrap_chain_heads clickwrap_external_actions
@@ -419,6 +427,12 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       connection = ActiveRecord::Base.connection
       actor_id = connection.columns(:clickwrap_presentations).find { |column| column.name == "actor_id" }
       abort "Generated actor_id was #{actor_id.type}, not string" unless actor_id.type == :string
+
+      recording_sequence_id = connection.columns(:clickwrap_recording_sequences).find { |column| column.name == "id" }
+      event_recording_sequence = connection.columns(:clickwrap_events).find { |column| column.name == "recording_sequence" }
+      unless recording_sequence_id.type == :integer && event_recording_sequence.type == :integer
+        abort "Generated recording order did not stay numeric inside a UUID host"
+      end
 
       precision_failures = expected.flat_map do |table|
         connection.columns(table).filter_map do |column|
