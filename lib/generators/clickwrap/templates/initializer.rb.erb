@@ -103,8 +103,17 @@ Clickwrap.configure do |config|
 
   # Chooses only HOW immutable document links open. The href is server-owned
   # and signed into the presentation, so this callback is refused if it tries
-  # to return `href:`. A Hotwire Native app can add `data: { turbo: false }`
-  # here without ejecting the gem's evidence-critical statement partial.
+  # to return `href:`. It is evaluated in the rendering view, so per-request
+  # helpers work — the canonical case being Hotwire Native, where a same-window
+  # link lets the app's own screen rules route the document:
+  #
+  #   config.document_link_html_options_with = lambda do |_document|
+  #     if hotwire_native_app?
+  #       { data: { turbo: false } }
+  #     else
+  #       { target: "_blank", rel: "noopener" }
+  #     end
+  #   end
   config.document_link_html_options_with =
     ->(_document) { { target: "_blank", rel: "noopener" } }
 

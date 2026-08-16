@@ -69,6 +69,20 @@ class FormBuilderTest < ActionView::TestCase
                   "[data-turbo='false'][data-native-document='external']", count: 2
   end
 
+  test "the document-navigation hook is evaluated in the rendering view" do
+    # A host whose native app and web want different link behavior needs the
+    # view's own per-request helpers (`hotwire_native_app?` in real hosts).
+    # `lookup_context` exists only on a view — a context-free `call` would
+    # raise NameError here instead of rendering.
+    Clickwrap.config.document_link_html_options_with = lambda do |_document|
+      { data: { evaluated_in_view: lookup_context.is_a?(ActionView::LookupContext) } }
+    end
+
+    render_clickwrap(:signup, submit: "Create account")
+
+    assert_select "a.clickwrap-documents__link[data-evaluated-in-view='true']", count: 2
+  end
+
   test "document navigation options cannot replace the signed immutable href" do
     Clickwrap.config.document_link_html_options_with = ->(_document) { { href: "/mutable/terms" } }
 

@@ -29,8 +29,13 @@ module Clickwrap
     # The immutable href is evidence-critical and therefore cannot be
     # overridden here. Hosts may only choose how their client opens it (for
     # example, target: "_blank" or data: { turbo: false }).
+    #
+    # The hook is evaluated IN the rendering view, so a host can answer
+    # per-request questions the way it always does — `hotwire_native_app?`
+    # being the canonical one: a native WebView usually wants a same-window
+    # link its screen rules can route, while the web wants a new tab.
     def clickwrap_document_link_html_options(document = nil)
-      raw_options = Clickwrap.config.document_link_html_options_with.call(document)
+      raw_options = instance_exec(document, &Clickwrap.config.document_link_html_options_with)
       unless raw_options.respond_to?(:to_h)
         raise ConfigurationError,
               "document_link_html_options_with must return a Hash of HTML attributes."
