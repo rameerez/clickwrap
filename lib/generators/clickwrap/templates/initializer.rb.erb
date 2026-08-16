@@ -291,11 +291,19 @@ Clickwrap.configure do |config|
   config.read_browser_user_agent_from_http_request_with =
     ->(http_request) { http_request.user_agent }
 
-  # A digest of your reviewed trusted-proxy configuration, stored beside any
-  # recorded address. It does not make the configuration correct; it records
-  # which configuration was in force when the address was observed, so a later
-  # reader can tell whether the value came through a path you had verified.
-  config.trusted_proxy_configuration_digest = <%= trusted_proxy_configuration_digest.inspect %>
+  # A digest of the effective trusted-proxy rules, stored beside any recorded
+  # address. It does not make the rules or network path correct; it records
+  # which rules were in force. When no explicit reviewed digest was supplied to
+  # the installer, derive this from `config.action_dispatch.trusted_proxies` or
+  # Rails' actual defaults rather than hashing a prose description.
+  config.trusted_proxy_configuration_digest =
+<%- if trusted_proxy_configuration_digest -%>
+    <%= trusted_proxy_configuration_digest.inspect %>
+<%- elsif records_ip_derived_request_evidence? -%>
+    Clickwrap.trusted_proxy_configuration_digest_for_rails_application
+<%- else -%>
+    nil
+<%- end -%>
 
 <%- if any_ip_geolocation_field? -%>
   # You enabled IP-geolocation fields and explicitly selected this resolver.

@@ -36,14 +36,14 @@ module Clickwrap
                    submission: nil, answers: nil, locale: nil, capture_channel: nil,
                    acting_for: nil, authentication_context: nil, attribution_method: nil,
                    idempotency_key: nil, prospective_actor: nil,
-                   registration_flow_id: nil, actor_may_already_exist: false,
+                   registration_flow_id: nil,
                    consume_one_time_authorizations: true,
+                   record_protected_outcome: true,
                    reason: nil, event_type: "capture", root_event_id: nil,
                    predecessor_event_id: nil, statement_action_overrides: {})
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
-      @actor_may_already_exist = actor_may_already_exist == true
       @subject = subject
       @tenant = tenant
       @http_request = http_request
@@ -58,6 +58,7 @@ module Clickwrap
       @explicit_idempotency_key = idempotency_key
       @registration_flow_id = registration_flow_id
       @consume_one_time_authorizations = consume_one_time_authorizations
+      @record_protected_outcome = record_protected_outcome == true
       @reason = reason
       @event_type = event_type.to_s
       @root_event_id = root_event_id
@@ -92,11 +93,7 @@ module Clickwrap
     def register!(&block)
       raise ArgumentError, "register! needs a block that persists the account" unless block
 
-      # Honest per act: creating the record is `account_registration`; a public
-      # form that matched an already-existing record (`actor_may_already_exist:
-      # true` — a lead-capture or newsletter form finding its row by typed
-      # email) is `public_form`, because no account was created by it.
-      @attribution_method = @prospective_actor&.persisted? ? "public_form" : "account_registration"
+      @attribution_method = "account_registration"
 
       perform(protected_action: true) do |pending|
         result = block.call(pending)
@@ -121,6 +118,7 @@ module Clickwrap
     # rows while waiting for someone else's DNS.
     def perform(protected_action:, &block)
       @protected_action = protected_action
+      policy.validate_tenant!(tenant)
       @joined_existing_transaction = ::ActiveRecord::Base.connection.transaction_open?
       verified = PresentationVerifier.new(
         policy: policy,
@@ -133,7 +131,6 @@ module Clickwrap
         represented_party: @acting_for,
         prospective_actor: @prospective_actor,
         registration_flow_id: @registration_flow_id,
-        actor_may_already_exist: @actor_may_already_exist,
         explicit_capture_channel: @explicit_capture_channel
       ).verify!
       manifest = verified.manifest
@@ -154,14 +151,14 @@ module Clickwrap
       begin
         run_in_transaction do
           verify_represented_party_authority!
-          lock_one_time_statements!(manifest)
+          lock_statement_identities!(manifest)
 
           event = append_event!(manifest, revision, answers, request_evidence)
           pending = event.track_pending_receipt(
             PendingReceipt.new(event, wait_for_outer_transaction: @joined_existing_transaction)
           )
 
-          block.call(pending)
+          @protected_action_result = block.call(pending)
 
           record_protected_outcome!(event)
           event.finalize_integrity!
@@ -251,11 +248,10 @@ module Clickwrap
     # so the row is locked before anything else happens. Without this, two
     # concurrent submits could both read an unconsumed authorization and both
     # proceed — which for a withdrawal means two debits.
-    def lock_one_time_statements!(manifest)
-      one_time = @frozen_statement_snapshots.values.select { |statement| statement["one_time"] }
-      return if one_time.empty?
+    def lock_statement_identities!(manifest)
+      StatementIdentityLock.acquire_for_actor!(actor_reference)
 
-      identities = one_time.map do |statement|
+      identities = @frozen_statement_snapshots.values.map do |statement|
         StatementState.identity_for(
           policy_key: policy.key,
           statement_key: statement["key"],
@@ -268,7 +264,8 @@ module Clickwrap
 
       identities.sort_by { |identity| identity.fetch(:identity_digest) }.each do |identity|
         StatementIdentityLock.acquire!(identity.fetch(:identity_digest))
-        verify_one_time_statement_is_available!(StatementState.find_by(identity), manifest)
+        statement = @frozen_statement_snapshots.fetch(identity.fetch(:statement_key).to_s)
+        verify_one_time_statement_is_available!(StatementState.find_by(identity), manifest) if statement["one_time"]
       end
     end
 
@@ -416,8 +413,10 @@ module Clickwrap
     # it does not tell us what the host method meant, and guessing would put a
     # claim in a receipt that nobody made.
     def record_protected_outcome!(event)
-      statement = policy.statements.find(&:record_protected_outcome_with)
-      return unless statement && subject
+      return unless @protected_action && @record_protected_outcome
+
+      statement = policy.protected_outcome_statement
+      return unless statement
 
       frozen = @frozen_statement_snapshots.fetch(statement.key)
       unless frozen["protected_outcome_version"] == statement.protected_outcome_version
@@ -426,10 +425,8 @@ module Clickwrap
               "Re-render it against the current policy revision."
       end
 
-      outcome = statement.record_protected_outcome_with.call(subject)
-      return if outcome.nil?
-
-      event.update_columns(protected_outcome: outcome.deep_stringify_keys)
+      outcome = statement.record_protected_outcome_with.call(@protected_action_result)
+      event.update_columns(protected_outcome: ProtectedOutcome.validate!(outcome))
     end
 
     def update_projections!(event)
@@ -489,12 +486,7 @@ module Clickwrap
     def attribution_method
       @attribution_method ||
         if actor.nil? && @prospective_actor
-          # Attribution stays honest about which act this was: creating the
-          # record is `account_registration`; a public form that matched an
-          # already-existing record (a lead-capture or newsletter form finding
-          # its row by typed email) is `public_form` — an unauthenticated
-          # submission named this actor, no account was created by it.
-          @prospective_actor.persisted? ? "public_form" : "account_registration"
+          "account_registration"
         elsif actor.is_a?(SystemActor) then "system_process"
         elsif actor.is_a?(AnonymousActor) then "anonymous_identifier"
         elsif authentication_context[:method].present? then "authenticated_session"

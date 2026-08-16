@@ -72,7 +72,8 @@ module Clickwrap
         receipt = Capture.new(
           policy: policy,
           **capture_options,
-          consume_one_time_authorizations: false
+          consume_one_time_authorizations: false,
+          record_protected_outcome: false
         ).capture_and! do |pending|
           action = create_pending_action!(pending)
         end

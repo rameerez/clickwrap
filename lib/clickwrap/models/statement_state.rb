@@ -13,9 +13,9 @@ module Clickwrap
   # That separation lets this row be mutable, indexed, and fast without those
   # properties leaking into the evidence record.
   #
-  # The unique index on identity is doing real work: it is what stops two
-  # concurrent submits from producing two live grants, or two usable
-  # authorizations for the same actor and subject.
+  # The unique index guarantees one projection row per identity. Portable
+  # StatementIdentityLock rows serialize writers; the unique index alone would
+  # not stop two immutable capture events or decide which one is current.
   class StatementState < ApplicationRecord
     self.table_name = "clickwrap_statement_states"
 

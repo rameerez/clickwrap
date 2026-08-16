@@ -36,22 +36,22 @@ module Clickwrap
       def apply!(event)
         return event unless INITIAL_EVENT_TYPES.include?(event.event_type)
 
+        StatementIdentityLock.acquire_for_actor!(event.actor_reference)
+        identities = event.statements.map { |statement| identity_for(event, statement) }
+        identities.sort_by { |identity| identity.fetch(:identity_digest) }.each do |identity|
+          StatementIdentityLock.acquire!(identity.fetch(:identity_digest))
+        end
+
         event.statements.each { |statement| apply_statement!(event, statement) }
       end
 
       def apply_statement!(event, statement)
-        identity = StatementState.identity_for(
-          policy_key: event.policy_key,
-          statement_key: statement.statement_key,
-          actor_reference: event.actor_reference,
-          tenant_key: event.tenant_key,
-          subject_key: event.subject_key,
-          represented_party_reference: event.represented_party_reference
-        )
+        identity = identity_for(event, statement)
 
         loop do
           return StatementState.transaction(requires_new: true) do
             state = StatementState.find_or_initialize_by(identity)
+            return state if candidate_is_not_newer?(state, event, statement)
 
             # A previous grant for the same identity is superseded rather
             # than overwritten. The projection moves on; the event that
@@ -70,7 +70,7 @@ module Clickwrap
               current_event_id: event.id,
               root_event_id: event.root_event_id || event.id,
               policy_revision_id: event.policy_revision_id,
-              effective_at: statement.valid_from || event.recorded_at_by_server,
+              effective_at: effective_at_for(event, statement),
               expires_at: statement.expires_at,
               one_time: statement.one_time,
               document_version_ids: document_version_ids_for(event, statement)
@@ -91,7 +91,17 @@ module Clickwrap
       def transition!(state, to:, event:, at: nil)
         at ||= Clickwrap.now
 
-        attributes = { state: to.to_s, current_event_id: event.id, current_action: event_action_for(to) }
+        StatementIdentityLock.acquire_for_actor!(state.actor_reference)
+        StatementIdentityLock.acquire!(state.identity_digest)
+        state = StatementState.lock.find(state.id)
+        return state if event_is_not_newer?(state, event, effective_at: at)
+
+        attributes = {
+          state: to.to_s,
+          current_event_id: event.id,
+          current_action: event_action_for(to),
+          effective_at: at
+        }
 
         case to.to_s
         when "withdrawn" then attributes[:withdrawn_at] = at
@@ -104,21 +114,12 @@ module Clickwrap
         state.update!(attributes)
       end
 
-      # Expires everything whose validity has run out. This is a convenience for
-      # reporting and for keeping the projection tidy; verification does not
-      # depend on it having run, because expiry is evaluated live against the
-      # clock rather than trusted from a column a job may not have reached yet.
-      def expire_due!(at: Clickwrap.now)
-        StatementState.due_for_expiry(at).find_each do |state|
-          state.update!(state: "expired")
-        end
-      end
-
       # Rebuilds the projection for one actor from retained event payloads.
       # Refuses before deleting anything when an existing state depends on a
       # disposed root whose statement identity can no longer be reconstructed.
       def rebuild_for!(actor_reference:)
         StatementState.transaction do
+          StatementIdentityLock.acquire_for_actor!(actor_reference)
           existing_states = StatementState.for_actor(actor_reference).lock.to_a
           ensure_rebuildable!(existing_states, actor_reference)
           StatementState.for_actor(actor_reference).delete_all
@@ -132,6 +133,44 @@ module Clickwrap
       end
 
       private
+
+      def identity_for(event, statement)
+        StatementState.identity_for(
+          policy_key: event.policy_key,
+          statement_key: statement.statement_key,
+          actor_reference: event.actor_reference,
+          tenant_key: event.tenant_key,
+          subject_key: event.subject_key,
+          represented_party_reference: event.represented_party_reference
+        )
+      end
+
+      def effective_at_for(event, statement)
+        statement.valid_from || event.occurred_at || event.recorded_at_by_server
+      end
+
+      # Imports are commonly appended years after the act they describe. They
+      # remain in history, but an older effective act must never resurrect a
+      # grant that was withdrawn or superseded later. Server-recorded order and
+      # durable sequence are deterministic tie-breakers only when effective
+      # times are equal; they do not rewrite when the source says the act
+      # happened.
+      def candidate_is_not_newer?(state, event, statement)
+        return false unless state.persisted?
+
+        event_is_not_newer?(state, event, effective_at: effective_at_for(event, statement))
+      end
+
+      def event_is_not_newer?(state, event, effective_at:)
+        current_event = state.current_event
+        return false unless current_event
+        return true if current_event.id.to_s == event.id.to_s
+
+        candidate = [effective_at, event.recorded_at_by_server, event.recording_sequence.to_i, event.id.to_s]
+        current = [state.effective_at, current_event.recorded_at_by_server,
+                   current_event.recording_sequence.to_i, current_event.id.to_s]
+        (candidate <=> current) <= 0
+      end
 
       def ensure_rebuildable!(states, actor_reference)
         root_ids = states.map(&:root_event_id).compact.uniq
@@ -200,7 +239,7 @@ module Clickwrap
         # one, so the previous expiry never quietly survives.
         return unless statement.action == "renewed"
 
-        state.effective_at = event.recorded_at_by_server
+        state.effective_at = effective_at_for(event, statement)
         state.withdrawn_at = nil
         state.expires_at = statement.expires_at
       end

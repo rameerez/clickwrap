@@ -202,6 +202,44 @@ class FormBuilderTest < ActionView::TestCase
     assert_equal "Create account", Clickwrap::PresentationManifest.from_token(presentation_token).submit_button_text
   end
 
+  test "clickwrap_submit reuses the split presentation wording without a second string" do
+    render inline: <<~ERB
+      <%= form_with url: "/signup", method: :post do |form| %>
+        <%= form.clickwrap_fields :signup, actor: @user, submit_button_text: "Create account" %>
+        <%= form.clickwrap_submit class: "button" %>
+      <% end %>
+    ERB
+
+    assert_select "input[type=submit][value='Create account'].button", count: 1
+    assert_equal "Create account", Clickwrap::PresentationManifest.from_token(presentation_token).submit_button_text
+  end
+
+  test "ordinary form submit refuses wording that differs from the split presentation" do
+    error = assert_raises(ActionView::Template::Error) do
+      render inline: <<~ERB
+        <%= form_with url: "/signup", method: :post do |form| %>
+          <%= form.clickwrap_fields :signup, actor: @user, submit_button_text: "Create account" %>
+          <%= form.submit "Register" %>
+        <% end %>
+      ERB
+    end
+
+    assert_match(/records "Create account".*rendered "Register"/, error.message)
+    assert_match(/form\.clickwrap_submit/, error.message)
+  end
+
+  test "the manifest binds the exact immutable document paths rendered by the form" do
+    render_clickwrap(:signup, submit: "Create account")
+
+    manifest_paths = Clickwrap::PresentationManifest.from_token(presentation_token).statements.flat_map do |statement|
+      Array(statement["documents"]).map { |document| document["path"] }
+    end
+    rendered_paths = css_select("a.clickwrap-documents__link").map { |link| link["href"] }
+
+    assert_equal rendered_paths, manifest_paths
+    assert(manifest_paths.all? { |path| path.match?(%r{/documents/\d+\z}) })
+  end
+
   test "form.clickwrap refuses to guess the call to action" do
     # The manifest records the words the person was offered, so there is nothing
     # sensible to infer here and inferring would put a wrong string in evidence.

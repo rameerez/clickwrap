@@ -178,7 +178,10 @@ class CaptureTest < ActiveSupport::TestCase
     # the block returned without raising, not what the host method meant.
     assert_equal "submitted", outcome["action"]
     assert_equal withdrawal.to_gid.to_s, outcome["reference"]
-    assert_equal withdrawal.evidence_fingerprint, outcome["fingerprint"]
+    assert_equal "submitted", outcome["state"]
+    assert_equal withdrawal.amount_cents, outcome.dig("facts", "amount_in_cents")
+    assert_equal withdrawal.covered_ride_ids, outcome.dig("facts", "covered_ride_ids")
+    assert Clickwrap::Digest.well_formed?(outcome["fingerprint"])
   end
 
   # --- Idempotency and replay -------------------------------------------------
@@ -192,11 +195,17 @@ class CaptureTest < ActiveSupport::TestCase
 
     first = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user,
                                                               subject: withdrawal,
-                                                              submission: submission) { runs += 1 }
+                                                              submission: submission) do
+      runs += 1
+      withdrawal
+    end
 
     second = Clickwrap.capture_and!(:withdrawal_authorization, actor: @user,
                                                                subject: withdrawal,
-                                                               submission: submission) { runs += 1 }
+                                                               submission: submission) do
+      runs += 1
+      withdrawal
+    end
 
     assert_equal first.event_id, second.event_id
     assert_equal 1, runs, "the protected action must not run a second time"

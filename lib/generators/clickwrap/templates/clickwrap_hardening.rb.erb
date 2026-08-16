@@ -243,7 +243,7 @@ class ClickwrapDatabaseHardening < ActiveRecord::Migration<%= migration_version 
   end
 
   def postgresql?
-    connection.adapter_name.downcase.include?("postgresql")
+    connection.adapter_name.to_s.downcase.match?(/postgres|postgis/)
   end
 
   def say_unsupported_adapter

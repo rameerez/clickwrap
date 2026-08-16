@@ -133,9 +133,32 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/does not claim that decision was correct/, error.message)
 
     Clickwrap.configure do |config|
-      config.trusted_proxy_configuration_digest = Clickwrap::Digest.digest("reviewed proxy configuration")
+      config.trusted_proxy_configuration_digest =
+        Clickwrap.trusted_proxy_configuration_digest_for([IPAddr.new("10.0.0.0/8")])
     end
     assert Clickwrap.config.validate!
+  end
+
+  test "trusted proxy provenance digests the effective rules rather than prose" do
+    first = Clickwrap.trusted_proxy_configuration_digest_for(
+      [IPAddr.new("10.0.0.0/8"), /\A192\.0\.2\./]
+    )
+    reordered = Clickwrap.trusted_proxy_configuration_digest_for(
+      [/\A192\.0\.2\./, IPAddr.new("10.0.0.0/8")]
+    )
+    changed = Clickwrap.trusted_proxy_configuration_digest_for(
+      [IPAddr.new("10.0.0.0/16"), /\A192\.0\.2\./]
+    )
+
+    assert Clickwrap::Digest.well_formed?(first)
+    assert_equal first, reordered, "proxy rule order is not semantically meaningful"
+    assert_not_equal first, changed
+  end
+
+  test "the Rails helper digests configured proxies or the actual Rails defaults" do
+    digest = Clickwrap.trusted_proxy_configuration_digest_for_rails_application(Rails.application)
+
+    assert Clickwrap::Digest.well_formed?(digest)
   end
 
   test "an adapter that does not implement its contract is refused by method name" do

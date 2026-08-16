@@ -93,6 +93,120 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     end
   end
 
+  test "a late historical import cannot reactivate consent withdrawn after it occurred" do
+    grant = capture_clickwrap(
+      :marketing_preferences,
+      actor: @user,
+      answers: { product_updates: "1" }
+    )
+    withdrawal = Clickwrap.withdraw!(
+      :product_updates,
+      actor: @user,
+      because: "The user withdrew this purpose"
+    )
+
+    imported = Clickwrap.import_legacy!(
+      :marketing_preferences,
+      actor: @user,
+      occurred_at: 2.years.ago,
+      statements: [:product_updates],
+      source: "legacy_b2b_leads.marketing_accepted_at",
+      because: "Imported a historical marketing flag"
+    )
+
+    assert imported.imported?
+    refute @user.clickwraps.consented_to?(:product_updates)
+    state = @user.clickwraps.consent(:product_updates)
+    assert_equal "withdrawn", state.state
+    assert_equal withdrawal.id, state.current_event_id
+
+    Clickwrap::CurrentState.rebuild_for!(actor_reference: @user.clickwrap_actor_reference)
+    state = @user.clickwraps.consent(:product_updates)
+    assert_equal "withdrawn", state.state
+    assert_equal withdrawal.id, state.current_event_id
+    assert Clickwrap::Event.exists?(grant.event_id)
+    assert Clickwrap::Event.exists?(imported.event_id)
+  end
+
+  test "legacy mappings never masquerade as the currently loaded policy revision" do
+    imported = Clickwrap.import_legacy!(
+      :signup,
+      actor: @user,
+      occurred_at: 2.years.ago,
+      source: "users.accepted_terms_at",
+      because: "Imported historical signup evidence"
+    )
+
+    assert @user.clickwraps.current_for?(:signup)
+    result = Clickwrap.verify(:signup, actor: @user, require_current_revision: true)
+    assert_equal :stale_policy_revision, result.error
+    refute_equal Clickwrap.policy!(:signup).revision,
+                 imported.event.policy_revision.revision_digest
+    assert_equal "legacy_import_mapping",
+                 imported.event.policy_revision.compiled_snapshot.fetch("revision_kind")
+  end
+
+  test "legacy evidence can be retained without authorizing current processing" do
+    imported = Clickwrap.import_legacy!(
+      :marketing_preferences,
+      actor: @user,
+      occurred_at: 2.years.ago,
+      statements: [:product_updates],
+      source: "legacy_required_bundled_checkbox",
+      counts_as_current: false,
+      because: "Retained for provenance; not used as current optional marketing permission"
+    )
+
+    assert imported.imported?
+    refute imported.counts_as_current
+    assert_equal false, imported.event.provider_verification.fetch("counts_as_current")
+    refute @user.clickwraps.consented_to?(:product_updates)
+    assert_nil @user.clickwraps.consent(:product_updates)
+  end
+
+  test "legacy import idempotency covers mapping provenance and current-state posture" do
+    common = {
+      actor: @user,
+      occurred_at: 2.years.ago.change(usec: 0),
+      statements: [:product_updates],
+      because: "Imported historical marketing evidence"
+    }
+
+    first = Clickwrap.import_legacy!(
+      :marketing_preferences,
+      **common,
+      source: "legacy_source_a",
+      unknown: [:presentation],
+      counts_as_current: false
+    )
+    corrected = Clickwrap.import_legacy!(
+      :marketing_preferences,
+      **common,
+      source: "legacy_source_b",
+      unknown: %i[presentation assertion],
+      counts_as_current: true
+    )
+
+    refute_equal first.idempotency_key, corrected.idempotency_key
+    refute_equal first.event_id, corrected.event_id
+  end
+
+  test "recorded_after uses the durable database sequence rather than ULID ordering" do
+    travel_to Time.utc(2026, 8, 16, 12, 0, 0), with_usec: true do
+      capture_clickwrap(:signup, actor: @user)
+      capture_clickwrap(:current_terms, actor: @user)
+    end
+
+    signup = Clickwrap.verify(:signup, actor: @user)
+    current_terms = Clickwrap.verify(:current_terms, actor: @user)
+    signup_event = Clickwrap::Event.find(signup.event_id)
+    current_terms_event = Clickwrap::Event.find(current_terms.event_id)
+
+    assert_operator current_terms_event.recording_sequence, :>, signup_event.recording_sequence
+    assert current_terms.recorded_after?(signup)
+    refute signup.recorded_after?(current_terms)
+  end
+
   # --- Import::ExternalReceipt ------------------------------------------------
 
   test "import_external_receipt! is idempotent on the provider event id" do
@@ -147,6 +261,8 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_equal "stripe", action.provider_name
     assert_includes action.idempotency_key, action.event_id
     assert_equal "capture", action.event.event_type
+    assert_nil action.event.protected_outcome,
+               "a pending provider call must not be recorded as a completed local outcome"
 
     action.record_provider_success_and_consume!({ "id" => "pi_1" })
     assert_equal "succeeded", action.reload.state

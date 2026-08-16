@@ -179,6 +179,7 @@ class SecurityTest < ActiveSupport::TestCase
       Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                         submission: submission_for(presentation, answers)) do
         counter += 1
+        withdrawal
       end
     end
 
@@ -199,19 +200,33 @@ class SecurityTest < ActiveSupport::TestCase
     Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                       submission: submission_for(first, answers)) do
       counter += 1
+      withdrawal
     end
 
     error = assert_raises(Clickwrap::OneTimeAuthorizationConflict) do
       Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                         submission: submission_for(second, answers)) do
         counter += 1
+        withdrawal
       end
     end
 
     assert_match(/render a new presentation/i, error.message)
     assert_equal 1, counter
     assert_equal 1, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
-    assert_equal 1, Clickwrap::StatementIdentityLock.count
+    expected_lock_digests = [
+      Clickwrap::StatementIdentityLock.actor_state_scope_for(@user.clickwrap_actor_reference),
+      *Clickwrap::StatementState.for_actor(@user.clickwrap_actor_reference)
+                                .for_policy("withdrawal_authorization")
+                                .pluck(:identity_digest)
+    ].uniq
+    recorded_lock_digests = Clickwrap::StatementIdentityLock.where(identity_digest: expected_lock_digests)
+                                                            .pluck(:identity_digest)
+
+    assert_equal 1 + Clickwrap.policy!(:withdrawal_authorization).statements.size,
+                 expected_lock_digests.size
+    assert_empty expected_lock_digests - recorded_lock_digests,
+                 "the actor-wide lock and every affected statement projection need coordination rows"
   end
 
   test "a new presentation after terminal state can create a deliberate new authorization" do
@@ -220,12 +235,12 @@ class SecurityTest < ActiveSupport::TestCase
 
     first = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
     Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                      submission: submission_for(first, answers)) { nil }
+                                                      submission: submission_for(first, answers)) { withdrawal }
 
     travel 1.second do
       second = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
       Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                        submission: submission_for(second, answers)) { nil }
+                                                        submission: submission_for(second, answers)) { withdrawal }
     end
 
     assert_equal 2, Clickwrap::Event.captures.for_policy("withdrawal_authorization").count
@@ -261,6 +276,7 @@ class SecurityTest < ActiveSupport::TestCase
           Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                             submission: submission_for(presentation, answers)) do
             mutex.synchronize { counter += 1 }
+            withdrawal
           end
         rescue Clickwrap::Error
           # One of the two is expected to lose the race and be told so plainly.

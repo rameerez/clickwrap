@@ -37,7 +37,8 @@ module Clickwrap
 
     def initialize(policy:, actor: nil, subject: nil, tenant: nil, locale: nil,
                    submit_button_text: nil, capture_channel: :web_browser,
-                   registration_flow_id: nil, prospective_actor: nil, acting_for: nil)
+                   registration_flow_id: nil, prospective_actor: nil, acting_for: nil,
+                   document_version_path_with: nil)
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
@@ -48,11 +49,19 @@ module Clickwrap
       @capture_channel = capture_channel.to_s
       @registration_flow_id = registration_flow_id
       @acting_for = acting_for
+      @document_version_path_with = document_version_path_with
+
+      return unless @document_version_path_with && !@document_version_path_with.respond_to?(:call)
+
+      raise ArgumentError,
+            "document_version_path_with must respond to call(version), so Clickwrap can bind " \
+            "the exact immutable link target into the presentation."
     end
 
     attr_reader :policy, :actor, :subject, :tenant, :locale, :capture_channel
 
     def present
+      policy.validate_tenant!(tenant)
       validate_actor_binding!
       validate_subject_binding!
       validate_represented_party_binding!
@@ -255,11 +264,25 @@ module Clickwrap
     end
 
     def document_path(version)
-      return nil unless defined?(Clickwrap::Engine)
+      path =
+        if @document_version_path_with
+          @document_version_path_with.call(version)
+        elsif defined?(Clickwrap::Engine)
+          Clickwrap::Engine.routes.url_helpers.document_version_path(version.id)
+        end
 
-      Clickwrap::Engine.routes.url_helpers.document_version_path(version.id)
-    rescue StandardError
-      nil
+      return path.to_s if path.present?
+
+      raise ConfigurationError,
+            "Clickwrap could not build the immutable URL for document version #{version.id}. " \
+            "Present through form.clickwrap or present_clickwrap so the mounted route is known, " \
+            "or pass document_version_path_with: ->(version) { ... }."
+    rescue Clickwrap::Error
+      raise
+    rescue StandardError => error
+      raise ConfigurationError,
+            "Clickwrap could not build the immutable URL for document version #{version.id}: " \
+            "#{error.class}: #{error.message}"
     end
 
     def manifest_fragment(statement)
@@ -300,7 +323,8 @@ module Clickwrap
               "sanitizer_name" => document.sanitizer_name,
               "sanitizer_version" => document.sanitizer_version
             }.compact.presence,
-            "version_id" => document.version_id.to_s
+            "version_id" => document.version_id.to_s,
+            "path" => document.path
           }
         end
       }.compact

@@ -67,5 +67,13 @@ module Clickwrap
 
       value
     end
+
+    # Actor-owned engine screens authorize only after a real actor exists.
+    # Otherwise a host callback such as `current_user == receipt.actor` could
+    # accidentally authorize the `nil == nil` case for imported or unlinked
+    # evidence.
+    def require_clickwrap_actor
+      head :unauthorized unless clickwrap_current_actor
+    end
   end
 end

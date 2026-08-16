@@ -50,6 +50,7 @@ module Clickwrap
         @persist_presentations_because = nil
         @capture_channels = nil
         @locales = nil
+        @tenant_scope = "optional"
         @options = {}
         @authority_rule = nil
         @ip_geolocation_resolver_name = nil
@@ -124,6 +125,18 @@ module Clickwrap
       # legal statement should not fall back to a language nobody chose.
       def only_present_in(*locales)
         @locales = locales.flatten.map(&:to_s)
+      end
+
+      # Declares whether this policy is personal, tenant-bound, or deliberately
+      # usable in either context. The same policy-level decision is applied to
+      # presentation, capture, and verification, so ambient organization state
+      # cannot appear on only one side of a signed submission.
+      #
+      #   tenant_is :not_applicable # personal evidence; ignore ambient tenant
+      #   tenant_is :required       # every call must resolve a tenant
+      #   tenant_is :optional       # either context is deliberate (the default)
+      def tenant_is(scope)
+        @tenant_scope = scope.to_s
       end
 
       # Allow explicitly recorded system exemptions for this policy. Even when
@@ -281,6 +294,7 @@ module Clickwrap
           persist_presentations_because: @persist_presentations_because,
           capture_channels: @capture_channels,
           locales: @locales,
+          tenant_scope: @tenant_scope,
           authority_rule: @authority_rule,
           options: @options
         )

@@ -323,7 +323,9 @@ class LifecycleTest < ActiveSupport::TestCase
     assert later.recorded_after?(earlier.event_id), "a bare event id compares too"
     refute later.recorded_after?(Clickwrap.verify(:signup, actor: create_user)),
            "nothing about a missing act is after anything"
-    assert first.event_id < second.event_id, "the underlying guarantee: ULIDs order by creation"
+    assert_operator Clickwrap::Event.find(second.event_id).recording_sequence, :>,
+                    Clickwrap::Event.find(first.event_id).recording_sequence,
+                    "the database sequence, not either process's ULID generator, owns chronology"
   end
 
   test "every person-caused refusal shares one rescuable family with a user-facing sentence" do
@@ -355,5 +357,45 @@ class LifecycleTest < ActiveSupport::TestCase
     assert withdrawal.clickwrap_receipt.verify.success?
     assert_nil create_withdrawal(user: @user).clickwrap_receipt,
                "a pre-gem row answers nil rather than raising"
+  end
+
+  test "has_clickwrap_evidence refuses a link belonging to another act" do
+    withdrawal = create_withdrawal(user: @user)
+    other = create_withdrawal(user: @user)
+    receipt = capture_clickwrap(:withdrawal_authorization, actor: @user, subject: other,
+                                                           answers: withdrawal_answers)
+
+    withdrawal.clickwrap_event_id = receipt.event_id
+
+    assert_not withdrawal.valid?
+    assert_match(/different act/, withdrawal.errors[:clickwrap_event].to_sentence)
+  end
+
+  test "has_clickwrap_evidence never lets a linked event be replaced or removed" do
+    withdrawal = create_withdrawal(user: @user)
+
+    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                     answers: withdrawal_answers) do |pending|
+      withdrawal.clickwrap_event_id = pending.event_id
+      withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
+    end
+
+    withdrawal.clickwrap_event_id = nil
+
+    assert_not withdrawal.valid?
+    assert_match(/cannot be replaced or removed/, withdrawal.errors[:clickwrap_event].to_sentence)
+  end
+
+  test "has_clickwrap_evidence can require the link on every newly created domain row" do
+    required_class = Class.new(Withdrawal) do
+      has_clickwrap_evidence policy: :withdrawal_authorization,
+                             statement: :withdrawal,
+                             actor: :user,
+                             subject: :self
+    end
+    row = required_class.new(user: @user, covered_ride_ids: "9", amount_cents: 500)
+
+    assert_not row.valid?
+    assert_match(/must be linked inside/, row.errors[:clickwrap_event].to_sentence)
   end
 end

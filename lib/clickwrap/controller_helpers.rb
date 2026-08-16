@@ -20,7 +20,9 @@ module Clickwrap
       # API-only host that bundles this gem still loads every controller in
       # production. Guarding keeps such a host bootable; an HTML host gets the
       # helpers. (Same idiom as the sessions gem.)
-      helper_method :clickwrap_errors if respond_to?(:helper_method)
+      if respond_to?(:helper_method)
+        helper_method :clickwrap_errors, :present_clickwrap, :clickwrap_document_version_path_for_presentation
+      end
     end
 
     class_methods do
@@ -90,6 +92,15 @@ module Clickwrap
         end
 
         controller.send(method_name)
+      end
+
+      # Resolves ambient tenant context through the policy that will bind it.
+      # This is shared by form rendering, custom presentations, captures, gates,
+      # and remediation tokens so they cannot disagree about whether a current
+      # organization belongs in this evidence identity.
+      def resolve_current_tenant(controller, policy)
+        candidate = Clickwrap.config.find_current_tenant_with.call(controller)
+        policy.tenant_from_controller(candidate)
       end
 
       # Remembers a declared gate so it can be checked once the route set
@@ -245,14 +256,37 @@ module Clickwrap
 
     # `Clickwrap.capture!` with the two things only a controller has.
     def capture_clickwrap!(policy_key, **options)
-      Clickwrap.capture!(policy_key, **clickwrap_capture_options(options))
+      Clickwrap.capture!(policy_key, **clickwrap_capture_options(policy_key, options))
     end
 
     # `Clickwrap.capture_and!` with the same defaults. The block runs inside the
     # same database transaction as the evidence write: if either fails, neither
     # happened.
     def capture_clickwrap_and!(policy_key, **options, &)
-      Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(options), &)
+      Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(policy_key, options), &)
+    end
+
+    # `Clickwrap.present` with the same actor, tenant, and locale defaults the
+    # controller capture helpers use. Custom views should call this instead of
+    # manually repeating ambient context, which keeps GET and POST binding
+    # identical by construction.
+    def present_clickwrap(policy_key, **options)
+      resolved = options.dup
+      resolved[:actor] = clickwrap_current_actor unless resolved.key?(:actor)
+      resolved[:tenant] = clickwrap_current_tenant(policy_key) unless resolved.key?(:tenant)
+      resolved[:locale] = I18n.locale unless resolved.key?(:locale)
+      resolved[:document_version_path_with] ||= method(:clickwrap_document_version_path_for_presentation)
+
+      Clickwrap.present(policy_key, **resolved)
+    end
+
+    # The exact immutable URL offered beside a Clickwrap control. The mounted
+    # engine route is the default. A host that needs a native-app external-link
+    # wrapper or another reviewed routing layer can override this one method;
+    # the resulting path is both rendered and signed into the presentation
+    # manifest, so the evidence never claims a different target from the link.
+    def clickwrap_document_version_path_for_presentation(version)
+      clickwrap_engine_routes.document_version_path(version.id)
     end
 
     # Signup, for Rails' own authentication generator or any hand-rolled
@@ -273,7 +307,7 @@ module Clickwrap
         prospective_actor: prospective_actor || user,
         http_request: request,
         submission: clickwrap_submission,
-        tenant: Clickwrap.config.find_current_tenant_with.call(self),
+        tenant: clickwrap_current_tenant(policy_key),
         registration_flow_id: clickwrap_registration_flow_id(policy_key),
         **,
         &
@@ -300,7 +334,7 @@ module Clickwrap
         token,
         policy: Clickwrap.policy!(policy_key),
         actor: clickwrap_current_actor,
-        tenant: clickwrap_current_tenant
+        tenant: clickwrap_current_tenant(policy_key)
       )
 
       authorize_clickwrap_remediation_context!(
@@ -342,16 +376,18 @@ module Clickwrap
       @clickwrap_current_actor ||= ControllerHelpers.resolve_current_actor(self)
     end
 
-    def clickwrap_current_tenant
-      Clickwrap.config.find_current_tenant_with.call(self)
+    def clickwrap_current_tenant(policy_key = nil)
+      return Clickwrap.config.find_current_tenant_with.call(self) if policy_key.nil?
+
+      ControllerHelpers.resolve_current_tenant(self, Clickwrap.policy!(policy_key))
     end
 
-    def clickwrap_capture_options(options)
+    def clickwrap_capture_options(policy_key, options)
       resolved = options.dup
       resolved[:http_request] = request unless resolved.key?(:http_request)
       resolved[:submission] = clickwrap_submission unless resolved.key?(:submission)
       resolved[:actor] = clickwrap_current_actor unless resolved.key?(:actor)
-      resolved[:tenant] = clickwrap_current_tenant unless resolved.key?(:tenant)
+      resolved[:tenant] = clickwrap_current_tenant(policy_key) unless resolved.key?(:tenant)
       resolved[:authentication_context] = clickwrap_authentication_context unless
         resolved.key?(:authentication_context)
       resolved
@@ -394,7 +430,7 @@ module Clickwrap
 
       subject = resolve_clickwrap_gate_value(subject_with)
       represented_party = resolve_clickwrap_gate_value(acting_for_with)
-      tenant = clickwrap_current_tenant
+      tenant = clickwrap_current_tenant(policy_key)
 
       return if Clickwrap.current?(policy_key, actor: actor, tenant: tenant, subject: subject,
                                                acting_for: represented_party)

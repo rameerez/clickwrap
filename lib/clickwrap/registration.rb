@@ -35,20 +35,26 @@ module Clickwrap
       # transaction. Devise's own `create` action remains the implementation of
       # the flow; Clickwrap decorates only the resource's one `save` call.
       def clickwraps_registration_with(policy_key, **options)
+        after_save = options.delete(:after_account_is_saved_inside_transaction)
+        unless after_save.nil? || after_save.is_a?(Symbol) || after_save.is_a?(String) ||
+               after_save.respond_to?(:call)
+          raise DefinitionError,
+                "`after_account_is_saved_inside_transaction:` must name a controller method " \
+                "or be callable. It receives `account:` and `pending_receipt:`."
+        end
+
         prepend Clickwrap::Registration::DeviseAdapter
 
         self.clickwrap_registration_policy = policy_key
         self.clickwrap_registration_options = options
+        self.clickwrap_after_registration_account_is_saved = after_save
       end
     end
 
     # The primitive both adapters compose. A host with its own registration
-    # service can call this directly and get the same guarantees. Public forms
-    # that find or create their record by a typed identifier (lead capture,
-    # newsletter signup) pass `actor_may_already_exist: true`.
+    # service can call this directly and get the same guarantees.
     def self.perform(policy_key, prospective_actor:, http_request: nil, submission: nil,
-                     tenant: nil, locale: nil, registration_flow_id: nil,
-                     actor_may_already_exist: false, &block)
+                     tenant: nil, locale: nil, registration_flow_id: nil, &block)
       raise ArgumentError, "register_with_clickwrap needs a block that persists the account" unless block
 
       Clickwrap.register!(
@@ -59,7 +65,6 @@ module Clickwrap
         tenant: tenant,
         locale: locale,
         registration_flow_id: registration_flow_id,
-        actor_may_already_exist: actor_may_already_exist,
         &block
       )
     end
@@ -75,6 +80,9 @@ module Clickwrap
       prepended do
         class_attribute :clickwrap_registration_policy, instance_writer: false
         class_attribute :clickwrap_registration_options, instance_writer: false, default: {}
+        class_attribute :clickwrap_after_registration_account_is_saved,
+                        instance_writer: false,
+                        default: nil
       end
 
       private
@@ -143,7 +151,11 @@ module Clickwrap
           tenant: clickwrap_current_tenant,
           registration_flow_id: clickwrap_registration_flow_id(clickwrap_registration_policy),
           **clickwrap_registration_options
-        ) { original_save.call }
+        ) do |pending_receipt|
+          saved = original_save.call
+          run_after_registration_account_is_saved(resource, pending_receipt) if saved && resource.persisted?
+          saved
+        end
 
         clear_clickwrap_registration_flow_when_committed(result, clickwrap_registration_policy)
 
@@ -172,6 +184,18 @@ module Clickwrap
 
       def clickwrap_current_tenant
         Clickwrap.config.find_current_tenant_with.call(self)
+      end
+
+      def run_after_registration_account_is_saved(account, pending_receipt)
+        callback = clickwrap_after_registration_account_is_saved
+        return if callback.nil?
+
+        arguments = { account: account, pending_receipt: pending_receipt }
+        if callback.respond_to?(:call)
+          callback.call(**arguments)
+        else
+          __send__(callback, **arguments)
+        end
       end
     end
   end

@@ -57,6 +57,40 @@ module Clickwrap
       find_by!(policy_key: policy.key, revision_digest: policy.revision)
     end
 
+    # Freezes the semantics of a legacy mapping without pretending the old act
+    # used the policy revision loaded today. The snapshot names only what the
+    # importer actually knows: source, mapped statements, known facts, and
+    # unknown facts. It intentionally cannot match `policy.revision`, so
+    # `require_current_revision: true` always asks for a modern presentation.
+    def self.freeze_legacy_import_for(policy, source:, statements:, known:, unknown:)
+      snapshot = {
+        "schema" => Clickwrap::CANONICAL_SCHEMA_VERSION,
+        "policy" => policy.key,
+        "revision_kind" => "legacy_import_mapping",
+        "source" => source.presence,
+        "statements" => statements.map { |statement| { "key" => statement.key, "kind" => statement.kind } },
+        "known" => known,
+        "unknown" => unknown,
+        "retention_class" => policy.retention_class_key
+      }.compact
+      digest = Digest.digest_canonical(snapshot)
+      existing = find_by(policy_key: policy.key, revision_digest: digest)
+      return existing if existing
+
+      create!(
+        policy_key: policy.key,
+        revision_digest: digest,
+        compiled_snapshot: snapshot,
+        retention_class_key: policy.retention_class_key,
+        canonical_schema_version: Clickwrap::CANONICAL_SCHEMA_VERSION,
+        gem_version: Clickwrap::VERSION,
+        compiled_at: Clickwrap.now,
+        created_at: Clickwrap.now
+      )
+    rescue ActiveRecord::RecordNotUnique
+      find_by!(policy_key: policy.key, revision_digest: digest)
+    end
+
     # True when the currently loaded policy compiles to this same revision. A
     # false is not an error — it means the policy has been edited since, which
     # is exactly why the snapshot is here.

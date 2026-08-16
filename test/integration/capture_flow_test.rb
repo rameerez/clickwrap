@@ -65,6 +65,26 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_clickwrap_receipt_verifies event.receipt
   end
 
+  test "a personal policy ignores ambient organization context on both render and submit" do
+    organization = create_organization
+    login_as @user, organization: organization
+
+    get "/legal/policies/current_terms"
+    manifest = Clickwrap::PresentationManifest.from_token(presentation_token)
+    assert_equal "", manifest.tenant_key
+
+    post "/legal/policies/current_terms", params: {
+      clickwrap_submission: {
+        presentation_token: presentation_token,
+        answers: { terms: "1" }
+      }
+    }
+
+    assert_redirected_to "/legal/"
+    assert Clickwrap.current?(:current_terms, actor: @user)
+    assert_nil Clickwrap::Event.for_policy(:current_terms).last.tenant_key
+  end
+
   test "clickwrap_submission_params_from reads the rendered form back like a browser would" do
     login_as @user
     get "/legal/policies/signup"
@@ -188,6 +208,16 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   test "the standalone capture screen answers an unauthenticated request without crashing" do
     get "/legal/policies/signup"
 
+    assert_response :unauthorized
+  end
+
+  test "receipt and consent-withdrawal screens require a real current actor" do
+    receipt = capture_clickwrap(:signup, actor: @user)
+
+    get "/legal/receipts/#{receipt.event_id}"
+    assert_response :unauthorized
+
+    get "/legal/consents/product_updates/withdrawal"
     assert_response :unauthorized
   end
 

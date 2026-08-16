@@ -25,6 +25,8 @@ class FinePrintImportTest < ActiveSupport::TestCase
     Clickwrap::EventDocument.delete_all
     Clickwrap::StatementState.delete_all
     Clickwrap::Event.delete_all
+    Clickwrap::StatementIdentityLock.delete_all
+    Clickwrap::RecordingSequence.delete_all
     User.delete_all
   end
 

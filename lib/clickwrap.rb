@@ -12,6 +12,8 @@ require_relative "clickwrap/canonical_json"
 require_relative "clickwrap/digest"
 require_relative "clickwrap/identifier"
 require_relative "clickwrap/reference"
+require_relative "clickwrap/protected_outcome"
+require_relative "clickwrap/trusted_proxy_configuration"
 require_relative "clickwrap/reviewed_text"
 require_relative "clickwrap/authority"
 require_relative "clickwrap/integrations/organizations_authority"
@@ -207,23 +209,38 @@ module Clickwrap
     # and its evidence commit together. The receipt records account-registration
     # attribution rather than pretending someone was already authenticated.
     #
-    # A public form that finds or creates its record by a typed identifier (a
-    # lead-capture or newsletter form) passes `actor_may_already_exist: true`:
-    # the same flow then also accepts a prospective actor that turned out to
-    # already have a row, and the receipt records `public_form` attribution for
-    # that case — no account was created by the act, and the evidence says so.
+    # A prospective actor must be new. A public form's typed email address is
+    # not proof that its visitor controls an existing account or lead row. Use
+    # a distinct pending-request record, confirm the email address, and only
+    # then capture for the verified actor through the ordinary authenticated
+    # path.
     def register!(policy_key, prospective_actor:, subject: nil, tenant: nil, http_request: nil,
                   submission: nil, answers: nil, locale: nil, capture_channel: nil,
                   acting_for: nil, authentication_context: nil, idempotency_key: nil,
-                  registration_flow_id: nil, actor_may_already_exist: false, &)
+                  registration_flow_id: nil, &)
       Capture.new(
         policy: policy!(policy_key), actor: nil, prospective_actor: prospective_actor,
         subject: subject, tenant: tenant, http_request: http_request, submission: submission,
         answers: answers, locale: locale, capture_channel: capture_channel,
         acting_for: acting_for, authentication_context: authentication_context,
-        idempotency_key: idempotency_key, registration_flow_id: registration_flow_id,
-        actor_may_already_exist: actor_may_already_exist
+        idempotency_key: idempotency_key, registration_flow_id: registration_flow_id
       ).register!(&)
+    end
+
+    # Produces the strict, canonical result snapshot consumed by
+    # `record_protected_outcome_with`. Keeping this construction in the gem
+    # prevents every host from inventing a subtly different hash contract.
+    def protected_outcome(...) = ProtectedOutcome.build(...)
+
+    # Digest the effective proxy rules rather than a prose description of
+    # them. The Rails-specific helper includes Rails' actual defaults when the
+    # application has not overridden `action_dispatch.trusted_proxies`.
+    def trusted_proxy_configuration_digest_for(trusted_proxies)
+      TrustedProxyConfiguration.digest_for(trusted_proxies)
+    end
+
+    def trusted_proxy_configuration_digest_for_rails_application(application = Rails.application)
+      TrustedProxyConfiguration.digest_for_rails_application(application)
     end
 
     def submission_from(params, ...) = Submission.from_params(params, ...)

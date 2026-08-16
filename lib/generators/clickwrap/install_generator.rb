@@ -19,7 +19,8 @@ module Clickwrap
     #
     # Second, it refuses to guess. The actor class is inferred only when it is
     # unambiguous, legal text is never invented, and no purpose, retention
-    # period, trusted-proxy digest, or resolver is written on the host's behalf.
+    # period or resolver is written on the host's behalf. Proxy provenance is
+    # derived from the effective Rails rules themselves rather than invented.
     # An incomplete personal-data choice stops the generator before it writes a
     # file.
     #
@@ -504,7 +505,6 @@ module Clickwrap
         ask_about_ip_addresses
         ask_about_browser_user_agents
         ask_about_ip_geolocation
-        ask_about_trusted_proxy_configuration
         ask_about_ip_geolocation_resolver
       end
 
@@ -636,16 +636,6 @@ module Clickwrap
         say "  Clickwrap does not invent a period. Enter the positive number your application"
         say "  has reviewed; a blank or zero answer stops generation before files are written."
         ask("  Days:").to_s.strip.to_i
-      end
-
-      def ask_about_trusted_proxy_configuration
-        return unless records_ip_derived_request_evidence?
-        return unless options[:trusted_proxy_configuration_digest].nil?
-
-        say "\n  What is the prefixed SHA-2 digest of the trusted-proxy configuration you reviewed?"
-        say "  Clickwrap stores it beside IP-derived evidence so a later reader can identify"
-        say "  the proxy decision in force. It does not claim the configuration was correct."
-        answers[:trusted_proxy_configuration_digest] = ask("  Digest (sha256:...):").to_s.strip
       end
 
       def ask_about_ip_geolocation_resolver
@@ -813,15 +803,14 @@ module Clickwrap
 
       def validate_trusted_proxy_configuration!
         digest = trusted_proxy_configuration_digest
-        return if digest.nil? && !records_ip_derived_request_evidence?
-        return if digest && Clickwrap::Digest.well_formed?(digest)
+        return if digest.nil?
+        return if Clickwrap::Digest.well_formed?(digest)
 
         raise Thor::Error,
-              "Recording an IP address or deriving IP geolocation requires " \
-              "--trusted-proxy-configuration-digest with a complete prefixed SHA-2 digest " \
+              "--trusted-proxy-configuration-digest must be a complete prefixed SHA-2 digest " \
               "(for example sha256: followed by 64 lowercase hexadecimal characters). " \
-              "Review the deployment's proxy topology, digest that exact decision, and try " \
-              "again. No files were written."
+              "Omit it to derive provenance from Rails' effective trusted-proxy rules, or " \
+              "supply the reviewed digest and try again. No files were written."
       end
 
       def validate_ip_geolocation_resolver_class_name!

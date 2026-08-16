@@ -61,7 +61,6 @@ module Clickwrap
         locale: locale,
         capture_channel: capture_channel
       )
-
       clickwrap_render_fields(
         presentation,
         submit: { text: text, options: button_options },
@@ -74,16 +73,12 @@ module Clickwrap
     # helper cannot reach:
     #
     #   <%= form.clickwrap_fields :signup, submit_button_text: "Create account" %>
-    #   <%= form.submit "Create account" %>
+    #   <%= form.clickwrap_submit %>
     #
-    # Yes, the text is written twice, and yes, that is on purpose. The manifest
-    # records the call to action the person was offered, so that string has to
-    # be declared somewhere; when the button is rendered elsewhere, declaring it
-    # here is what keeps the evidence contract visible in the code review rather
-    # than implied. The test and development linters compare the declared text
-    # with the rendered submit control and report a mismatch. `form.clickwrap`
-    # remains the preferred call precisely because it makes that whole class of
-    # drift impossible.
+    # The manifest records the call to action the person was offered, so the
+    # wording is declared here. `form.clickwrap_submit` reuses it without a
+    # second string. An ordinary `form.submit "Create account"` is supported too,
+    # but Clickwrap verifies that it says exactly what the manifest says.
     def clickwrap_fields(policy_key, submit_button_text:, actor: NOT_GIVEN, subject: nil,
                          tenant: NOT_GIVEN, acting_for: nil, locale: nil, capture_channel: nil, errors: nil,
                          **html_options)
@@ -98,6 +93,7 @@ module Clickwrap
         locale: locale,
         capture_channel: capture_channel
       )
+      @clickwrap_expected_submit_button_text = presentation.submit_button_text
 
       clickwrap_render_fields(
         presentation,
@@ -105,6 +101,36 @@ module Clickwrap
         errors: errors,
         html_options: html_options
       )
+    end
+
+    # The DRY split-form action. `clickwrap_fields` already declared and signed
+    # the exact wording, so this helper renders that same wording without asking
+    # the host to repeat it:
+    #
+    #   <%= form.clickwrap_fields :signup, submit_button_text: "Create account" %>
+    #   <%= form.clickwrap_submit class: "button" %>
+    #
+    # Ordinary `form.submit "Create account"` remains supported and is checked
+    # below. This helper simply removes the second string and therefore removes
+    # the possibility of drift by construction.
+    def clickwrap_submit(**options)
+      unless @clickwrap_expected_submit_button_text
+        raise ConfigurationError,
+              "form.clickwrap_submit needs form.clickwrap_fields earlier in the same form. " \
+              "The fields declare the exact call to action that Clickwrap signs into evidence."
+      end
+
+      submit(@clickwrap_expected_submit_button_text, options)
+    end
+
+    # When a split integration uses Rails' ordinary form.submit, compare the
+    # button Rails actually rendered with the words already signed into the
+    # presentation. This is an evidence invariant, not a heuristic, so drift is
+    # refused in every environment instead of being left as a development log.
+    def submit(value = nil, options = {})
+      html = super
+      clickwrap_verify_split_submit_button!(html) if @clickwrap_expected_submit_button_text
+      html
     end
 
     private
@@ -125,10 +151,17 @@ module Clickwrap
         actor: actor.equal?(NOT_GIVEN) ? clickwrap_actor_from_view_context : actor,
         subject: subject,
         acting_for: acting_for,
-        tenant: tenant.equal?(NOT_GIVEN) ? clickwrap_tenant_from_view_context : tenant,
+        tenant: tenant.equal?(NOT_GIVEN) ? clickwrap_tenant_from_view_context(policy_key) : tenant,
         locale: locale || clickwrap_locale_from_view_context,
         submit_button_text: submit_button_text
       }
+      controller = @template.try(:controller)
+      if controller.respond_to?(:clickwrap_document_version_path_for_presentation, true)
+        options[:document_version_path_with] =
+          ->(version) { controller.send(:clickwrap_document_version_path_for_presentation, version) }
+      elsif @template.respond_to?(:clickwrap_document_version_path)
+        options[:document_version_path_with] = ->(version) { @template.clickwrap_document_version_path(version) }
+      end
       options[:capture_channel] = capture_channel if capture_channel
 
       if options[:actor].nil? && @object.respond_to?(:new_record?) && @object.new_record?
@@ -194,6 +227,21 @@ module Clickwrap
       end
     end
 
+    def clickwrap_verify_split_submit_button!(html)
+      control = Loofah.fragment(html.to_s).css("input[type='submit'], button[type='submit'], button:not([type])").first
+      actual = control&.name == "input" ? control["value"] : control&.text
+      expected = @clickwrap_expected_submit_button_text
+
+      unless actual == expected
+        raise ConfigurationError,
+              "The Clickwrap presentation records #{expected.inspect} as the submit button text, " \
+              "but form.submit rendered #{actual.inspect}. Use the same exact words, or call " \
+              "form.clickwrap_submit so the signed wording is the only source of truth."
+      end
+
+      @clickwrap_expected_submit_button_text = nil
+    end
+
     # The signed-in actor, resolved through the host's configured controller
     # method, exactly as the rest of the gem resolves it. A form that has no
     # actor yet (signup) passes `actor: nil` explicitly and gets a
@@ -205,11 +253,11 @@ module Clickwrap
       @template.send(method_name)
     end
 
-    def clickwrap_tenant_from_view_context
+    def clickwrap_tenant_from_view_context(policy_key)
       controller = @template.try(:controller)
       return nil if controller.nil?
 
-      Clickwrap.config.find_current_tenant_with.call(controller)
+      ControllerHelpers.resolve_current_tenant(controller, Clickwrap.policy!(policy_key))
     end
 
     def clickwrap_locale_from_view_context

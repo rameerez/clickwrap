@@ -143,6 +143,7 @@ module Clickwrap
 
     before_validation :assign_identifier, on: :create
     before_validation :assign_retention_schedule_from_class, on: :create
+    before_create :assign_recording_sequence!
     # Reserve a chain position before INSERTing this event or any autosaved
     # statement/document rows. InnoDB can otherwise deadlock two first writers:
     # each transaction holds evidence-row locks and then both try to create the
@@ -181,7 +182,11 @@ module Clickwrap
     scope :for_subject_key, ->(key) { where(subject_key: key.to_s) }
     scope :on_hold, -> { where(on_legal_hold: true) }
     scope :not_disposed, -> { where(core_event_disposed_at: nil) }
-    scope :chronological, -> { order(:recorded_at_by_server, :id) }
+    # Server timestamps can tie or move backwards, and ULIDs are identifiers,
+    # not an ordering protocol. Every event receives one database-generated
+    # sequence value, which is the durable total order used by projections,
+    # lifecycle exports, and cross-actor `recorded_after?` checks.
+    scope :chronological, -> { order(:recording_sequence) }
 
     scope :due_for_core_disposition, lambda { |at = Clickwrap.now|
       not_disposed.where(on_legal_hold: false).where(retain_core_event_until: ..at)
@@ -236,6 +241,7 @@ module Clickwrap
         "authentication_context" => authentication_context.presence,
         "recorded_at_by_server" => Receipt.format_time(recorded_at_by_server),
         "occurred_at" => Receipt.format_time(occurred_at),
+        "recording_order" => { "database_sequence" => recording_sequence },
         "idempotency_key" => idempotency_key,
         "http_request_id" => http_request_id,
         "http_route_name" => http_route_name,
@@ -597,6 +603,10 @@ module Clickwrap
 
       self.chain_scope = [tenant_key.presence || "global", policy_key].join("/")
       self.previous_event_digest, self.chain_sequence = ChainHead.reserve!(chain_scope: chain_scope)
+    end
+
+    def assign_recording_sequence!
+      self.recording_sequence ||= RecordingSequence.create!.id
     end
 
     def ensure_integrity_was_finalized

@@ -201,11 +201,23 @@ module Clickwrap
     # digest and lets capture reject an old presentation whose executable
     # callback no longer exists under the same meaning.
     def validate_versioned_callbacks!
+      if subject_fingerprint_with && !subject_fingerprint_with.respond_to?(:call)
+        raise DefinitionError,
+              "Statement #{key} gives `subject_fingerprint_with:` a " \
+              "#{subject_fingerprint_with.class}; it must be callable."
+      end
+
       if subject_fingerprint_with && subject_fingerprint_version.to_s.strip.empty?
         raise DefinitionError,
               "Statement #{key} configures `subject_fingerprint_with:` but gives no " \
               "`subject_fingerprint_version:`. Name the callback contract (for example " \
               '"covered-rides-v1") and change that name whenever its behavior changes.'
+      end
+
+      if record_protected_outcome_with && !record_protected_outcome_with.respond_to?(:call)
+        raise DefinitionError,
+              "Statement #{key} gives `record_protected_outcome_with:` a " \
+              "#{record_protected_outcome_with.class}; it must be callable."
       end
 
       return unless record_protected_outcome_with && protected_outcome_version.to_s.strip.empty?

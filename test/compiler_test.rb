@@ -3,6 +3,34 @@
 require "test_helper"
 
 class CompilerTest < ActiveSupport::TestCase
+  test "tenant scope is explicit, frozen into the policy, and validated" do
+    personal = Clickwrap.policy :personal_tenant_contract do
+      tenant_is :not_applicable
+      agree_to :terms
+      retain_with :ordinary_agreement_evidence
+    end
+
+    tenant_bound = Clickwrap.policy :required_tenant_contract do
+      tenant_is :required
+      agree_to :terms
+      retain_with :ordinary_agreement_evidence
+    end
+
+    assert_equal "not_applicable", personal.snapshot.fetch("tenant_scope")
+    assert_nil personal.tenant_from_controller(create_organization)
+    assert_raises(Clickwrap::DefinitionError) { personal.validate_tenant!(create_organization) }
+    assert_raises(Clickwrap::DefinitionError) { tenant_bound.validate_tenant!(nil) }
+
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :ambiguous_tenant_contract do
+        tenant_is :sometimes
+        agree_to :terms
+        retain_with :ordinary_agreement_evidence
+      end
+    end
+    assert_match(/not_applicable.*optional.*required/, error.message)
+  end
+
   test "unknown document, statement, request-evidence, policy, retention, and initializer names are refused" do
     assert_raises(Clickwrap::DefinitionError) do
       Clickwrap.document(:mistyped_document, version: "1", content: "text", media_typo: "text/plain")
@@ -196,5 +224,27 @@ class CompilerTest < ActiveSupport::TestCase
       Clickwrap::Services::ValidatePolicyReferences.validate_remediation_paths!
     end
     assert_match(/no GET route/, error.message)
+  end
+
+  test "one protected action cannot declare two competing outcome recorders" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :two_outcomes_for_one_action do
+        authorize :first_action,
+                  document: :withdrawal_requirements,
+                  statement: "I authorize the first action.",
+                  valid_for: 10.minutes,
+                  protected_outcome_version: "first-v1",
+                  record_protected_outcome_with: ->(result) { result }
+        authorize :second_action,
+                  document: :withdrawal_requirements,
+                  statement: "I authorize the second action.",
+                  valid_for: 10.minutes,
+                  protected_outcome_version: "second-v1",
+                  record_protected_outcome_with: ->(result) { result }
+        retain_with :regulated_evidence
+      end
+    end
+
+    assert_match(/one protected action has one result snapshot/i, error.message)
   end
 end

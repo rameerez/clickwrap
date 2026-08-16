@@ -17,8 +17,7 @@ module Clickwrap
 
       def initialize(policy:, submission:, explicit_answers:, actor_reference:, tenant_key:,
                      subject_key:, subject_fingerprint:, represented_party:,
-                     prospective_actor:, registration_flow_id:, explicit_capture_channel:,
-                     actor_may_already_exist: false)
+                     prospective_actor:, registration_flow_id:, explicit_capture_channel:)
         @policy = policy
         @submission = submission
         @explicit_answers = explicit_answers
@@ -29,7 +28,6 @@ module Clickwrap
         @represented_party = represented_party
         @prospective_actor = prospective_actor
         @registration_flow_id = registration_flow_id
-        @actor_may_already_exist = actor_may_already_exist
         @explicit_capture_channel = explicit_capture_channel
       end
 
@@ -174,15 +172,13 @@ module Clickwrap
 
       def verify_registration_binding!(manifest)
         if @prospective_actor
-          if @prospective_actor.persisted? && !@actor_may_already_exist
+          if @prospective_actor.persisted?
             raise PresentationInvalid,
                   "Registration evidence can only be bound while the account is new — this " \
                   "prospective actor is already persisted. If you meant to capture for a " \
-                  "signed-in person, use capture! with `actor:`. If this is a public form " \
-                  "that finds or creates its record by a typed identifier (a lead-capture " \
-                  "or newsletter form), say so with `actor_may_already_exist: true` — the " \
-                  "receipt then records `public_form` attribution instead of " \
-                  "`account_registration`, because no account was created by the act."
+                  "verified person, use capture! with `actor:`. A typed email address on a " \
+                  "public form is not identity proof: create a separate pending request, " \
+                  "verify control of the address, and only then capture for the existing actor."
           end
 
           unless manifest.registration_flow_id.present? &&
@@ -224,6 +220,7 @@ module Clickwrap
               document["rendered_digest"]
             )
             metadata_matches = version &&
+                               document["path"].present? &&
                                (version.rendered_media_type.presence || version.media_type) ==
                                document["rendered_media_type"] &&
                                version.media_type == document["source_media_type"]

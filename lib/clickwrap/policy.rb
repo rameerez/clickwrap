@@ -21,11 +21,12 @@ module Clickwrap
   class Policy
     attr_reader :key, :statements, :retention_class_key, :request_evidence, :persist_presentations_for,
                 :persist_presentations_because, :capture_channels, :locales, :authority_rule,
-                :options, :snapshot, :revision
+                :tenant_scope, :options, :snapshot, :revision
 
     def initialize(key:, statements:, retention_class_key: nil, request_evidence: nil,
                    persist_presentations_for: nil, persist_presentations_because: nil,
-                   capture_channels: nil, locales: nil, authority_rule: nil, options: {})
+                   capture_channels: nil, locales: nil, tenant_scope: "optional",
+                   authority_rule: nil, options: {})
       @key = key.to_s
       @statements = statements.freeze
       @retention_class_key = retention_class_key&.to_s
@@ -34,6 +35,7 @@ module Clickwrap
       @persist_presentations_because = persist_presentations_because
       @capture_channels = (capture_channels || Vocabulary::CAPTURE_CHANNELS).map(&:to_s).freeze
       @locales = locales&.map(&:to_s)&.freeze
+      @tenant_scope = tenant_scope.to_s
       @authority_rule = authority_rule
       @options = options.freeze
 
@@ -64,6 +66,9 @@ module Clickwrap
     def subject_bound? = statements.any?(&:subject_bound?)
     def consent_statements = statements.select { |statement| statement.kind == "consent" }
     def authorization_statements = statements.select { |statement| statement.kind == "authorization" }
+    def protected_outcome_statements = statements.select(&:record_protected_outcome_with)
+    def protected_outcome_statement = protected_outcome_statements.first
+    def records_protected_outcome? = protected_outcome_statement.present?
 
     def persist_presentations? = !persist_presentations_for.nil?
 
@@ -77,6 +82,39 @@ module Clickwrap
 
     def permits_locale?(locale)
       locales.nil? || locales.include?(locale.to_s)
+    end
+
+    def tenant_not_applicable? = tenant_scope == "not_applicable"
+    def tenant_required? = tenant_scope == "required"
+    def tenant_optional? = tenant_scope == "optional"
+
+    # Resolves ambient controller context according to this policy. Personal
+    # evidence deliberately discards a current organization; tenant-required
+    # evidence fails before rendering if the host cannot supply one.
+    def tenant_from_controller(candidate)
+      return nil if tenant_not_applicable?
+
+      validate_tenant!(candidate)
+      candidate
+    end
+
+    # Direct service callers own their arguments, so an incompatible explicit
+    # value is rejected instead of silently rewritten.
+    def validate_tenant!(tenant)
+      if tenant_not_applicable? && tenant.present?
+        raise DefinitionError,
+              "Policy #{key} says `tenant_is :not_applicable`, but this call supplied a tenant. " \
+              "Remove `tenant:`; personal evidence must not change identity when the actor joins " \
+              "or switches organizations."
+      end
+
+      if tenant_required? && tenant.nil?
+        raise DefinitionError,
+              "Policy #{key} says `tenant_is :required`, but this call supplied no tenant. Pass " \
+              "the server-resolved tenant to presentation, capture, and verification."
+      end
+
+      true
     end
 
     # Delegation, guardianship, service-account action, and impersonation are
@@ -105,6 +143,7 @@ module Clickwrap
         "persist_presentations_because" => persist_presentations_because,
         "capture_channels" => capture_channels,
         "locales" => locales,
+        "tenant_scope" => tenant_scope,
         "permit_exemptions" => permits_exemptions?,
         "permit_acting_for" => permits_acting_for?,
         "represented_party_authority" => authority_rule&.to_snapshot
@@ -114,10 +153,12 @@ module Clickwrap
     def validate!
       validate_statements_present!
       validate_unique_statement_keys!
+      validate_one_protected_outcome_recorder!
       validate_prerequisites!
       validate_retention!
       validate_persisted_presentations!
       validate_capture_channels!
+      validate_tenant_scope!
       validate_authority_rule!
     end
 
@@ -160,6 +201,15 @@ module Clickwrap
       raise DefinitionError,
             "Policy #{key} declares #{duplicates.join(", ")} more than once. Two statements " \
             "with the same key would produce evidence nobody can tell apart."
+    end
+
+    def validate_one_protected_outcome_recorder!
+      return if protected_outcome_statements.length <= 1
+
+      raise DefinitionError,
+            "Policy #{key} configures protected-outcome recorders on " \
+            "#{protected_outcome_statements.map(&:key).join(", ")}. One protected action has one " \
+            "result snapshot; put `record_protected_outcome_with:` on exactly one statement."
     end
 
     # `requires:` says an authorization is only good when named statements were
@@ -219,6 +269,15 @@ module Clickwrap
       raise DefinitionError,
             "Policy #{key} allows unknown capture channels #{unknown.join(", ")}. " \
             "Choose from: #{Vocabulary::CAPTURE_CHANNELS.join(", ")}."
+    end
+
+    def validate_tenant_scope!
+      return if %w[not_applicable optional required].include?(tenant_scope)
+
+      raise DefinitionError,
+            "Policy #{key} says `tenant_is #{tenant_scope.inspect}`. Choose `:not_applicable`, " \
+            "`:optional`, or `:required`; Clickwrap will not guess whether ambient tenant context " \
+            "belongs in an evidence identity."
     end
   end
 end

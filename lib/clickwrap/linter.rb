@@ -110,6 +110,7 @@ module Clickwrap
         text = html.to_s
         findings = []
         findings.concat(submit_ordering_findings(text))
+        findings.concat(submit_button_text_findings(text, presentation)) if presentation
         findings.concat(preselected_control_findings(text))
         findings.concat(rendered_document_link_findings(text, presentation)) if presentation
         findings
@@ -281,20 +282,42 @@ module Clickwrap
       end
 
       def rendered_document_link_findings(html, presentation)
+        rendered_paths = Loofah.fragment(html).css("a[href]").map { |link| link["href"] }
+
         presentation.statements.flat_map do |statement|
           statement.documents.filter_map do |document|
-            next if document.path.present? && html.include?(document.path)
-            next if document.label.present? && html.include?(document.label)
+            next if document.path.present? && rendered_paths.include?(document.path)
 
             Finding.new(
               code: :document_link_missing,
-              explanation: "#{document.key.inspect} is part of #{statement.key.inspect} but no " \
-                           "link to it was rendered, so the document is not reachable from the " \
-                           "page where it is being accepted.",
-              context: { statement: statement.key, document: document.key }
+              explanation: "#{document.key.inspect} is part of #{statement.key.inspect}, but the " \
+                           "exact immutable path signed into the presentation " \
+                           "(#{document.path.inspect}) was not rendered as a link. A matching label " \
+                           "that points somewhere else is not the offered document version.",
+              context: { statement: statement.key, document: document.key, expected_path: document.path }
             )
           end
         end
+      end
+
+      def submit_button_text_findings(html, presentation)
+        expected = presentation.submit_button_text
+        return [] if expected.blank?
+
+        fragment = Loofah.fragment(html)
+        control = fragment.css("input[type='submit'], button[type='submit'], button:not([type])").first
+        return [] unless control
+
+        actual = control.name == "input" ? control["value"] : control.text
+        return [] if actual == expected
+
+        [Finding.new(
+          code: :submit_button_text_differs_from_manifest,
+          explanation: "The presentation records #{expected.inspect} as its call to action, but " \
+                       "the rendered submit control says #{actual.inspect}. Render the action with " \
+                       "form.clickwrap or form.clickwrap_submit so one string supplies both.",
+          context: { expected: expected, actual: actual }
+        )]
       end
 
       # The opening tag the match sits inside, so `checked` on a neighboring

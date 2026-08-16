@@ -45,7 +45,7 @@ module Clickwrap
       # real thing so a migration script reads the same either way.
       Result = Data.define(:status, :policy_key, :actor_reference, :occurred_at,
                            :recorded_at_by_server, :known, :unknown, :statement_keys,
-                           :idempotency_key, :event, :message) do
+                           :counts_as_current, :idempotency_key, :event, :message) do
         def imported? = status == :imported
         def already_imported? = status == :already_imported
         def planned? = status == :planned
@@ -82,7 +82,8 @@ module Clickwrap
 
       def initialize(policy:, actor:, occurred_at:, because:, known: {}, unknown: [],
                      dry_run: false, subject: nil, tenant: nil, statements: nil,
-                     capture_channel: "imported_provider", source: nil)
+                     capture_channel: "imported_provider", source: nil,
+                     counts_as_current: true)
         @policy = policy
         @actor = actor
         @occurred_at = coerce_time(occurred_at)
@@ -95,10 +96,11 @@ module Clickwrap
         @statement_keys = statements&.map(&:to_s)
         @capture_channel = capture_channel.to_s
         @source = source&.to_s
+        @counts_as_current = counts_as_current == true
       end
 
       attr_reader :policy, :actor, :occurred_at, :because, :known, :unknown, :dry_run,
-                  :subject, :tenant, :capture_channel, :source
+                  :subject, :tenant, :capture_channel, :source, :counts_as_current
 
       def import!
         validate!
@@ -135,11 +137,19 @@ module Clickwrap
           "subject" => subject_key,
           "tenant" => tenant_key,
           "occurred_at" => Receipt.format_time(occurred_at),
-          "known" => known
+          "statements" => statements_to_import.map(&:key),
+          "known" => known,
+          "unknown" => unknown,
+          "source" => source,
+          "capture_channel" => capture_channel,
+          "counts_as_current" => counts_as_current,
+          "because" => because
         }
       end
 
       def validate!
+        policy.validate_tenant!(tenant)
+
         if because.strip.empty?
           raise ArgumentError,
                 "Importing legacy evidence needs a `because:` in plain English saying where the " \
@@ -180,7 +190,13 @@ module Clickwrap
 
       def write!
         now = Clickwrap.now
-        revision = PolicyRevision.freeze_for(policy)
+        revision = PolicyRevision.freeze_legacy_import_for(
+          policy,
+          source: source,
+          statements: statements_to_import,
+          known: known,
+          unknown: unknown
+        )
         event = nil
 
         ::ActiveRecord::Base.transaction do
@@ -194,13 +210,14 @@ module Clickwrap
           # of a migration is that `agreed_to?` keeps answering what the old
           # system answered. The projection carries this event's id, so the
           # imported provenance is one join away from every "yes".
-          CurrentState.apply!(event)
+          CurrentState.apply!(event) if counts_as_current
         end
 
         Result.new(
           status: :imported, policy_key: policy.key, actor_reference: actor_reference,
           occurred_at: occurred_at, recorded_at_by_server: now, known: known, unknown: unknown,
-          statement_keys: statements_to_import.map(&:key), idempotency_key: idempotency_key,
+          statement_keys: statements_to_import.map(&:key), counts_as_current: counts_as_current,
+          idempotency_key: idempotency_key,
           event: event,
           message: "Imported #{policy.key} for #{actor_reference} as event #{event.id}. " \
                    "#{unknown_sentence}"
@@ -255,6 +272,7 @@ module Clickwrap
           "occurred_at_source" => Receipt.format_time(occurred_at),
           "known" => known,
           "unknown" => unknown,
+          "counts_as_current" => counts_as_current,
           "not_collected" => %w[presentation_manifest ip_address browser_user_agent ip_geolocation],
           "means" => "Recorded from a pre-existing record in this application or another system. " \
                      "Clickwrap did not present this content and did not observe this action. " \
@@ -367,6 +385,7 @@ module Clickwrap
           status: :already_imported, policy_key: policy.key, actor_reference: actor_reference,
           occurred_at: occurred_at, recorded_at_by_server: event.recorded_at_by_server,
           known: known, unknown: unknown, statement_keys: event.statements.map(&:statement_key),
+          counts_as_current: event.provider_verification.to_h.fetch("counts_as_current", true),
           idempotency_key: idempotency_key, event: event,
           message: "Already imported as event #{event.id}; nothing was written."
         )
@@ -376,7 +395,8 @@ module Clickwrap
         Result.new(
           status: :planned, policy_key: policy.key, actor_reference: actor_reference,
           occurred_at: occurred_at, recorded_at_by_server: nil, known: known, unknown: unknown,
-          statement_keys: statements_to_import.map(&:key), idempotency_key: idempotency_key,
+          statement_keys: statements_to_import.map(&:key), counts_as_current: counts_as_current,
+          idempotency_key: idempotency_key,
           event: nil,
           message: "Would import #{policy.key} for #{actor_reference} " \
                    "(#{statements_to_import.map(&:key).join(", ")}). #{unknown_sentence}".strip

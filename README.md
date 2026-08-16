@@ -168,12 +168,41 @@ The policy compiler rejects incoherent combinations at boot, in full sentences t
 
 `capture_and!` is the gem's signature move. In one supported database transaction it verifies the presentation, appends the evidence event, yields to your domain action, records the outcome, and commits both together:
 
+Declare the exact post-action snapshot once. The callback receives the value
+returned by the protected-action block—not the pre-action subject—and
+`Clickwrap.protected_outcome` owns the stable reference and canonical
+fingerprint:
+
+```ruby
+Clickwrap.policy :withdrawal_authorization do
+  authorize :withdrawal,
+    one_time: true,
+    valid_for: 10.minutes,
+    protected_outcome_version: "submitted-withdrawal-v1",
+    record_protected_outcome_with: lambda { |withdrawal|
+      Clickwrap.protected_outcome(
+        action: :submitted,
+        record: withdrawal,
+        state: withdrawal.status,
+        facts: {
+          amount_in_cents: withdrawal.amount_cents,
+          currency: withdrawal.currency,
+          destination_reference: withdrawal.destination_reference
+        }
+      )
+    }
+
+  retain_with :regulated_evidence
+end
+```
+
 ```ruby
 def create
   withdrawal = current_user.withdrawals.build(withdrawal_params)
 
   capture_clickwrap_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal) do |pending_receipt|
     withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
+    withdrawal # the exact completed result given to the outcome recorder
   end
 
   redirect_to withdrawal
@@ -190,12 +219,16 @@ bin/rails generate clickwrap:link withdrawals && bin/rails db:migrate
 
 ```ruby
 class Withdrawal < ApplicationRecord
-  has_clickwrap_evidence   # → withdrawal.clickwrap_event, withdrawal.clickwrap_receipt
+  has_clickwrap_evidence policy: :withdrawal_authorization,
+                         statement: :withdrawal,
+                         actor: :user,
+                         subject: :self
 end
 
 capture_clickwrap_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal) do |pending_receipt|
   withdrawal.clickwrap_event_id = pending_receipt.event_id
   withdrawal.save!
+  withdrawal
 end
 
 withdrawal.clickwrap_receipt.verify.success?   # one line, years later
@@ -455,6 +488,28 @@ end
 ```
 
 Both make account activation and its evidence commit together, with a prospective-actor flow that's honest about the fact that no authenticated user exists yet at render time.
+
+During a legacy migration, keep a required dual-write inside that same
+transaction without replacing Devise's controller action:
+
+```ruby
+class Users::RegistrationsController < Devise::RegistrationsController
+  clickwraps_registration_with :signup,
+    after_account_is_saved_inside_transaction: :record_legacy_acceptance!
+
+  private
+
+  def record_legacy_acceptance!(account:, pending_receipt:)
+    account.terms_acceptances.create!(
+      clickwrap_event_id: pending_receipt.event_id,
+      accepted_at: Time.current
+    )
+  end
+end
+```
+
+If that required legacy write fails, the account and Clickwrap evidence roll
+back with it. Remove the hook after parity and cutover are proved.
 
 Everything is server-rendered HTML: full-page requests, Turbo Drive and Frames, no-JavaScript validation, and Hotwire Native all work with the same helper. JSON/API clients use `Clickwrap.present` to get the server-owned manifest and submit answers with the signed token. Views are ejectable with `bin/rails generate clickwrap:views`, or build fully custom UI on `Clickwrap.present` plus the view helpers — `clickwrap_presentation_token_field`, `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and `clickwrap_submit_button` own the envelope name, the control names, and a call to action worded by the signed manifest itself, while you own every class and wrapper around them. The [integrating guide](guides/integrating.md#4-custom-surfaces--the-three-contracts) shows a full custom surface.
 

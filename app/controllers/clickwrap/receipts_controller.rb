@@ -9,7 +9,8 @@ module Clickwrap
   # who may read what, and the conventional initializer says so out loud.
   #
   #   config.authorize_receipt_access_with = lambda do |controller, receipt|
-  #     controller.current_user == receipt.actor || controller.current_user.admin?
+  #     controller.current_user.present? &&
+  #       (controller.current_user == receipt.actor || controller.current_user.admin?)
   #   end
   #
   # Until that is configured the default answers false, so an unconfigured host
@@ -18,6 +19,8 @@ module Clickwrap
   # an outsider that the id they guessed exists, and existence is itself
   # information about someone.
   class ReceiptsController < ApplicationController
+    before_action :require_clickwrap_actor
+
     # An honest page size rather than an unbounded query. A production actor can
     # accumulate years of retained history even when optional annex data is
     # disposed on a separate schedule.

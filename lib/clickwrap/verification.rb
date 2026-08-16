@@ -34,11 +34,10 @@ module Clickwrap
         new(success: true, policy_key: policy_key, event_id: event_id, details: details)
       end
 
-      # Whether this result's evidence was recorded after another's. Event ids
-      # are ULIDs, so lexicographic order IS creation order — this makes that
-      # guarantee API instead of folklore, for multi-step flows that require
-      # one act to follow another ("the declaration must come after the
-      # acknowledgments"):
+      # Whether this result's evidence was durably sequenced after another's.
+      # Every event reserves a database-assigned sequence, so this remains true
+      # across actors, app processes, and same-microsecond writes; ULID lexical
+      # order is deliberately not used as chronology.
       #
       #   declaration.recorded_after?(acknowledgments)  # => true or false
       #
@@ -47,8 +46,15 @@ module Clickwrap
       # guard should: nothing about a missing act is "after" anything.
       def recorded_after?(other)
         other_event_id = other.respond_to?(:event_id) ? other.event_id : other
+        return false unless event_id.present? && other_event_id.present?
 
-        event_id.present? && other_event_id.present? && event_id.to_s > other_event_id.to_s
+        current, previous = Event.where(id: [event_id, other_event_id]).index_by(&:id).values_at(
+          event_id.to_s, other_event_id.to_s
+        )
+        return false unless current && previous
+        return false if current.recording_sequence.blank? || previous.recording_sequence.blank?
+
+        current.recording_sequence > previous.recording_sequence
       end
 
       # One predicate per stable error symbol, generated from the vocabulary so
@@ -136,6 +142,8 @@ module Clickwrap
         policy = Clickwrap.policies[policy_key.to_s]
 
         return Result.failure(:unknown_policy, policy_key: policy_key.to_s) unless policy
+
+        policy.validate_tenant!(tenant)
 
         actor_reference = reference_for(actor)
 

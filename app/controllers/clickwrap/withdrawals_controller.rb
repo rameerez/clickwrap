@@ -15,6 +15,7 @@ module Clickwrap
   # changed their mind. Only consent is withdrawable — withdrawing future
   # processing does not rewrite a past agreement or a factual declaration.
   class WithdrawalsController < ApplicationController
+    before_action :require_clickwrap_actor
     before_action :find_purpose
     before_action :remember_return_destination
 

@@ -346,10 +346,18 @@ So "we record IP addresses" is not one decision. It is four:
    assert on the address Clickwrap stored. The gem's own suite has fixtures for exactly this;
    yours should too, because the failure is silent.
 4. **Record which configuration was in force.** Set
-   `config.trusted_proxy_configuration_digest` to a digest of your reviewed setup. It does not
-   make the setup correct. It lets a reader three years from now tell whether an address came
-   through a path anybody had actually verified — which is the difference between corroborating
-   evidence and a number in a column.
+   `config.trusted_proxy_configuration_digest` from the effective rules themselves:
+
+   ```ruby
+   config.trusted_proxy_configuration_digest =
+     Clickwrap.trusted_proxy_configuration_digest_for_rails_application
+   ```
+
+   This uses `config.action_dispatch.trusted_proxies`, or Rails' actual default rules when the
+   application has not overridden them. A prose description such as "our Cloudflare setup" is
+   not configuration provenance. The digest still does not make the setup correct. It lets a
+   later reader identify which rules were in force — the difference between corroborating
+   evidence and a number with no recorded collection context.
 
 If you replace the reader, you own that decision, and the receipt says so: any host-assigned
 lambda is labeled `host_configured_reader` rather than `rails_request_remote_ip`, even when the

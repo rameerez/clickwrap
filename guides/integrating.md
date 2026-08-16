@@ -116,43 +116,50 @@ attribution) keeps working untouched. Account and evidence commit together;
 refusals (stale token, missing box) re-render the form with localized
 sentences, inline beside the control.
 
-**Migrating from a legacy checkbox?** Keep the old mechanism dual-writing
+**Migrating from a legacy checkbox?** Keep every required legacy evidence write
 *inside* the new transaction during the transition:
 
 ```ruby
-def build_resource(hash = {})
-  super
-  # The clickwrap presentation replaced the legacy virtual checkbox; keep the
-  # legacy validation and stamps firing until the parity review retires them.
-  resource.terms_accepted = "1" if params.key?(:clickwrap_submission)
+clickwraps_registration_with :signup,
+  after_account_is_saved_inside_transaction: :record_legacy_acceptance!
+
+private
+
+def record_legacy_acceptance!(account:, pending_receipt:)
+  account.terms_acceptances.create!(
+    accepted_at: Time.current,
+    clickwrap_event_id: pending_receipt.event_id
+  )
 end
 ```
 
-and assert the parity contract in one test: clickwrap predicates true AND
-legacy columns stamped.
+The callback runs after the account save but before the shared transaction can
+commit. Do not rescue it: a required legacy-write failure must roll the account
+and Clickwrap event back together. Assert the parity contract in one test:
+Clickwrap predicates true AND legacy evidence stamped.
 
-**Public forms with no account** — a lead magnet, a newsletter, a waitlist —
-are the same primitive with two twists: the row is found-or-created by typed
-email, and marketing consent is optional:
+**Public forms with no authenticated account** — a lead magnet, newsletter, or
+waitlist — must not find an existing actor by the visitor's typed email and bind
+evidence to it. Knowing an address is not proof of controlling it. Use a
+separate pending-request row, send a single-purpose confirmation link, and only
+capture consent for the real actor after that link verifies mailbox control:
 
 ```ruby
-lead = Lead.for_email(lead_params[:email])   # find_by email, or new
-register_with_clickwrap(:lead_capture, prospective_actor: lead,
-                        actor_may_already_exist: true) do
-  lead.save!
-end
+request = LeadSignupRequest.create!(email: params[:email])
+LeadSignupMailer.confirm(request).deliver_later
+
+# After the signed, expiring email link resolves the request:
+lead = Lead.find_or_create_by!(email: request.email)
+capture_clickwrap!(:marketing_preferences, actor: lead)
 ```
 
-`actor_may_already_exist: true` is the explicit opt-in for the upsert shape:
-a returning visitor's submission binds to the existing row with honest
-`public_form` attribution (no account was created by the act) instead of
-being refused. Model the marketing box as `consent_to ..., optional: true` —
-an unticked box records that the option was offered and not taken, silence
-being neither refusal nor grant — and give it a `withdrawal_path:` pointing
-at a real GET route (the compiler checks) where a signed token from your
-email footers can withdraw it: `Clickwrap.withdraw!(:your_purpose, actor:
-lead, because: "...")`, which tells "already withdrawn" apart from "never
-granted" so pressing the link twice stays friendly.
+The initial mail may deliver the requested transactional item. It must not
+silently turn the form submit into marketing permission. Model the later box as
+`consent_to ..., optional: true`: an unticked box records that the option was
+offered and not taken, silence being neither refusal nor grant. Give it a real
+`withdrawal_path:` where a signed email-footer token can call
+`Clickwrap.withdraw!`; repeated withdrawal remains friendly and distinct from
+"never granted".
 
 ## 4. Custom surfaces — the three contracts
 
@@ -223,12 +230,16 @@ bin/rails generate clickwrap:link payouts_withdrawals && bin/rails db:migrate
 
 ```ruby
 class Payouts::Withdrawal < ApplicationRecord
-  has_clickwrap_evidence
+  has_clickwrap_evidence policy: :withdrawal_authorization,
+                         statement: :withdrawal,
+                         actor: :user,
+                         subject: :self
 end
 
 capture_clickwrap_and!(:withdrawal_authorization) do |pending_receipt|
   withdrawal.clickwrap_event_id = pending_receipt.event_id
   withdrawal.save!
+  withdrawal
 end
 
 withdrawal.clickwrap_receipt.verify.success?   # years later, one line
@@ -257,7 +268,8 @@ exact operation":
     Clickwrap.capture_and!(:withdrawal_authorization, actor: user, subject: user,
                            http_request: request, submission: submission,
                            authentication_context: { "method" => "password_reauthentication", ... }) do |pending_receipt|
-      debit_and_create_row!(pending_receipt.event_id)
+      withdrawal = debit_and_create_row!(pending_receipt.event_id)
+      withdrawal # exact result passed to `record_protected_outcome_with`
     end
   end
   ```
@@ -324,9 +336,17 @@ policy.record_ip_address(
 ```
 
 Enabling any IP field requires `config.trusted_proxy_configuration_digest` —
-a digest of a sentence describing your *reviewed* proxy path (behind
-Cloudflare via cloudflare-rails, for instance), so old evidence records which
-configuration was in force. Sharing the same fields across several policies?
+a digest of the effective proxy rules, not a prose label, so old evidence
+records which configuration was in force. Generate it from Rails' configured
+rules (or Rails' actual defaults when none were overridden):
+
+```ruby
+config.trusted_proxy_configuration_digest =
+  Clickwrap.trusted_proxy_configuration_digest_for_rails_application
+```
+
+This records configuration provenance; it does not prove the rules were
+correctly deployed or reviewed. Sharing the same fields across several policies?
 A plain Ruby lambda in `config/clickwrap.rb` calling
 `policy.record_ip_address(...)` is exactly right — each policy still names
 its own enablement.

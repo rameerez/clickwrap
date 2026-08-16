@@ -177,15 +177,18 @@ module Clickwrap
 
         authorizations.map do |authorization|
           ::ActiveRecord::Base.transaction do
+            identity = StatementState.identity_for(
+              policy_key: source_event.policy_key,
+              statement_key: authorization.statement_key,
+              actor_reference: source_event.actor_reference,
+              tenant_key: source_event.tenant_key,
+              subject_key: source_event.subject_key,
+              represented_party_reference: source_event.represented_party_reference
+            )
+            StatementIdentityLock.acquire_for_actor!(source_event.actor_reference)
+            StatementIdentityLock.acquire!(identity.fetch(:identity_digest))
             state = StatementState.lock.find_by(
-              StatementState.identity_for(
-                policy_key: source_event.policy_key,
-                statement_key: authorization.statement_key,
-                actor_reference: source_event.actor_reference,
-                tenant_key: source_event.tenant_key,
-                subject_key: source_event.subject_key,
-                represented_party_reference: source_event.represented_party_reference
-              )
+              identity
             )
 
             if authorization_was_consumed?(source_event, authorization.statement_key)
@@ -348,9 +351,26 @@ module Clickwrap
       def transition!(state, to:, event_type:, action:, because:, actor:, http_request: nil,
                       predecessor: nil, at: nil)
         at ||= Clickwrap.now
-        origin = Event.find_by(id: predecessor_id(predecessor) || state.current_event_id)
+        original_current_event_id = state.current_event_id
 
         ::ActiveRecord::Base.transaction do
+          StatementIdentityLock.acquire_for_actor!(state.actor_reference)
+          StatementIdentityLock.acquire!(state.identity_digest)
+          state = StatementState.lock.find(state.id)
+
+          if state.current_event_id.to_s != original_current_event_id.to_s
+            if event_type == "withdrawal" && state.state == "withdrawn"
+              raise AlreadyWithdrawnError,
+                    "Consent for #{state.purpose_key.inspect} was already withdrawn. Nothing " \
+                    "further was recorded."
+            end
+
+            raise LifecycleError,
+                  "#{state.statement_key} changed while this lifecycle action was waiting. " \
+                  "Reload its current evidence and try the intended transition again."
+          end
+
+          origin = Event.find_by(id: predecessor_id(predecessor) || state.current_event_id)
           event = append_lifecycle_event!(
             event: origin,
             event_type: event_type,

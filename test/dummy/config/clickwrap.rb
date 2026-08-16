@@ -74,6 +74,7 @@ end
 # this one. The application decides which change is material; Clickwrap enforces
 # the rule it is given.
 Clickwrap.policy :current_terms do
+  tenant_is :not_applicable
   agree_to :terms, require_current_version: true
 
   retain_with :ordinary_agreement_evidence
@@ -140,11 +141,15 @@ Clickwrap.policy :withdrawal_authorization do
             requires: %i[withdrawal_requirements ride_exclusivity],
             protected_outcome_version: "submitted-withdrawal-v1",
             record_protected_outcome_with: lambda { |withdrawal|
-              {
+              Clickwrap.protected_outcome(
                 action: :submitted,
-                reference: withdrawal.to_gid.to_s,
-                fingerprint: withdrawal.evidence_fingerprint
-              }
+                record: withdrawal,
+                state: withdrawal.state,
+                facts: {
+                  amount_in_cents: withdrawal.amount_cents,
+                  covered_ride_ids: withdrawal.covered_ride_ids
+                }
+              )
             }
 
   retain_with :regulated_evidence

@@ -175,9 +175,26 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       assert_match(reason_setting, initializer)
       assert_match(/"Investigate disputed agreement submissions\."/, initializer)
       assert_match(/config\.delete_recorded_ip_addresses_after = 90\.days/, initializer)
-      assert_match(/config\.trusted_proxy_configuration_digest = #{Regexp.escape(proxy_digest.inspect)}/, initializer)
+      assert_match(
+        /config\.trusted_proxy_configuration_digest\s*=\s*#{Regexp.escape(proxy_digest.inspect)}/,
+        initializer
+      )
       assert_match(/config\.reason_for_recording_browser_user_agents_by_default = nil/, initializer)
       assert_match(/config\.ip_geolocation_resolver = nil/, initializer)
+    end
+  end
+
+  test "IP evidence derives proxy provenance from Rails when no digest override is supplied" do
+    run_generator [
+      "--skip-questions",
+      "--record-ip-addresses-by-default",
+      "--reason-for-recording-ip-addresses-by-default=Investigate disputed agreement submissions.",
+      "--delete-recorded-ip-addresses-after-days=90"
+    ]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/Clickwrap\.trusted_proxy_configuration_digest_for_rails_application/, initializer)
+      refute_match(/digest of a sentence/i, initializer)
     end
   end
 
@@ -192,7 +209,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_empty Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb"))
   end
 
-  test "IP geolocation requires explicit uncertainty, proxy provenance, and a resolver class" do
+  test "IP geolocation requires explicit uncertainty and a resolver class" do
     common = [
       "--skip-questions",
       "--record-ip-geolocation-latitude-and-longitude-by-default",
@@ -214,7 +231,10 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_file "config/initializers/clickwrap.rb" do |initializer|
       assert_match(/config\.record_ip_geolocation_latitude_and_longitude_by_default = true/, initializer)
       assert_match(/config\.record_ip_geolocation_accuracy_radius_in_kilometers_by_default = true/, initializer)
-      assert_match(/config\.trusted_proxy_configuration_digest = #{Regexp.escape(proxy_digest.inspect)}/, initializer)
+      assert_match(
+        /config\.trusted_proxy_configuration_digest\s*=\s*#{Regexp.escape(proxy_digest.inspect)}/,
+        initializer
+      )
       assert_match(/config\.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver\.new/, initializer)
     end
   end

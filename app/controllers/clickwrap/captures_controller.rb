@@ -51,10 +51,6 @@ module Clickwrap
       head :not_found
     end
 
-    def require_clickwrap_actor
-      head :unauthorized unless clickwrap_current_actor
-    end
-
     # Where to go after the policy is satisfied. The gate puts this in the URL
     # and the form carries it through the POST; both are browser-supplied, so
     # both go through the same safety check and fall back to this engine's own
@@ -86,10 +82,8 @@ module Clickwrap
     end
 
     def present_policy
-      Clickwrap.present(
+      present_clickwrap(
         @policy.key,
-        actor: clickwrap_current_actor,
-        tenant: clickwrap_current_tenant,
         subject: @remediation_subject,
         acting_for: @remediation_represented_party,
         locale: I18n.locale,

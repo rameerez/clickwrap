@@ -230,6 +230,17 @@ class HardeningGeneratorTest < Rails::Generators::TestCase
     assert_match(/the models refuse update and destroy/, output)
   end
 
+  test "the PostGIS adapter is treated as PostgreSQL by both generator and migration" do
+    stub_adapter! "postgis"
+
+    output = run_generator %w[--database]
+
+    assert_match(/PostgreSQL detected/, output)
+    assert_migration "db/migrate/clickwrap_database_hardening.rb" do |migration|
+      assert_match(%r{match\?\(/postgres\|postgis/\)}, migration)
+    end
+  end
+
   test "on MySQL the generator says which control does work there instead of pretending" do
     stub_adapter! "mysql2"
 

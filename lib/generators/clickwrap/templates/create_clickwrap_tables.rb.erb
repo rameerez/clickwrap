@@ -170,15 +170,21 @@ class CreateClickwrapTables < ActiveRecord::Migration<%= migration_version %>
     # disposition. There is no generic `updated_at` column that could obscure
     # which named transition occurred.
     #
-    # The primary key is a ULID string rather than a sequence, so it sorts in
-    # creation order, appears verbatim in receipts, and does not leak a count of
-    # unrelated records.
+    # The public primary key is a ULID string: it appears verbatim in receipts
+    # without exposing a count of unrelated records. Chronology never relies on
+    # lexical ULID order. A separate database-generated sequence gives committed
+    # events one durable total order across actors and application processes.
     #
     # `recorded_at_by_server` is the evidentiary time, and it is named for
     # exactly what it is: the application server's clock. `occurred_at` is
     # separate and only set by importers, which know when something happened but
     # were not there for it.
     # ---------------------------------------------------------------------------
+    # Intentionally only the generated primary key: this row is ordering
+    # machinery, not a second event timestamp or a second evidence payload.
+    create_table :clickwrap_recording_sequences do |_t|
+    end
+
     create_table :clickwrap_events, id: :string, limit: 26 do |t|
       t.string :event_type, null: false
       t.string :policy_key, null: false
@@ -219,6 +225,7 @@ class CreateClickwrapTables < ActiveRecord::Migration<%= migration_version %>
 
       t.datetime :recorded_at_by_server, precision: 6, null: false
       t.datetime :occurred_at, precision: 6
+      t.bigint :recording_sequence, null: false
 
       t.string :idempotency_key
       t.string :http_request_id
@@ -276,6 +283,10 @@ class CreateClickwrapTables < ActiveRecord::Migration<%= migration_version %>
               unique: true, name: "index_clickwrap_events_on_idempotency_key"
     add_index :clickwrap_events, [ :chain_scope, :chain_sequence ],
               unique: true, name: "index_clickwrap_events_on_chain_position"
+    add_index :clickwrap_events, :recording_sequence,
+              unique: true, name: "index_clickwrap_events_on_recording_order"
+    add_foreign_key :clickwrap_events, :clickwrap_recording_sequences,
+                    column: :recording_sequence
     add_index :clickwrap_events, [ :actor_reference, :policy_key ],
               name: "index_clickwrap_events_on_actor_and_policy"
     add_index :clickwrap_events, [ :subject_type, :subject_id ],

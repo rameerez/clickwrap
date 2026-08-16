@@ -74,7 +74,7 @@ class LinterTest < ActionView::TestCase
   end
 
   test "it flags a document that is part of a statement but was never linked in the markup" do
-    presentation = present_clickwrap(:signup, actor: @user)
+    presentation = present_clickwrap(:signup, actor: @user, submit_button_text: "Create account")
 
     findings = Clickwrap::Linter.review_rendered_html(
       %(<input type="checkbox" name="clickwrap_submission[answers][terms]">), presentation: presentation
@@ -84,6 +84,34 @@ class LinterTest < ActionView::TestCase
 
     assert_equal [:document_link_missing], findings.map(&:code).uniq
     assert_equal %w[terms privacy_notice], unreachable
+  end
+
+  test "a matching document label does not hide a link to the wrong version" do
+    presentation = present_clickwrap(:signup, actor: @user)
+    terms = presentation.statement(:terms).documents.first
+
+    findings = Clickwrap::Linter.review_rendered_html(
+      %(<a href="/mutable/terms">#{terms.label}</a>), presentation: presentation
+    )
+
+    finding = findings.find { |candidate| candidate.context[:document] == "terms" }
+    assert_equal :document_link_missing, finding.code
+    assert_equal terms.path, finding.context[:expected_path]
+  end
+
+  test "it flags call-to-action wording that differs from the signed manifest" do
+    presentation = present_clickwrap(:signup, actor: @user, submit_button_text: "Create account")
+    html = <<~HTML
+      <input type="checkbox" name="clickwrap_submission[answers][terms]">
+      <button type="submit">Register</button>
+    HTML
+
+    finding = Clickwrap::Linter.review_rendered_html(html, presentation: presentation).find do |candidate|
+      candidate.code == :submit_button_text_differs_from_manifest
+    end
+
+    assert_equal "Create account", finding.context[:expected]
+    assert_equal "Register", finding.context[:actual]
   end
 
   test "it flags a submit control that appears before the clickwrap block" do
@@ -170,7 +198,7 @@ class LinterTest < ActionView::TestCase
     assert_equal %i[
       consent_control_preselected consent_statement_bundles_purposes document_link_missing
       optional_consent_required_for_another_action rendered_manifest_differs_from_policy
-      submit_control_before_clickwrap_block
+      submit_button_text_differs_from_manifest submit_control_before_clickwrap_block
     ], findings.map(&:code).uniq.sort
 
     findings.each do |finding|
@@ -202,7 +230,7 @@ class LinterTest < ActionView::TestCase
   # entry points rather than by instantiating Finding directly — a catalogue built
   # from constructor calls would never notice a new finding somebody added.
   def every_finding_the_linter_can_produce
-    presentation = present_clickwrap(:signup, actor: @user)
+    presentation = present_clickwrap(:signup, actor: @user, submit_button_text: "Create account")
 
     Clickwrap.policy :bundled_and_gated_linter_test do
       consent_to :product_updates,
@@ -225,7 +253,7 @@ class LinterTest < ActionView::TestCase
       *Clickwrap::Linter.review_policy(Clickwrap.policy!(:bundled_and_gated_linter_test)),
       *Clickwrap::Linter.review_presentation(present_clickwrap(:bundled_and_gated_linter_test, actor: @user)),
       *Clickwrap::Linter.review_rendered_html(<<~HTML, presentation: presentation),
-        <button type="submit">Create account</button>
+        <button type="submit">Register</button>
         <input type="checkbox" name="clickwrap_submission[answers][terms]" checked>
       HTML
       *Clickwrap::Linter.review_manifest(

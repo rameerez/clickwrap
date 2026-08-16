@@ -95,7 +95,8 @@ module Clickwrap
     # builder, so the one-line happy path works in an ordinary `form_with`.
     initializer "clickwrap.form_builder" do
       ActiveSupport.on_load(:action_view) do
-        ActionView::Helpers::FormBuilder.include(Clickwrap::FormBuilderExtensions)
+        ActionView::Helpers::FormBuilder.prepend(Clickwrap::FormBuilderExtensions) unless
+          ActionView::Helpers::FormBuilder < Clickwrap::FormBuilderExtensions
         # The custom-surface helpers (token field, statement controls, the
         # manifest-worded submit) — available in every view, like the form
         # builder methods above.

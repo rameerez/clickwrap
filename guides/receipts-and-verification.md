@@ -104,10 +104,14 @@ trusting the column it is supposed to be checking.
 
 ### `outcome`, `lifecycle`, `provider`
 
-`outcome` is the protected action's post-commit reference, state, and fingerprint, when the
-policy configured `record_protected_outcome_with`. Without one, the receipt says only that the
-named policy, bound subject, evidence event, and block committed together — Clickwrap does not
-guess what a host method meant.
+`outcome` is the protected action's in-transaction result snapshot when the policy configured
+`record_protected_outcome_with`. The callback receives the block's return value and should use
+`Clickwrap.protected_outcome(action:, record:, facts:, state: nil)`. The resulting reference,
+non-empty canonical facts, and fingerprint over the complete claim are validated before commit;
+a malformed or stale fingerprint rolls the domain action and evidence back together. Without a
+recorder, the receipt says only that the named policy, bound subject, evidence event, and block
+committed together — Clickwrap does not guess what a host method meant. A pending external outbox
+does not claim a completed local outcome; its provider result is appended later.
 
 `lifecycle` carries `root_event_id`, `predecessor_event_id`, and every successor event with its
 type, time, reason, canonical event body, and event digest. This is where a withdrawal,

@@ -53,6 +53,31 @@ class DeviseRegistrationTest < ActiveSupport::TestCase
     end
   end
 
+  class DualWriteRegistrationsController < DeviseLikeRegistrationsController
+    clickwraps_registration_with :signup,
+                                 after_account_is_saved_inside_transaction: :record_legacy_acceptance!
+
+    def record_legacy_acceptance!(account:, pending_receipt:)
+      account.update!(
+        accepted_terms_at: Clickwrap.now,
+        terms_version: pending_receipt.event_id
+      )
+    end
+  end
+
+  class FailingDualWriteRegistrationsController < DeviseLikeRegistrationsController
+    clickwraps_registration_with :signup,
+                                 after_account_is_saved_inside_transaction: :fail_legacy_acceptance!
+
+    def fail_legacy_acceptance!(account:, pending_receipt:)
+      account.update!(
+        accepted_terms_at: Clickwrap.now,
+        terms_version: pending_receipt.event_id
+      )
+      raise "the required legacy write failed"
+    end
+  end
+
   test "the adapter leaves create, its success branch, and its yielded block under Devise's control" do
     controller = controller_for(User.new(email: "devise@example.com", name: "Devise Person"))
 
@@ -189,16 +214,38 @@ class DeviseRegistrationTest < ActiveSupport::TestCase
     assert_no_clickwrap_event :signup
   end
 
+  test "a required legacy dual-write runs inside the account and evidence transaction" do
+    resource = User.new(email: "dual-write@example.com", name: "Dual Write")
+    controller = controller_for(resource, controller_class: DualWriteRegistrationsController)
+
+    controller.create
+
+    account = User.find_by!(email: resource.email)
+    assert account.accepted_terms_at.present?
+    assert_equal Clickwrap::Event.captures.for_policy("signup").last.id, account.terms_version
+    assert_clickwrap_current :signup, actor: account
+  end
+
+  test "a failed required dual-write rolls the account and evidence back together" do
+    resource = User.new(email: "dual-write-failure@example.com", name: "Dual Write Failure")
+    controller = controller_for(resource, controller_class: FailingDualWriteRegistrationsController)
+
+    assert_raises(RuntimeError) { controller.create }
+
+    refute User.exists?(email: resource.email)
+    assert_no_clickwrap_event :signup
+  end
+
   private
 
-  def controller_for(resource)
+  def controller_for(resource, controller_class: DeviseLikeRegistrationsController)
     presentation = present_clickwrap(
       :signup,
       actor: nil,
       prospective_actor: resource,
       registration_flow_id: "devise-registration-flow"
     )
-    DeviseLikeRegistrationsController.new.tap do |controller|
+    controller_class.new.tap do |controller|
       controller.resource_to_build = resource
       controller.submitted_clickwrap = submission_for(
         presentation,
