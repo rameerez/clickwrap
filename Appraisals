@@ -6,17 +6,29 @@
 # request-evidence annex must all work here.
 appraise "rails-7.1" do
   gem "rails", "~> 7.1.0"
+  # The :markdown renderer autodetects a host Markdown library; kramdown is
+  # the pure-Ruby one the test lane exercises (same as the main Gemfile).
+  gem "kramdown", require: false
 end
 
 appraise "rails-7.2" do
   gem "rails", "~> 7.2.0"
+  # The :markdown renderer autodetects a host Markdown library; kramdown is
+  # the pure-Ruby one the test lane exercises (same as the main Gemfile).
+  gem "kramdown", require: false
 end
 
 appraise "rails-8.0" do
   gem "rails", "~> 8.0.0"
+  # The :markdown renderer autodetects a host Markdown library; kramdown is
+  # the pure-Ruby one the test lane exercises (same as the main Gemfile).
+  gem "kramdown", require: false
 end
 
 # Test the latest Rails version — this is the default/main Gemfile anyway.
 appraise "rails-8.1" do
   gem "rails", "~> 8.1.0"
+  # The :markdown renderer autodetects a host Markdown library; kramdown is
+  # the pure-Ruby one the test lane exercises (same as the main Gemfile).
+  gem "kramdown", require: false
 end

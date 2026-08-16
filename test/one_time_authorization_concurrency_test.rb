@@ -34,6 +34,10 @@ class OneTimeAuthorizationConcurrencyTest < ActiveSupport::TestCase
             submission: submission_for(presentation, answers)
           ) do
             counter_lock.synchronize { counter += 1 }
+            # The block's return value is what record_protected_outcome_with
+            # receives — the policy's hook describes a withdrawal, so return
+            # one, exactly as a real protected action would.
+            Withdrawal.find(withdrawal.id)
           end
           results << :committed
         rescue Clickwrap::OneTimeAuthorizationConflict
