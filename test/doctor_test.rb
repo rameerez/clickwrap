@@ -46,6 +46,29 @@ class DoctorTest < ActiveSupport::TestCase
     assert ok?(findings, /no policy references a document/)
   end
 
+  test "a policy recording only an IP address past its review date is exactly as overdue" do
+    # The review-date check must cover EVERY collected category — an earlier
+    # version was gated on geolocation, so nine IP/user-agent money-path
+    # policies in a real host would have sailed past their review date with a
+    # green doctor.
+    Clickwrap.policy :ip_only_probe do
+      acknowledge :withdrawal_requirements, statement: "I acknowledge the withdrawal requirements."
+
+      record_ip_address(encrypted: true, delete_after: 2.years,
+                        because: "Investigate disputed submissions")
+      review_request_evidence_configuration_on Date.new(2020, 1, 1)
+
+      retain_with :regulated_evidence
+    end
+
+    findings = Clickwrap::Doctor.new.report
+    warning = message_for(findings, /ip_only_probe was due/)
+
+    assert_match(/ip_address/, warning)
+    assert_match(/2020-01-01/, warning)
+    assert_match(/that date has passed/, warning)
+  end
+
   test "a policy recording IP geolocation with no review date is a warning" do
     Clickwrap.policy :geolocation_probe do
       acknowledge :withdrawal_requirements, statement: "I acknowledge the withdrawal requirements."
@@ -58,11 +81,11 @@ class DoctorTest < ActiveSupport::TestCase
     end
 
     findings = Clickwrap::Doctor.new.report
-    warning = message_for(findings, /geolocation_probe records IP geolocation/)
+    warning = message_for(findings, /geolocation_probe records ip_geolocation/)
 
     # A decision nobody revisits is how a temporary measure becomes permanent.
     # The date is the host's to choose; the doctor only notices its absence.
-    assert_match(/country, city without a review date/, warning)
+    assert_match(%r{country/city without a review date}, warning)
     assert_match(/review_request_evidence_configuration_on/, warning)
 
     # Resolver capability mismatches are compiler failures now; the doctor is

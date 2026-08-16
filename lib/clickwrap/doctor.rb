@@ -172,25 +172,38 @@ module Clickwrap
       categories
     end
 
-    # A policy that keeps a person's estimated city with no date on which
-    # somebody looks at that decision again is how a temporary measure becomes
-    # permanent. The date is the host's; the doctor only notices its absence.
+    # A policy that keeps a person's IP address or estimated city with no date
+    # on which somebody looks at that decision again is how a temporary
+    # measure becomes permanent. The date is the host's; the doctor only
+    # notices its absence — for EVERY collected category, not only
+    # geolocation: an IP address past its review date is exactly as overdue
+    # as a city would be.
     def review_date_findings
       Clickwrap.policies.values.filter_map do |policy|
         request_evidence = policy.request_evidence
-        next unless request_evidence.records_ip_geolocation?
+        collected = collected_request_evidence_categories(request_evidence)
+        next if collected.empty?
 
         review_on = request_evidence.review_configuration_on
-        fields = request_evidence.enabled_ip_geolocation_fields.join(", ")
 
         if review_on.nil?
-          warning("#{policy.key} records IP geolocation #{fields} without a review date. Add " \
+          warning("#{policy.key} records #{collected.join(", ")} without a review date. Add " \
                   "`review_request_evidence_configuration_on` so this decision gets looked at again.")
         elsif past?(review_on)
-          warning("#{policy.key} was due to have its IP-geolocation configuration reviewed on " \
-                  "#{review_on}, and that date has passed")
+          warning("#{policy.key} was due to have its request-evidence configuration " \
+                  "(#{collected.join(", ")}) reviewed on #{review_on}, and that date has passed")
         end
       end + default_review_date_findings
+    end
+
+    def collected_request_evidence_categories(request_evidence)
+      categories = []
+      categories << "ip_address" if request_evidence.records_ip_address?
+      categories << "browser_user_agent" if request_evidence.records_browser_user_agent?
+      if request_evidence.records_ip_geolocation?
+        categories << "ip_geolocation #{request_evidence.enabled_ip_geolocation_fields.join("/")}"
+      end
+      categories
     end
 
     def default_review_date_findings

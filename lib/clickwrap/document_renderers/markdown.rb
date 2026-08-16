@@ -25,12 +25,16 @@ module Clickwrap
     #     engine_version: MyMarkdown::VERSION
     #   )
     #
-    # Two facts stay true regardless of engine. A leading YAML front-matter
-    # block (the Jekyll/Sitepress convention) is stripped from the RENDERED
-    # representation only — the source digest still covers the exact file
-    # bytes, front matter included. And every engine's output passes through
-    # the same safe-list sanitizer as the reference renderer, so a Markdown
-    # library's raw-HTML passthrough cannot smuggle markup into an offer.
+    # A leading YAML front-matter block (the Jekyll/Sitepress convention) is
+    # stripped from the RENDERED representation only — the source digest still
+    # covers the exact file bytes, front matter included. Bundled engines'
+    # output always passes through the same safe-list sanitizer as the
+    # reference renderer, so a Markdown library's raw-HTML passthrough cannot
+    # smuggle markup into an offer. A host-supplied `render_markdown_with:`
+    # may additionally pass `sanitize_rendered_html: false` when its own pages
+    # serve the renderer's output verbatim: re-sanitizing reparses the HTML
+    # and changes its bytes, and a stored digest must describe exactly what
+    # readers were shown. The provenance records which choice was made.
     # Non-Markdown documents delegate to the reference renderer unchanged.
     class Markdown
       NAME = "clickwrap_markdown_document_renderer"
@@ -39,7 +43,18 @@ module Clickwrap
       # `---` opens; `---` or `...` closes (both are valid YAML document ends).
       LEADING_YAML_FRONTMATTER = /\A---\s*\n.*?\n(?:---|\.\.\.)\s*(?:\n|\z)/m
 
-      def initialize(render_markdown_with: nil, engine_name: nil, engine_version: nil)
+      def initialize(render_markdown_with: nil, engine_name: nil, engine_version: nil,
+                     sanitize_rendered_html: true)
+        @sanitize_rendered_html = sanitize_rendered_html != false
+
+        if !@sanitize_rendered_html && render_markdown_with.nil?
+          raise ConfigurationError,
+                "sanitize_rendered_html: false is only available with your own " \
+                "render_markdown_with. Clickwrap's bundled engines always sanitize; skipping " \
+                "sanitization is a promise about a rendering pipeline YOU own — that its " \
+                "output is exactly what your own pages already serve to readers."
+        end
+
         if render_markdown_with
           unless render_markdown_with.respond_to?(:call)
             raise ConfigurationError,
@@ -70,14 +85,29 @@ module Clickwrap
         text = utf8_text!(bytes, definition)
         html = @render_markdown.call(text.sub(LEADING_YAML_FRONTMATTER, ""))
 
-        {
-          bytes: DocumentRenderer.sanitize_html(html),
-          media_type: "text/html; charset=utf-8",
-          renderer_name: NAME,
-          renderer_version: "#{VERSION} (#{@engine_name} #{@engine_version})",
-          sanitizer_name: DocumentRenderer::SANITIZER_NAME,
-          sanitizer_version: DocumentRenderer::SANITIZER_VERSION
-        }
+        if @sanitize_rendered_html
+          {
+            bytes: DocumentRenderer.sanitize_html(html),
+            media_type: "text/html; charset=utf-8",
+            renderer_name: NAME,
+            renderer_version: "#{VERSION} (#{@engine_name} #{@engine_version})",
+            sanitizer_name: DocumentRenderer::SANITIZER_NAME,
+            sanitizer_version: DocumentRenderer::SANITIZER_VERSION
+          }
+        else
+          # Byte parity with the host's own pages is the point: re-sanitizing
+          # reparses and re-serializes the HTML, so the stored digest would
+          # describe bytes nobody was ever shown. The provenance says plainly
+          # that no sanitizer ran — the host's rendering pipeline owns safety.
+          {
+            bytes: html.to_s.dup.force_encoding(Encoding::UTF_8),
+            media_type: "text/html; charset=utf-8",
+            renderer_name: NAME,
+            renderer_version: "#{VERSION} (#{@engine_name} #{@engine_version})",
+            sanitizer_name: "none",
+            sanitizer_version: "host_renderer_output_stored_verbatim"
+          }
+        end
       end
 
       private

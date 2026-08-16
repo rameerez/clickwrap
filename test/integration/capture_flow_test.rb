@@ -574,6 +574,28 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_no_clickwrap_event :driver_declaration, actor: @user
   end
 
+  test "a policy recording representative authority cannot be completed on the bare engine screen" do
+    # Without a signed remediation route there is no represented party, so a
+    # standalone completion would write permanent evidence whose statements
+    # assert authority over nobody — orphan evidence that reads as more than
+    # it is.
+    Clickwrap.policy :orphan_authority_terms do
+      agree_to :terms
+      permit_acting_for_organization when_actor_is_at_least: :admin
+      retain_with :ordinary_agreement_evidence
+    end
+
+    login_as @user
+
+    get "/legal/policies/orphan_authority_terms"
+    assert_response :not_found
+
+    assert_no_difference -> { Clickwrap::Event.count } do
+      post "/legal/policies/orphan_authority_terms"
+    end
+    assert_response :not_found
+  end
+
   # --- Withdrawing a consent ---------------------------------------------------
 
   test "withdrawing a consent takes one press, the same as granting it did" do

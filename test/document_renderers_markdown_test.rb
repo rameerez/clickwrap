@@ -53,6 +53,34 @@ class DocumentRenderersMarkdownTest < ActiveSupport::TestCase
     refute_includes result[:bytes], "<script"
   end
 
+  test "a host renderer may store its bytes verbatim, and the provenance says no sanitizer ran" do
+    # Byte parity is the point: the host's own pages serve this exact output,
+    # and re-sanitizing reparses the HTML into different bytes — a digest over
+    # bytes nobody was shown. Redcarpet-style `&quot;` escaping is the real
+    # case that caught this.
+    host_output = "<p>Dijo &quot;hola&quot; con <em>énfasis</em>.</p>\n"
+    renderer = Clickwrap::DocumentRenderers::Markdown.new(
+      render_markdown_with: ->(_text) { host_output },
+      engine_name: "application_markdown",
+      engine_version: "1.0",
+      sanitize_rendered_html: false
+    )
+
+    result = renderer.call("Dijo \"hola\" con *énfasis*.\n", MARKDOWN)
+
+    assert_equal host_output, result[:bytes]
+    assert_equal "none", result[:sanitizer_name]
+    assert_equal "host_renderer_output_stored_verbatim", result[:sanitizer_version]
+  end
+
+  test "skipping sanitization without owning the renderer is refused" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap::DocumentRenderers::Markdown.new(sanitize_rendered_html: false)
+    end
+
+    assert_match(/rendering pipeline YOU own/, error.message)
+  end
+
   test "delegates every non-Markdown media type to the reference renderer" do
     result = Clickwrap::DocumentRenderers::Markdown.new.call(
       "plain words", Definition.new("text/plain")

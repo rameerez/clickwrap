@@ -70,6 +70,18 @@ module Clickwrap
                 "This subject-bound policy needs a signed remediation route from the blocked action."
         end
 
+        # A policy that permits acting for a represented party exists to record
+        # WHO was represented. Completing it on the bare engine screen with no
+        # represented party would write permanent evidence whose statements
+        # assert representative authority over nobody — orphan evidence that
+        # reads as more than it is. Those policies arrive here only through a
+        # signed remediation route that carries the represented party.
+        if @policy.authority_rule.present?
+          raise RemediationInvalid,
+                "This policy records representative authority, so it needs a signed remediation " \
+                "route naming the represented party. It cannot be completed standalone."
+        end
+
         @remediation_token = nil
         @remediation_subject = nil
         @remediation_represented_party = nil
