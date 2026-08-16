@@ -190,8 +190,9 @@ option, or evidence field for the browser to choose:
 <% end %>
 ```
 
-At submit, persist that exact model and its owner membership in the protected
-block:
+At submit, return the persisted organization after creating its owner
+membership in the protected block. The result may come from an ordinary
+creation service; it must have the same class the presentation bound:
 
 ```ruby
 def create
@@ -212,8 +213,8 @@ end
 ```
 
 The manifest labels presentation-time authority `not_yet_verifiable`. After the
-block persists the exact record, the configured adapter verifies the new owner
-membership inside the same transaction, and the event is rebound to the final
+block returns the persisted record, the configured adapter verifies the new
+owner membership inside the same transaction, and the event is rebound to the final
 stable organization reference before its digest and projections are written.
 An evidence-write failure, model-validation failure, missing/insufficient
 membership, protected-outcome failure, or outer transaction rollback leaves no

@@ -112,8 +112,9 @@ module Clickwrap
       end
     end
 
-    # Creates the exact new record named by `represented_party:` and binds it
-    # to the evidence before either can commit. Presentation records honestly
+    # Creates a new record of the type named by `represented_party:` and binds
+    # the block's persisted result to the evidence before either can commit.
+    # Presentation records honestly
     # that membership authority was not yet verifiable; after the block saves
     # the record and creates its authority relationship, the adapter rereads
     # that relationship inside this same transaction and the finalized event
@@ -129,17 +130,25 @@ module Clickwrap
               "that was used to render the presentation."
       end
 
+      @prospective_represented_party_class = @acting_for.class
       @creating_represented_party = true
 
       perform(protected_action: true) do |pending|
         result = block.call(pending)
 
-        unless @acting_for.persisted?
+        unless result.respond_to?(:persisted?) && result.persisted?
           raise RepresentedPartyCreationFailed,
-                "The represented-party creation block did not persist the exact represented party " \
-                "whose type was bound at presentation. Save that record inside the block, create " \
-                "its authority relationship there, and return the protected action result."
+                "The represented-party creation block must return the persisted represented party. " \
+                "Save it and its authority relationship inside the block, then return that record."
         end
+        unless result.instance_of?(@prospective_represented_party_class)
+          raise RepresentedPartyCreationFailed,
+                "The represented-party creation block returned #{result.class.name}, but the " \
+                "presentation was bound to #{@verified_manifest.represented_party_type}. Return a " \
+                "persisted record of the presented type."
+        end
+
+        @acting_for = result
 
         result
       end

@@ -369,23 +369,24 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
   test "a new organization and its represented-party evidence commit together" do
     define_organization_creation_policy
     actor = create_user
-    organization = Organizations::Organization.new(name: "Prospective")
+    prospective_organization = Organizations::Organization.new(name: "Prospective")
     flow_id = SecureRandom.uuid
-    presentation = present_new_organization_for(actor, organization, flow_id)
+    presentation = present_new_organization_for(actor, prospective_organization, flow_id)
 
     assert presentation.manifest.represented_party_will_be_created_by_protected_action?
     assert_equal flow_id, presentation.manifest.represented_party_creation_flow_id
     assert_equal "not_yet_verifiable",
                  presentation.manifest.authority_at_presentation.fetch("state")
 
+    organization = nil
     receipt = Clickwrap.create_represented_party!(
       :organization_creation,
       actor: actor,
-      represented_party: organization,
+      represented_party: prospective_organization,
       represented_party_creation_flow_id: flow_id,
       submission: submission_for(presentation, "terms" => "1")
     ) do
-      organization.save!
+      organization = Organizations::Organization.create!(name: "Created by service")
       owner_membership = membership_for(actor, role: :owner)
       organization.clickwrap_memberships = Organizations::MembershipRelation.new([owner_membership])
       organization
@@ -455,10 +456,33 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     assert_not Organizations::Organization.exists?(name: "Atomic")
   end
 
-  test "the represented-party creation block must persist the exact prospective record" do
+  test "the represented-party creation block must return a persisted record of the presented type" do
     define_organization_creation_policy
     actor = create_user
     organization = Organizations::Organization.new(name: "Unpersisted")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    unpersisted_result = Organizations::Organization.new(name: "Different")
+    error = assert_raises(Clickwrap::RepresentedPartyCreationFailed) do
+      Clickwrap.create_represented_party!(
+        :organization_creation,
+        actor: actor,
+        represented_party: organization,
+        represented_party_creation_flow_id: flow_id,
+        submission: submission_for(presentation, "terms" => "1")
+      ) { unpersisted_result }
+    end
+
+    assert_match(/must return the persisted represented party/, error.message)
+    assert_not Organizations::Organization.exists?(name: "Different")
+    assert_no_clickwrap_event :organization_creation
+  end
+
+  test "the represented-party creation block cannot return a persisted record of another type" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Prospective")
     flow_id = SecureRandom.uuid
     presentation = present_new_organization_for(actor, organization, flow_id)
 
@@ -469,11 +493,10 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
         represented_party: organization,
         represented_party_creation_flow_id: flow_id,
         submission: submission_for(presentation, "terms" => "1")
-      ) { Organizations::Organization.create!(name: "Different") }
+      ) { create_user }
     end
 
-    assert_match(/did not persist the exact represented party/, error.message)
-    assert_not Organizations::Organization.exists?(name: "Different")
+    assert_match(/returned User.*bound to Organizations::Organization/, error.message)
     assert_no_clickwrap_event :organization_creation
   end
 

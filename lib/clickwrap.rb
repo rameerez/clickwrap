@@ -206,8 +206,9 @@ module Clickwrap
 
     # A prospective represented-party flow for records such as a new customer
     # organization. The form binds the record type and a server-owned browser
-    # flow before the record exists. This block must persist that exact record
-    # and its host authority relationship; Clickwrap then verifies authority,
+    # flow before the record exists. This block must return a persisted record
+    # of that presented type after creating its host authority relationship;
+    # Clickwrap then verifies authority,
     # rebinds the final stable reference, and commits all of it together.
     def create_represented_party!(policy_key, actor:, represented_party:,
                                   represented_party_creation_flow_id:,

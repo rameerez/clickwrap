@@ -792,8 +792,8 @@ end
 
 The form helper creates a server-owned browser-flow binding automatically. The
 manifest says authority is `not_yet_verifiable` because the membership does not
-exist yet; after the protected block saves the exact organization and owner
-membership, the adapter verifies them and Clickwrap rebinds the final GlobalID
+exist yet; after the protected block returns the persisted organization and
+creates its owner membership, the adapter verifies them and Clickwrap rebinds the final GlobalID
 before commit. If any part fails, none of the organization, membership,
 evidence, or protected outcome commits. The explicit declaration is still what
 records the human's claim of pre-existing real-world authority: an owner role
