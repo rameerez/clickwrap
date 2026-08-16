@@ -51,13 +51,25 @@ module Clickwrap
         "clickwrap-#{policy_key}-#{event_id}"
       end
 
-      def initialize(policy:, provider_name: nil, **capture_options)
+      def initialize(policy:, provider_name: nil,
+                     after_pending_action_is_saved_inside_transaction: nil,
+                     **capture_options)
         @policy = policy
         @provider_name = provider_name&.to_s
+        @after_pending_action_is_saved_inside_transaction =
+          after_pending_action_is_saved_inside_transaction
         @capture_options = capture_options
+
+        return if @after_pending_action_is_saved_inside_transaction.nil? ||
+                  @after_pending_action_is_saved_inside_transaction.respond_to?(:call)
+
+        raise ArgumentError,
+              "after_pending_action_is_saved_inside_transaction must be callable. It receives " \
+              "pending_action: and pending_receipt: as keyword arguments."
       end
 
-      attr_reader :policy, :provider_name, :capture_options
+      attr_reader :policy, :provider_name, :capture_options,
+                  :after_pending_action_is_saved_inside_transaction
 
       # Captures the evidence and commits the pending outbox row in ONE local
       # transaction, then returns the ExternalAction so the caller can hand its
@@ -99,7 +111,7 @@ module Clickwrap
       def create_pending_action!(pending)
         now = Clickwrap.now
 
-        ExternalAction.create!(
+        action = ExternalAction.create!(
           event_id: pending.event_id,
           policy_key: policy.key,
           idempotency_key: self.class.idempotency_key_for(
@@ -112,6 +124,23 @@ module Clickwrap
           created_at: now,
           updated_at: now
         )
+
+        # Some hosts need a temporary compatibility projection while they move
+        # an established audit ledger onto Clickwrap. This hook is deliberately
+        # named for its exact boundary: it runs only for the initial write,
+        # after the pending outbox row is saved, inside the SAME LOCAL database
+        # transaction as the event and action. A replay returns the committed
+        # action and never runs it again.
+        #
+        # Network/provider work never belongs here. A callback failure rolls all
+        # three local writes back, leaving no evidence that claims an external
+        # action was authorized when its required domain projection was not.
+        after_pending_action_is_saved_inside_transaction&.call(
+          pending_action: action,
+          pending_receipt: pending
+        )
+
+        action
       end
     end
   end

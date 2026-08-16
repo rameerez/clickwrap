@@ -266,8 +266,23 @@ module Clickwrap
     # distributed reliability protocol, not a cross-system ACID transaction —
     # see Clickwrap::Services::AuthorizeExternalAction for exactly what it does
     # and does not promise.
-    def authorize_external_action!(policy_key, **)
-      Services::AuthorizeExternalAction.new(policy: policy!(policy_key), **).call
+    def authorize_external_action!(policy_key,
+                                   after_pending_action_is_saved_inside_transaction: nil,
+                                   **,
+                                   &local_transaction_block)
+      if after_pending_action_is_saved_inside_transaction && local_transaction_block
+        raise ArgumentError,
+              "Pass either after_pending_action_is_saved_inside_transaction: or a block, not both."
+      end
+
+      local_transaction_hook =
+        after_pending_action_is_saved_inside_transaction || local_transaction_block
+
+      Services::AuthorizeExternalAction.new(
+        policy: policy!(policy_key),
+        after_pending_action_is_saved_inside_transaction: local_transaction_hook,
+        **
+      ).call
     end
 
     def import_external_receipt!(policy_key, **)

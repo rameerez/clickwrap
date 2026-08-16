@@ -271,6 +271,114 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_not @user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
   end
 
+  test "the named local hook commits a domain projection with the evidence and pending action" do
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    observed = nil
+
+    action = Clickwrap.authorize_external_action!(
+      :withdrawal_authorization,
+      actor: @user,
+      subject: withdrawal,
+      provider_name: "stripe",
+      submission: submission_for(presentation, { withdrawal_requirements: "1",
+                                                 ride_exclusivity: "1", withdrawal: "1" })
+    ) do |pending_action:, pending_receipt:|
+      observed = [pending_action.id, pending_receipt.event_id]
+      withdrawal.update!(clickwrap_event_id: pending_receipt.event_id)
+    end
+
+    assert_equal [action.id, action.event_id], observed
+    assert_equal action.event_id, withdrawal.reload.clickwrap_event_id
+  end
+
+  test "the plain-English callback option is equivalent to the local transaction block" do
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    observed = nil
+    callback = lambda do |pending_action:, pending_receipt:|
+      observed = [pending_action.id, pending_receipt.event_id]
+    end
+
+    action = Clickwrap.authorize_external_action!(
+      :withdrawal_authorization,
+      actor: @user,
+      subject: withdrawal,
+      submission: submission_for(presentation, { withdrawal_requirements: "1",
+                                                 ride_exclusivity: "1", withdrawal: "1" }),
+      after_pending_action_is_saved_inside_transaction: callback
+    )
+
+    assert_equal [action.id, action.event_id], observed
+  end
+
+  test "the external-action API refuses two competing local transaction hooks" do
+    error = assert_raises(ArgumentError) do
+      Clickwrap.authorize_external_action!(
+        :withdrawal_authorization,
+        after_pending_action_is_saved_inside_transaction: ->(**) {}
+      ) { raise "the competing hook must never run" }
+    end
+
+    assert_includes error.message, "either after_pending_action_is_saved_inside_transaction: or a block"
+  end
+
+  test "a failing local hook rolls back the evidence, pending action, and domain projection" do
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+
+    assert_raises(RuntimeError, match: /legacy projection failed/) do
+      Clickwrap.authorize_external_action!(
+        :withdrawal_authorization,
+        actor: @user,
+        subject: withdrawal,
+        submission: submission_for(presentation, { withdrawal_requirements: "1",
+                                                   ride_exclusivity: "1", withdrawal: "1" })
+      ) do |pending_receipt:, **|
+        withdrawal.update!(clickwrap_event_id: pending_receipt.event_id)
+        raise "legacy projection failed"
+      end
+    end
+
+    assert_nil withdrawal.reload.clickwrap_event_id
+    assert_equal 0, Clickwrap::ExternalAction.count
+    assert_no_clickwrap_event :withdrawal_authorization, actor: @user
+  end
+
+  test "an idempotent external-action replay does not run the local hook again" do
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
+    submission = submission_for(presentation, { withdrawal_requirements: "1",
+                                                ride_exclusivity: "1", withdrawal: "1" })
+    hook_calls = 0
+
+    first = Clickwrap.authorize_external_action!(
+      :withdrawal_authorization, actor: @user, subject: withdrawal, submission: submission
+    ) do |**|
+      hook_calls += 1
+    end
+    replay = Clickwrap.authorize_external_action!(
+      :withdrawal_authorization, actor: @user, subject: withdrawal, submission: submission
+    ) do |**|
+      hook_calls += 1
+    end
+
+    assert_equal first.id, replay.id
+    assert_equal 1, hook_calls
+  end
+
+  test "the local hook option rejects an ambiguous non-callable value" do
+    error = assert_raises(ArgumentError) do
+      Clickwrap::Services::AuthorizeExternalAction.new(
+        policy: Clickwrap.policy!(:withdrawal_authorization),
+        after_pending_action_is_saved_inside_transaction: :record_something
+      )
+    end
+
+    assert_includes error.message, "must be callable"
+    assert_includes error.message, "pending_action: and pending_receipt:"
+  end
+
   test "an outbox-row failure rolls its authorization evidence back" do
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)

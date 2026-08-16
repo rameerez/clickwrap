@@ -267,6 +267,39 @@ explicit outbox/reconciliation design for another database or service.
 
 For capture without a protected action, use `Clickwrap.capture!`. For external providers (Stripe, identity services) that can't share your database transaction, use `Clickwrap.authorize_external_action!` — a pending authorization plus idempotent outbox, so a provider timeout never becomes a fictional success or a double debit.
 
+Controllers get the ambient actor, tenant, request, authentication context, and
+submitted presentation automatically:
+
+```ruby
+authorization = authorize_clickwrap_external_action!(
+  :identity_provider_handoff,
+  subject: verification,
+  provider_name: "identity_provider"
+)
+```
+
+If a migration requires a legacy/domain projection to commit with the event and
+pending outbox row, use the deliberately named local-transaction callback (or
+the equivalent block form):
+
+```ruby
+authorization = authorize_clickwrap_external_action!(
+  :identity_provider_handoff,
+  subject: verification,
+  provider_name: "identity_provider",
+  after_pending_action_is_saved_inside_transaction: lambda do |pending_action:, pending_receipt:|
+    LegacyAuditLog.create!(
+      event_id: pending_receipt.event_id,
+      external_action_id: pending_action.id
+    )
+  end
+)
+```
+
+It runs once, only on initial capture, inside that local database transaction;
+if it raises, all three local writes roll back. Never call the provider or do
+network work there. The provider call starts only after the helper returns.
+
 ### One-time, subject-bound authorizations
 
 ```ruby

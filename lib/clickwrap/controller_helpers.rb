@@ -266,6 +266,20 @@ module Clickwrap
       Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(policy_key, options), &)
     end
 
+    # `Clickwrap.authorize_external_action!` with the request, submission,
+    # actor, tenant, and authentication context this controller already knows.
+    # The optional block is strictly local compatibility/domain work: it runs
+    # once, inside the transaction that saves the evidence event and pending
+    # outbox row, and receives `pending_action:` and `pending_receipt:`. The
+    # provider call happens only after this helper returns.
+    def authorize_clickwrap_external_action!(policy_key, **options, &)
+      Clickwrap.authorize_external_action!(
+        policy_key,
+        **clickwrap_capture_options(policy_key, options),
+        &
+      )
+    end
+
     # `Clickwrap.present` with the same actor, tenant, and locale defaults the
     # controller capture helpers use. Custom views should call this instead of
     # manually repeating ambient context, which keeps GET and POST binding
