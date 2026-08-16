@@ -321,7 +321,11 @@ module Clickwrap
       # tell anyone their agreements are in order.
       def print_review_checklist
         say "\nBefore this carries any weight, review — with counsel where that applies:"
-        say "  ☐ Legal text — the Terms and Privacy Notice are yours; the gem wrote placeholders."
+        if detected_legal_documents
+          say "  ☐ Legal text — the Terms and Privacy Notice are yours; the gem points at your existing pages."
+        else
+          say "  ☐ Legal text — the Terms and Privacy Notice are yours; the gem wrote placeholders."
+        end
         say "  ☐ Policy semantics — is each act the right verb? agree_to for terms, acknowledge"
         say "    for a notice, consent_to only where consent is genuinely your chosen basis,"
         say "    declare/attest for statements of fact, authorize for one protected action."

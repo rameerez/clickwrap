@@ -97,6 +97,9 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     output = run_generator %w[--skip-questions]
 
     assert_match(%r{existing legal pages in app/content/pages/legal}, output)
+    assert_match(/the gem points at your existing pages/, output)
+    refute_match(/the gem wrote placeholders/, output,
+                 "the review checklist must not claim placeholders that were never written")
 
     assert_file "config/clickwrap.rb" do |config|
       assert_match(%r{from: Rails\.root\.join\("app/content/pages/legal/terms\.html\.md"\)}, config)
