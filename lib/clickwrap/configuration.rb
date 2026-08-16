@@ -45,6 +45,7 @@ module Clickwrap
 
     # --- Documents and policies -----------------------------------------------
     attr_reader :store_document_contents_in, :document_renderer, :document_resolver
+    attr_reader :document_link_html_options_with
     attr_accessor :policy_paths
 
     attr_reader :raise_on_missing_translation
@@ -126,6 +127,7 @@ module Clickwrap
       @store_document_contents_in = :database
       @document_renderer = DocumentRenderer.new
       @document_resolver = nil
+      @document_link_html_options_with = ->(_document) { { target: "_blank", rel: "noopener" } }
       @policy_paths = ["config/clickwrap.rb", "config/clickwrap/*.rb"]
 
       # A required legal statement with no translation is not presentable. Fail
@@ -313,6 +315,12 @@ module Clickwrap
 
     def document_resolver=(value)
       @document_resolver = value.nil? ? nil : ensure_callable(value, "document_resolver")
+    end
+
+    # Navigation attributes only; the immutable href is signed into the
+    # presentation and cannot be replaced through this styling/client hook.
+    def document_link_html_options_with=(value)
+      @document_link_html_options_with = ensure_callable(value, "document_link_html_options_with")
     end
 
     def raise_on_missing_translation=(value)

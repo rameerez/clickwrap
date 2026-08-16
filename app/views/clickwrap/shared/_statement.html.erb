@@ -82,8 +82,7 @@
           <% if document.path.present? %>
             <%= link_to document.label, document.path,
                   class: "clickwrap-documents__link",
-                  target: "_blank",
-                  rel: "noopener" %>
+                  **clickwrap_document_link_html_options(document) %>
             <span class="clickwrap-documents__hint">
               <%= t("clickwrap.ui.opens_in_new_tab") %>
             </span>

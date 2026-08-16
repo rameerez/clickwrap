@@ -121,6 +121,11 @@ Wiring the gem into an existing production app — or handing the job to an AI a
 [integrating guide](guides/integrating.md) is the step-by-step playbook from a full
 production migration, in the exact order that avoids every mistake we made.
 
+Hotwire Native or another client needs special document-link attributes? Keep
+the gem's canonical partial and set `config.document_link_html_options_with`.
+It can add `data: { turbo: false }`, `target`, or `rel`; it cannot replace the
+immutable `href` that Clickwrap signs into the presentation.
+
 ## How it works
 
 Most apps eventually accumulate an `accepted_terms_at` column, a `terms_version` string, a few hidden form fields, an `after_create` callback, and some IP columns. Each part looks reasonable alone. Together they produce partial writes, client-owned policy decisions, mutable history, and evidence only the original engineer can explain.

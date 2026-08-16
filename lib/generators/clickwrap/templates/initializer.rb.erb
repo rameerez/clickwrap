@@ -101,6 +101,13 @@ Clickwrap.configure do |config|
   # Loads document bodies from somewhere other than a file or inline content.
   config.document_resolver = nil
 
+  # Chooses only HOW immutable document links open. The href is server-owned
+  # and signed into the presentation, so this callback is refused if it tries
+  # to return `href:`. A Hotwire Native app can add `data: { turbo: false }`
+  # here without ejecting the gem's evidence-critical statement partial.
+  config.document_link_html_options_with =
+    ->(_document) { { target: "_blank", rel: "noopener" } }
+
   # Where your documents, policies, and retention classes are declared. They are
   # ordinary Ruby so they are reviewable in a pull request and deploy with the
   # code that depends on them.

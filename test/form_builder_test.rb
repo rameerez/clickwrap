@@ -58,6 +58,28 @@ class FormBuilderTest < ActionView::TestCase
                     "document links must appear before the submit button in source order"
   end
 
+  test "a host can customize document navigation without ejecting the statement partial" do
+    Clickwrap.config.document_link_html_options_with = lambda do |_document|
+      { target: "_blank", rel: "noopener", data: { turbo: false, native_document: "external" } }
+    end
+
+    render_clickwrap(:signup, submit: "Create account")
+
+    assert_select "a.clickwrap-documents__link[target='_blank'][rel='noopener']" \
+                  "[data-turbo='false'][data-native-document='external']", count: 2
+  end
+
+  test "document navigation options cannot replace the signed immutable href" do
+    Clickwrap.config.document_link_html_options_with = ->(_document) { { href: "/mutable/terms" } }
+
+    error = assert_raises(ActionView::Template::Error) do
+      render_clickwrap(:signup, submit: "Create account")
+    end
+
+    assert_match(/cannot set href/, error.message)
+    assert_match(/immutable document path/, error.message)
+  end
+
   test "the only hidden field is the signed presentation token" do
     render_clickwrap(:signup, submit: "Create account")
 

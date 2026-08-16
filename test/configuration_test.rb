@@ -20,6 +20,8 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_nil config.anchor_event_history_with
     assert_nil config.timestamp_receipts_with
     assert_nil config.ip_geolocation_resolver
+    assert_equal({ target: "_blank", rel: "noopener" },
+                 config.document_link_html_options_with.call(nil))
   end
 
   test "nothing personal is collected by default" do
@@ -97,6 +99,15 @@ class ConfigurationTest < ActiveSupport::TestCase
     error = assert_raises(Clickwrap::ConfigurationError) { Clickwrap.config.after_event_is_committed = :nope }
 
     assert_match(/must respond to #call/, error.message)
+  end
+
+  test "document link navigation options must be callable" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.config.document_link_html_options_with = { target: "_blank" }
+    end
+
+    assert_match(/document_link_html_options_with/, error.message)
+    assert_match(/respond to #call/, error.message)
   end
 
   test "a non-duration presentation window is refused" do

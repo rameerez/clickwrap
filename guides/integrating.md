@@ -50,6 +50,19 @@ Then, before anything else works:
 4. `bin/rails clickwrap:publish`, then `bin/rails clickwrap:doctor`. The
    doctor's output is your integration checklist from here on.
 
+If a client needs special navigation attributes, keep the canonical partial
+and configure the one narrow seam instead of ejecting it:
+
+```ruby
+config.document_link_html_options_with = lambda do |_document|
+  { target: "_blank", rel: "noopener", data: { turbo: false } }
+end
+```
+
+This callback may choose how the client opens the immutable URL. It cannot
+return `href:`: the exact href is rendered from, and signed into, the same
+presentation manifest.
+
 Boot errors you may meet, all working as intended:
 
 | Error says | It means |
