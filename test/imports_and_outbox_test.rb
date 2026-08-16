@@ -192,7 +192,12 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "recorded_after uses the durable database sequence rather than ULID ordering" do
-    travel_to Time.utc(2026, 8, 16, 12, 0, 0), with_usec: true do
+    # Freeze the clock AT the present instant (never an absolute date: documents
+    # publish at boot time, so a fixed past moment predates every publication
+    # the moment the wall clock passes it). Two captures on one frozen clock
+    # share their timestamp, so any ordering between them must come from the
+    # durable recording sequence.
+    travel_to Time.current, with_usec: true do
       capture_clickwrap(:signup, actor: @user)
       capture_clickwrap(:current_terms, actor: @user)
     end
