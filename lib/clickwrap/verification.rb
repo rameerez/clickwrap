@@ -34,6 +34,23 @@ module Clickwrap
         new(success: true, policy_key: policy_key, event_id: event_id, details: details)
       end
 
+      # Whether this result's evidence was recorded after another's. Event ids
+      # are ULIDs, so lexicographic order IS creation order — this makes that
+      # guarantee API instead of folklore, for multi-step flows that require
+      # one act to follow another ("the declaration must come after the
+      # acknowledgments"):
+      #
+      #   declaration.recorded_after?(acknowledgments)  # => true or false
+      #
+      # Accepts another verification result or a bare event id. False whenever
+      # either side has no event, which composes with `success?` the way a
+      # guard should: nothing about a missing act is "after" anything.
+      def recorded_after?(other)
+        other_event_id = other.respond_to?(:event_id) ? other.event_id : other
+
+        event_id.present? && other_event_id.present? && event_id.to_s > other_event_id.to_s
+      end
+
       # One predicate per stable error symbol, generated from the vocabulary so
       # the two can never drift: `result.subject_fingerprint_mismatch?`,
       # `result.no_evidence?`, `result.consent_withdrawn?`, … Branching on a

@@ -39,7 +39,7 @@ Naming/MethodParameterName:
 # `has_clickwraps` is the macro and the product — it matches the ecosystem
 # grammar (has_sessions, has_credits, has_api_keys), not a predicate.
 Naming/PredicatePrefix:
-  AllowedMethods: [has_clickwraps]
+  AllowedMethods: [has_clickwraps, has_clickwrap_evidence]
 
 # Receipt and verification predicates read as questions about a recorded fact:
 # `recorded_ip_address?`, `ip_geolocation_was_estimated?`,

@@ -253,6 +253,15 @@ module Clickwrap
         say "  #{step += 1}. Render the policy and its bound submit action:"
         say "       <%= form.clickwrap :signup, submit: \"Create account\" %>"
 
+        say "  #{step += 1}. Set up your test suite (presentations refuse unpublished documents"
+        say "     in tests exactly as in production):"
+        say "       # test/test_helper.rb"
+        say "       class ActiveSupport::TestCase"
+        say "         include Clickwrap::TestHelpers"
+        say "         parallelize_setup { Clickwrap.publish! }   # per parallel worker..."
+        say "       end"
+        say "       Clickwrap.publish!                           # ...and once per process"
+
         unless @mounted_engine
           say "  #{step += 1}. Mount the standalone capture/receipt/withdrawal screens when you want them:"
           say "       # config/routes.rb"

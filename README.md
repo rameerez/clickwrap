@@ -117,6 +117,10 @@ That's it! Your app now records which exact document versions the server offered
 answers it accepted, the bound presentation wording, and when—atomically with account creation.
 Let's see how it works.
 
+Wiring the gem into an existing production app — or handing the job to an AI agent? The
+[integrating guide](guides/integrating.md) is the step-by-step playbook from a full
+production migration, in the exact order that avoids every mistake we made.
+
 ## How it works
 
 Most apps eventually accumulate an `accepted_terms_at` column, a `terms_version` string, a few hidden form fields, an `after_create` callback, and some IP columns. Each part looks reasonable alone. Together they produce partial writes, client-owned policy decisions, mutable history, and evidence only the original engineer can explain.
@@ -178,6 +182,37 @@ end
 
 If the event write fails, the action rolls back. If your block raises, the event rolls back. Repeating an identical submission returns the original result without running the block twice; a conflicting replay fails with a stable `Clickwrap::ReplayRejected`.
 
+Link the row to the evidence that authorized it, so the connection survives years and engineers:
+
+```bash
+bin/rails generate clickwrap:link withdrawals && bin/rails db:migrate
+```
+
+```ruby
+class Withdrawal < ApplicationRecord
+  has_clickwrap_evidence   # → withdrawal.clickwrap_event, withdrawal.clickwrap_receipt
+end
+
+capture_clickwrap_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal) do |pending_receipt|
+  withdrawal.clickwrap_event_id = pending_receipt.event_id
+  withdrawal.save!
+end
+
+withdrawal.clickwrap_receipt.verify.success?   # one line, years later
+```
+
+And when a *person* causes the refusal — a stale token, a required box left unticked — every such case is one exception family carrying a sentence you can actually show them:
+
+```ruby
+def create
+  # ... capture_clickwrap_and! as above ...
+rescue Clickwrap::CaptureRefused => refusal
+  redirect_to new_withdrawal_path, alert: refusal.user_facing_message, status: :see_other
+end
+```
+
+Infrastructure failures stay outside that family and stay loud: an evidence write that fails refuses the protected action instead of being swallowed.
+
 That atomicity has one exact boundary: Clickwrap's event and the protected domain
 write must use the same database connection. If a host model uses another Rails
 database/connection, its transaction cannot commit atomically with Clickwrap's
@@ -219,7 +254,20 @@ user.clickwraps.declared?(:non_professional_driver, subject: scheme)
 user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
 ```
 
-When "no" needs an explanation, `verify` returns a structured result with a stable error symbol (`:declaration_expired`, `:consent_withdrawn`, `:wrong_subject`, …) and a localized message — you never parse English to make an authorization decision. `Clickwrap.require!` raises a typed error carrying the same result.
+When "no" needs an explanation, `verify` returns a structured result with a stable error symbol (`:declaration_expired`, `:consent_withdrawn`, `:wrong_subject`, …), a matching predicate, and a localized message — you never parse English to make an authorization decision. `Clickwrap.require!` raises a typed error carrying the same result. Service boundaries read aloud:
+
+```ruby
+preparation = Clickwrap.verify(:withdrawal_preparation, actor: user,
+                               require_current_revision: true)
+declaration = Clickwrap.verify(:ride_exclusivity, actor: user, subject: user,
+                               require_current_revision: true)
+
+declaration.stale_policy_revision?         # legal reworded it → re-ask
+declaration.subject_fingerprint_mismatch?  # what it covers changed since capture
+declaration.recorded_after?(preparation)   # ordering enforced, not assumed
+```
+
+`require_current_revision: true` fails evidence recorded under a superseded policy revision, so "we changed the wording, everyone re-accepts" is one keyword instead of a hand-rolled revision comparison.
 
 Controller gates redirect users to a ready-made remediation screen and bring them back when they're done:
 
@@ -408,7 +456,7 @@ end
 
 Both make account activation and its evidence commit together, with a prospective-actor flow that's honest about the fact that no authenticated user exists yet at render time.
 
-Everything is server-rendered HTML: full-page requests, Turbo Drive and Frames, no-JavaScript validation, and Hotwire Native all work with the same helper. JSON/API clients use `Clickwrap.present` to get the server-owned manifest and submit answers with the signed token. Views are ejectable with `bin/rails generate clickwrap:views`, or build fully custom UI on `Clickwrap.present` primitives.
+Everything is server-rendered HTML: full-page requests, Turbo Drive and Frames, no-JavaScript validation, and Hotwire Native all work with the same helper. JSON/API clients use `Clickwrap.present` to get the server-owned manifest and submit answers with the signed token. Views are ejectable with `bin/rails generate clickwrap:views`, or build fully custom UI on `Clickwrap.present` plus the view helpers — `clickwrap_presentation_token_field`, `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and `clickwrap_submit_button` own the envelope name, the control names, and a call to action worded by the signed manifest itself, while you own every class and wrapper around them. The [integrating guide](guides/integrating.md#4-custom-surfaces--the-three-contracts) shows a full custom surface.
 
 ### Works with `organizations`
 
@@ -585,10 +633,15 @@ That receipt is exactly what you'll be asked to produce if the agreement is ever
 
 ## Testing your integration
 
+Documents must be published in the test database too — presentations refuse unpublished documents in tests exactly as in production:
+
 ```ruby
+# test/test_helper.rb
 class ActiveSupport::TestCase
   include Clickwrap::TestHelpers
+  parallelize_setup { Clickwrap.publish! }  # once per parallel worker...
 end
+Clickwrap.publish!                           # ...and once per process
 ```
 
 ```ruby
@@ -597,6 +650,18 @@ receipt = capture_clickwrap(:signup, actor: user, answers: { terms: true, privac
 assert_clickwrap_current :signup, actor: user
 assert_clickwrap_agreed_to :terms, actor: user
 assert_clickwrap_receipt_verifies receipt
+```
+
+Integration tests can't fabricate a signed presentation token by hand — that's the point — so they read it off the rendered page the way a browser does:
+
+```ruby
+post user_registration_path, params: {
+  user: { email: "person@example.com", password: "a-real-password" },
+  **clickwrap_params_from(new_user_registration_path)   # GET the page, affirm everything
+}
+
+# Decline one statement instead:
+declined = clickwrap_params_from(new_user_registration_path, answers: { terms: false })
 ```
 
 Fault injection proves the atomicity claim in your own suite:

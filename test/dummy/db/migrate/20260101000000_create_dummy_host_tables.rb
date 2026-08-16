@@ -26,6 +26,7 @@ class CreateDummyHostTables < ActiveRecord::Migration[7.1]
       t.string :covered_ride_ids, null: false, default: ""
       t.string :state, null: false, default: "draft"
       t.string :authorized_by_clickwrap_event
+      t.string :clickwrap_event_id, limit: 26
       t.timestamps
     end
   end

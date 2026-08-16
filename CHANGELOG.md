@@ -34,6 +34,37 @@ Changes driven by the first real-host integration (CarHey):
 
 ### Added
 
+- **`Clickwrap::CaptureRefused` with `#user_facing_message`.** Every refusal a
+  person can cause from a form — a stale or missing presentation, an
+  unparseable submission, a declined required statement — now shares one
+  exception superclass carrying a localized sentence fit to show them, so a
+  host controller handles the whole family in one rescue:
+  `rescue Clickwrap::CaptureRefused => refusal; redirect_to ..., alert:
+  refusal.user_facing_message`. Infrastructure failures stay outside the
+  family and stay loud. (Extracted from a real host that had grown five
+  hand-written rescue sites for the same distinctions.)
+- **`has_clickwrap_evidence` + `bin/rails generate clickwrap:link TABLE`.**
+  One macro and one generator for the row-level link between a domain record
+  and the capture that authorized it: the generator writes the
+  `clickwrap_event_id` column migration (ULID string, indexed, nullable, no
+  foreign key — each deliberate, and the migration says why), and the macro
+  gives the model `clickwrap_event` and `clickwrap_receipt`, so
+  `withdrawal.clickwrap_receipt.verify` is one line years later.
+- **`Result#recorded_after?(other)`** on verification results — enforce
+  evidence ordering ("the declaration must postdate the preparation") without
+  hosts comparing event ids by hand; accepts another result or a bare event
+  id and is false whenever either side is missing.
+- The installer's post-install checklist now includes the test-suite setup:
+  include `Clickwrap::TestHelpers`, publish once per parallel worker and once
+  per process, and read submissions off rendered pages with
+  `clickwrap_params_from` — presentation tokens are signed and session-bound,
+  so tests cannot fabricate them by hand (that is the point).
+- **[Integrating guide](guides/integrating.md)** — the battle-tested playbook
+  from migrating a production application onto the gem end to end: install
+  order, pointing documents at real legal content, test setup, Devise
+  dual-write bridges, custom surfaces, money-path protection, legacy import,
+  request-evidence enablement, and the dual-write → dual-belt → retire
+  rollout doctrine.
 - **View helpers for custom surfaces** (`Clickwrap::ViewHelpers`, available in
   every view): `clickwrap_presentation_token_field`,
   `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and

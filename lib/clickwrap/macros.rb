@@ -38,5 +38,28 @@ module Clickwrap
       include Clickwrap::HasClickwraps unless include?(Clickwrap::HasClickwraps)
       self
     end
+
+    # For a domain row whose existence was authorized by a clickwrap capture —
+    # a withdrawal, a signed declaration, a provisioned contract. Expects a
+    # `clickwrap_event_id` column (`bin/rails generate clickwrap:link
+    # your_table` writes the migration) and reads aloud from either end:
+    #
+    #   capture_clickwrap_and!(:withdrawal_authorization) do |pending_receipt|
+    #     withdrawal.clickwrap_event_id = pending_receipt.event_id
+    #     withdrawal.save!
+    #   end
+    #
+    #   withdrawal.clickwrap_event      # the evidence event behind this row
+    #   withdrawal.clickwrap_receipt    # its receipt: .verify, .to_canonical_json
+    #
+    # `optional: true` and no foreign key, deliberately: rows that predate the
+    # gem have no event, and evidence and domain rows keep independent
+    # retention schedules — neither table may block the other's disposition.
+    def has_clickwrap_evidence
+      belongs_to :clickwrap_event, class_name: "Clickwrap::Event", optional: true
+
+      define_method(:clickwrap_receipt) { clickwrap_event&.receipt }
+      self
+    end
   end
 end

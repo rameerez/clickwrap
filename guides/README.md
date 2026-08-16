@@ -6,6 +6,7 @@ get subtly wrong, and they assume you have already read the README section they 
 
 | Guide | Read it when |
 |---|---|
+| [Integrating](integrating.md) | When you are wiring the gem into a real application — or pointing an AI agent at the job. The battle-tested playbook from a full production migration: install order, real legal content, test setup, Devise bridges, custom surfaces, protecting a money path, importing history, and the dual-write rollout doctrine. |
 | [Request evidence](request-evidence.md) | Before you enable IP address, browser user-agent, or any IP-geolocation field. It is the data dictionary: one row per field, where it comes from, what it does not establish, who can read it, and what happens to it when it is deleted. |
 | [Receipts and verification](receipts-and-verification.md) | When you need to hand a receipt to somebody outside your application, or explain exactly what a green verification result covers. Also the canonicalization profile, if you are writing a verifier of your own. |
 | [Retention and legal holds](retention-and-legal-holds.md) | When your retention periods come from a real obligation rather than a round number, when a duration cannot express the schedule, or before the first time you run a disposition against production data. |

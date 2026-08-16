@@ -5,6 +5,7 @@
 # a withdrawal must never reach `submitted` without the evidence that authorized
 # it committing in the same transaction.
 class Withdrawal < ApplicationRecord
+  has_clickwrap_evidence
   belongs_to :user
 
   def submit!(authorized_by_clickwrap_event:)

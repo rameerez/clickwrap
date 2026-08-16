@@ -310,4 +310,50 @@ class LifecycleTest < ActiveSupport::TestCase
   def withdrawal_answers
     { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
   end
+  test "recorded_after? makes multi-step ordering API instead of ULID folklore" do
+    first = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    later_user = create_user
+    second = capture_clickwrap(:signup, actor: later_user, answers: { terms: "1", privacy_notice: "1" })
+
+    earlier = Clickwrap.verify(:signup, actor: @user)
+    later = Clickwrap.verify(:signup, actor: later_user)
+
+    assert later.recorded_after?(earlier)
+    refute earlier.recorded_after?(later)
+    assert later.recorded_after?(earlier.event_id), "a bare event id compares too"
+    refute later.recorded_after?(Clickwrap.verify(:signup, actor: create_user)),
+           "nothing about a missing act is after anything"
+    assert first.event_id < second.event_id, "the underlying guarantee: ULIDs order by creation"
+  end
+
+  test "every person-caused refusal shares one rescuable family with a user-facing sentence" do
+    assert_operator Clickwrap::PresentationInvalid, :<, Clickwrap::CaptureRefused
+    assert_operator Clickwrap::PresentationExpired, :<, Clickwrap::CaptureRefused
+    assert_operator Clickwrap::SubmissionInvalid, :<, Clickwrap::CaptureRefused
+    assert_operator Clickwrap::AnswerInvalid, :<, Clickwrap::CaptureRefused
+
+    stale = Clickwrap::PresentationInvalid.new("developer-facing details")
+    assert_equal I18n.t("clickwrap.errors.presentation_no_longer_valid"), stale.user_facing_message
+
+    unanswered = Clickwrap::AnswerInvalid.new(statement_key: "terms")
+    assert_equal I18n.t("clickwrap.errors.required_statement"), unanswered.user_facing_message
+
+    # The loud family stays loud: infrastructure failures are not refusals.
+    refute_operator Clickwrap::EventWriteFailed, :<, Clickwrap::CaptureRefused
+  end
+
+  test "has_clickwrap_evidence reads a domain row's receipt aloud" do
+    withdrawal = create_withdrawal(user: @user)
+
+    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                     answers: withdrawal_answers) do |pending|
+      withdrawal.clickwrap_event_id = pending.event_id
+      withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
+    end
+
+    assert_equal "capture", withdrawal.reload.clickwrap_event.event_type
+    assert withdrawal.clickwrap_receipt.verify.success?
+    assert_nil create_withdrawal(user: @user).clickwrap_receipt,
+               "a pre-gem row answers nil rather than raising"
+  end
 end

@@ -1,0 +1,12 @@
+class <%= migration_class_name %> < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  # Which exact clickwrap capture authorized each row of <%= table_name %>:
+  # one column, pointing at a verifiable receipt. Nullable because rows that
+  # predate the gem have no event; ULID string to match clickwrap_events'
+  # primary key; no foreign key on purpose — evidence and domain rows keep
+  # independent retention schedules, and neither table may block the other's
+  # disposition.
+  def change
+    add_column :<%= table_name %>, :clickwrap_event_id, :string, limit: 26
+    add_index :<%= table_name %>, :clickwrap_event_id
+  end
+end

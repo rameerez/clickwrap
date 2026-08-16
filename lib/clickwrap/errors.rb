@@ -34,10 +34,29 @@ module Clickwrap
 
   # --- Presentation and submission -------------------------------------------
 
+  # The family of refusals a PERSON can cause from a form: a stale or missing
+  # presentation, a submission that doesn't parse, a required box left empty.
+  # These are not application errors — they deserve a re-rendered form with a
+  # localized sentence, never a 500. One rescue covers the whole family:
+  #
+  #   rescue Clickwrap::CaptureRefused => refusal
+  #     redirect_to somewhere_path, alert: refusal.user_facing_message
+  #
+  # Everything OUTSIDE this family (an evidence write failure above all) stays
+  # loud on purpose: infrastructure problems are yours to see, not the
+  # person's to absorb.
+  class CaptureRefused < Error
+    # The localized sentence the gem's own screens show for this refusal —
+    # safe to put in front of a person, never a developer-facing message.
+    def user_facing_message
+      I18n.t("clickwrap.errors.presentation_no_longer_valid")
+    end
+  end
+
   # Raised when the submitted presentation token is missing, malformed, signed
   # with a different key, expired, or bound to a different actor, tenant,
   # subject, policy, or revision than the one being captured.
-  class PresentationInvalid < Error
+  class PresentationInvalid < CaptureRefused
     attr_reader :result
 
     def initialize(message = nil, result: nil)
@@ -50,19 +69,23 @@ module Clickwrap
 
   # Raised when a submission cannot be parsed or contains keys the manifest
   # never declared.
-  class SubmissionInvalid < Error; end
+  class SubmissionInvalid < CaptureRefused; end
 
   # --- Capture ----------------------------------------------------------------
 
   # Raised when a required answer is missing or an answer is not one of the
   # choices the server offered.
-  class AnswerInvalid < Error
+  class AnswerInvalid < CaptureRefused
     attr_reader :statement_key, :reason
 
     def initialize(message = nil, statement_key: nil, reason: nil)
       @statement_key = statement_key
       @reason = reason
       super(message || "The submitted answer for #{statement_key.inspect} was not accepted")
+    end
+
+    def user_facing_message
+      I18n.t("clickwrap.errors.required_statement")
     end
   end
 
