@@ -137,7 +137,7 @@ module Clickwrap
     #     user: { ... },
     #     **clickwrap_params_from(new_user_registration_path)
     #   }
-    def clickwrap_params_from(path, answers: {})
+    def clickwrap_params_from(path, answers: {}, form_css_selector: nil)
       unless respond_to?(:get)
         raise ArgumentError,
               "clickwrap_params_from drives a real GET, so it needs an integration test " \
@@ -146,7 +146,11 @@ module Clickwrap
       end
 
       get path
-      clickwrap_submission_params_from(response, answers: answers)
+      clickwrap_submission_params_from(
+        response,
+        answers: answers,
+        form_css_selector: form_css_selector
+      )
     end
     module_function :clickwrap_params_from
     public :clickwrap_params_from
@@ -168,16 +172,34 @@ module Clickwrap
     #
     #   clickwrap_submission_params_from(response, answers: { product_updates: false })
     #
+    # A page with several independent clickwrap forms must name the exact form.
+    # The helper refuses ambiguity rather than mixing one form's token with
+    # another form's answers:
+    #
+    #   clickwrap_submission_params_from(
+    #     response,
+    #     form_css_selector: "form[action='/withdrawals/confirm']"
+    #   )
+    #
     # @param rendered [String, #body] the HTML, or the integration response
     # @param answers [Hash] statement key => true/false/String override
+    # @param form_css_selector [String, nil] exact CSS selector for one form
     # @return [Hash] params ready to merge into the POST
-    def clickwrap_submission_params_from(rendered, answers: {})
+    def clickwrap_submission_params_from(rendered, answers: {}, form_css_selector: nil)
       require "nokogiri"
 
       html = rendered.respond_to?(:body) ? rendered.body : rendered.to_s
       page = Nokogiri::HTML(html)
+      scope = clickwrap_test_form_scope(page, form_css_selector)
 
-      token = page.at_css('input[name="clickwrap_submission[presentation_token]"]')&.[]("value")
+      token_fields = scope.css('input[name="clickwrap_submission[presentation_token]"]')
+      if token_fields.many?
+        raise ArgumentError,
+              "The rendered page carries #{token_fields.size} clickwrap presentation tokens. " \
+              "Pass form_css_selector: with a CSS selector that matches exactly one form."
+      end
+
+      token = token_fields.first&.[]("value")
       if token.to_s.empty?
         raise ArgumentError,
               "The rendered page carries no clickwrap presentation token. GET the page that " \
@@ -187,7 +209,7 @@ module Clickwrap
 
       overrides = answers.transform_keys(&:to_s)
       answered = {}
-      page.css(%([name^="clickwrap_submission[answers]["])).each do |control|
+      scope.css(%([name^="clickwrap_submission[answers]["])).each do |control|
         key = control["name"][/\[answers\]\[([^\]]+)\]/, 1]
         next if key.nil? || answered.key?(key)
 
@@ -198,6 +220,24 @@ module Clickwrap
     end
     module_function :clickwrap_submission_params_from
     public :clickwrap_submission_params_from
+
+    def clickwrap_test_form_scope(page, form_css_selector)
+      return page if form_css_selector.nil?
+
+      forms = page.css(form_css_selector.to_s)
+      unless forms.one? && forms.first.name == "form"
+        raise ArgumentError,
+              "form_css_selector must match exactly one <form>; it matched #{forms.size}. " \
+              "Received #{form_css_selector.inspect}."
+      end
+
+      forms.first
+    rescue Nokogiri::CSS::SyntaxError => error
+      raise ArgumentError,
+            "form_css_selector must be valid CSS. #{error.message}"
+    end
+    module_function :clickwrap_test_form_scope
+    private :clickwrap_test_form_scope
 
     def normalize_test_answer(value)
       case value

@@ -111,6 +111,32 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_match(/no clickwrap presentation token/, error.message)
   end
 
+  test "clickwrap_submission_params_from selects one exact form and refuses an ambiguous page" do
+    html = <<~HTML
+      <form id="first">
+        <input name="clickwrap_submission[presentation_token]" value="first-token">
+        <input name="clickwrap_submission[answers][first_statement]" type="checkbox">
+      </form>
+      <form id="second">
+        <input name="clickwrap_submission[presentation_token]" value="second-token">
+        <input name="clickwrap_submission[answers][second_statement]" type="checkbox">
+      </form>
+    HTML
+
+    ambiguous = assert_raises(ArgumentError) { clickwrap_submission_params_from(html) }
+    assert_match(/2 clickwrap presentation tokens/, ambiguous.message)
+    assert_match(/form_css_selector/, ambiguous.message)
+
+    params = clickwrap_submission_params_from(html, form_css_selector: "form#second")
+    assert_equal "second-token", params.dig("clickwrap_submission", "presentation_token")
+    assert_equal({ "second_statement" => "1" }, params.dig("clickwrap_submission", "answers"))
+
+    missing = assert_raises(ArgumentError) do
+      clickwrap_submission_params_from(html, form_css_selector: "form#missing")
+    end
+    assert_match(/match exactly one <form>/, missing.message)
+  end
+
   test "a required control left unchecked re-renders the screen with an error and records nothing" do
     login_as @user
     get "/legal/policies/signup"

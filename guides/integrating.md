@@ -101,6 +101,17 @@ post user_registration_path, params: {
 declined = clickwrap_params_from(some_path, answers: { terms: false })
 ```
 
+If a page renders several independent Clickwrap forms, select the exact form.
+The helper refuses an ambiguous page rather than mixing one form's signed token
+with another form's answers:
+
+```ruby
+submission = clickwrap_submission_params_from(
+  response,
+  form_css_selector: "form[action='/withdrawals/confirm']"
+)
+```
+
 For service-level tests with no page in the loop, mint the submission
 directly: `submission_for(present_clickwrap(:policy, actor:, ...), answers)`.
 

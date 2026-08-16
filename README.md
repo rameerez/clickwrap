@@ -724,6 +724,17 @@ post user_registration_path, params: {
 declined = clickwrap_params_from(new_user_registration_path, answers: { terms: false })
 ```
 
+If one page renders several independent Clickwrap forms, select the exact form;
+the helper refuses an ambiguous page instead of combining one form's token with
+another form's answers:
+
+```ruby
+submission = clickwrap_submission_params_from(
+  response,
+  form_css_selector: "form[action='/withdrawals/confirm']"
+)
+```
+
 Fault injection proves the atomicity claim in your own suite:
 
 ```ruby
