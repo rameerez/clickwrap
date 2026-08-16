@@ -129,6 +129,28 @@ module Clickwrap
     module_function :submission_for
     public :submission_for
 
+    # The one-line form of the pattern below, for integration tests: GET the
+    # page that renders a clickwrap presentation, read the signed token and
+    # controls back out of it, return the params for the POST.
+    #
+    #   post user_registration_path, params: {
+    #     user: { ... },
+    #     **clickwrap_params_from(new_user_registration_path)
+    #   }
+    def clickwrap_params_from(path, answers: {})
+      unless respond_to?(:get)
+        raise ArgumentError,
+              "clickwrap_params_from drives a real GET, so it needs an integration test " \
+              "(ActionDispatch::IntegrationTest). In other tests, build the submission with " \
+              "present_clickwrap + submission_for instead."
+      end
+
+      get path
+      clickwrap_submission_params_from(response, answers: answers)
+    end
+    module_function :clickwrap_params_from
+    public :clickwrap_params_from
+
     # For integration tests that POST a form the application really rendered —
     # the signed presentation token is minted per render and bound to the
     # session, so a test cannot fabricate it; it has to read it back out of

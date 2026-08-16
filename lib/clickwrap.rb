@@ -362,5 +362,6 @@ require_relative "clickwrap/dsl/retention_builder"
 # autoloader can serve these constants. They must exist the moment the engine
 # file does.
 require_relative "clickwrap/form_builder_extensions"
+require_relative "clickwrap/view_helpers"
 require_relative "clickwrap/controller_helpers"
 require_relative "clickwrap/registration"

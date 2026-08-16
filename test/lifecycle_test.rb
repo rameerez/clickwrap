@@ -211,6 +211,39 @@ class LifecycleTest < ActiveSupport::TestCase
     assert @user.clickwraps.current_for?(:signup)
   end
 
+  test "require_current_revision re-asks when the statement wording itself moved on" do
+    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+
+    assert Clickwrap.verify(:signup, actor: @user, require_current_revision: true).success?,
+           "evidence made under the current wording verifies"
+
+    # Legal rewords a statement: on the next boot LoadPolicies compiles a new
+    # revision, and existing projections keep pointing at the superseded one.
+    # (Re-declaring a policy key mid-process is refused by the registry — the
+    # duplicate-key guard — so simulate the after-reload state directly: the
+    # projection's revision is no longer the policy's current revision.)
+    superseded_stand_in = Clickwrap::PolicyRevision.freeze_for(Clickwrap.policy!(:current_terms))
+    Clickwrap::StatementState.for_actor(@user.to_gid.to_s).for_policy("signup")
+                             .update_all(policy_revision_id: superseded_stand_in.id)
+
+    ordinary = Clickwrap.verify(:signup, actor: @user)
+    assert ordinary.success?, "revision currency is opt-in, never a surprise default"
+
+    strict = Clickwrap.verify(:signup, actor: @user, require_current_revision: true)
+    refute strict.success?
+    assert_equal :stale_policy_revision, strict.error
+    assert strict.stale_policy_revision?, "the vocabulary-generated predicate answers too"
+    assert_equal "terms", strict.statement_key
+  end
+
+  test "verification results answer every stable error as a predicate" do
+    result = Clickwrap.verify(:signup, actor: @user)
+
+    assert result.no_evidence?
+    refute result.consent_withdrawn?
+    refute result.subject_fingerprint_mismatch?
+  end
+
   # --- Exemptions -------------------------------------------------------------
 
   test "an exemption records that no human acted and never satisfies agreed_to?" do

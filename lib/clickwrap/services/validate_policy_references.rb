@@ -76,7 +76,10 @@ module Clickwrap
           if definitions.empty?
             raise DefinitionError,
                   "Policy #{policy.key} presents document #{document_key.inspect}, but no " \
-                  "`Clickwrap.document #{document_key.to_sym.inspect}, ...` declaration exists."
+                  "`Clickwrap.document #{document_key.to_sym.inspect}, ...` declaration exists. " \
+                  "(A statement's document defaults to its own key; if this statement is about " \
+                  "an operational fact with no published document — the statement text itself " \
+                  "is the whole notice — say so with `document: nil`.)"
           end
 
           next if policy.locales.nil?

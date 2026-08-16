@@ -34,6 +34,29 @@ Changes driven by the first real-host integration (CarHey):
 
 ### Added
 
+- **View helpers for custom surfaces** (`Clickwrap::ViewHelpers`, available in
+  every view): `clickwrap_presentation_token_field`,
+  `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and
+  `clickwrap_submit_button` own the three contracts a hand-written form gets
+  wrong silently — the envelope name, the statement control names/ids, and a
+  call to action worded by the signed manifest itself. The host owns every
+  class and wrapper around them. (Extracted from the CarHey money-path
+  migration, where each custom form repeated all three by hand.)
+- **`Clickwrap.verify(..., require_current_revision: true)`** — opt-in
+  revision currency: evidence recorded under a superseded policy revision
+  fails with `:stale_policy_revision` (the verify-time counterpart of the
+  capture-time symbol), so "legal reworded the statement → re-ask" is one
+  keyword instead of a hand-rolled revision comparison at the host's service
+  boundary.
+- **Predicates on verification results**, one per stable error symbol and
+  generated from the vocabulary so they can never drift:
+  `result.no_evidence?`, `result.subject_fingerprint_mismatch?`,
+  `result.stale_policy_revision?`, …
+- `clickwrap_params_from(path, answers: {})` in TestHelpers — the one-line
+  integration-test pattern: GET the page, read the signed token and controls
+  back off it, return the POST params.
+- The unknown-document boot error now mentions `document: nil` for statements
+  about operational facts with no published document.
 - `config.document_renderer = :markdown` — real HTML through whichever
   Markdown library the host already bundles (commonmarker, redcarpet, or
   kramdown; no new dependency), with leading YAML front matter stripped from

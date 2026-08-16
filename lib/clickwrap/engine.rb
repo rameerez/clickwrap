@@ -48,6 +48,7 @@ module Clickwrap
       dsl/retention_builder.rb
       document_renderers/markdown.rb
       form_builder_extensions.rb
+      view_helpers.rb
       controller_helpers.rb
       registration.rb
     ].freeze
@@ -95,6 +96,10 @@ module Clickwrap
     initializer "clickwrap.form_builder" do
       ActiveSupport.on_load(:action_view) do
         ActionView::Helpers::FormBuilder.include(Clickwrap::FormBuilderExtensions)
+        # The custom-surface helpers (token field, statement controls, the
+        # manifest-worded submit) — available in every view, like the form
+        # builder methods above.
+        include Clickwrap::ViewHelpers
       end
     end
 

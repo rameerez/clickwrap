@@ -34,6 +34,15 @@ module Clickwrap
         new(success: true, policy_key: policy_key, event_id: event_id, details: details)
       end
 
+      # One predicate per stable error symbol, generated from the vocabulary so
+      # the two can never drift: `result.subject_fingerprint_mismatch?`,
+      # `result.no_evidence?`, `result.consent_withdrawn?`, … Branching on a
+      # predicate reads aloud and survives typos (a misspelled predicate is
+      # NoMethodError; a misspelled symbol comparison is silently false).
+      Vocabulary::VERIFICATION_ERRORS.each do |error_symbol|
+        define_method("#{error_symbol}?") { error == error_symbol }
+      end
+
       def self.failure(error, policy_key: nil, statement_key: nil, event_id: nil, details: {})
         unless Vocabulary::VERIFICATION_ERRORS.include?(error)
           raise ArgumentError,
@@ -89,7 +98,7 @@ module Clickwrap
       # is "is there current evidence", the second is "is this evidence still
       # good for this exact operation".
       def verify(policy_or_event, actor: nil, subject: nil, tenant: nil, acting_for: UNSPECIFIED,
-                 policy: nil, at: nil)
+                 policy: nil, at: nil, require_current_revision: false)
         at ||= Clickwrap.now
 
         if policy_or_event.is_a?(String) && Identifier.valid?(policy_or_event)
@@ -98,13 +107,15 @@ module Clickwrap
         else
           acting_for = nil if acting_for.equal?(UNSPECIFIED)
           verify_policy(policy_or_event, actor: actor, subject: subject, tenant: tenant,
-                                         acting_for: acting_for, at: at)
+                                         acting_for: acting_for, at: at,
+                                         require_current_revision: require_current_revision)
         end
       end
 
       private
 
-      def verify_policy(policy_key, actor:, subject:, tenant:, acting_for:, at:)
+      def verify_policy(policy_key, actor:, subject:, tenant:, acting_for:, at:,
+                        require_current_revision: false)
         policy = Clickwrap.policies[policy_key.to_s]
 
         return Result.failure(:unknown_policy, policy_key: policy_key.to_s) unless policy
@@ -114,6 +125,11 @@ module Clickwrap
         return Result.failure(:wrong_actor, policy_key: policy.key) unless actor_reference
 
         states = load_states(policy, actor_reference, tenant, subject, acting_for)
+        # Resolved once, only when asked for: "was this act made under the
+        # wording that is current NOW?" A bumped statement compiles a new
+        # revision, so evidence recorded under a superseded one re-asks — the
+        # verify-time counterpart of the capture-time :stale_policy_revision.
+        current_revision_id = (PolicyRevision.freeze_for(policy).id if require_current_revision)
 
         policy.required_statements.each do |statement|
           state = states[statement.key]
@@ -125,6 +141,12 @@ module Clickwrap
 
           failure = check_statement(policy, statement, state, subject, at)
           return failure if failure
+
+          if current_revision_id && state.policy_revision_id != current_revision_id
+            return Result.failure(:stale_policy_revision, policy_key: policy.key,
+                                                          statement_key: statement.key,
+                                                          event_id: state.current_event_id)
+          end
         end
 
         newest = states.values.max_by(&:effective_at)
