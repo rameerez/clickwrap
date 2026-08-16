@@ -9,7 +9,18 @@ module Clickwrap
   # through a disposed root would invent or silently lose state. The method
   # refuses first and leaves the existing projection untouched in that case.
   module CurrentState
-    INITIAL_EVENT_TYPES = (Vocabulary::HUMAN_ACTION_EVENT_TYPES + %w[exemption]).freeze
+    # `imported_legacy` projects like a capture: the source system says the act
+    # happened, and a migrated application must keep answering "did this person
+    # agree?" the way it answered the day before the migration — otherwise
+    # every import ends in a mass forced re-acceptance, which is exactly the
+    # history-rewriting an import exists to avoid. What stays different is the
+    # evidence, not the answer: the event keeps `imported_provider`
+    # attribution, its receipt names every unknown, and
+    # `require_current_version` still sends people back when the documents
+    # move on. (An exemption, by contrast, records that NO human acted — it
+    # projects under its own state and never satisfies a human-action
+    # predicate.)
+    INITIAL_EVENT_TYPES = (Vocabulary::HUMAN_ACTION_EVENT_TYPES + %w[exemption imported_legacy]).freeze
     TRANSITION_STATE_BY_EVENT_TYPE = {
       "withdrawal" => "withdrawn",
       "supersession" => "superseded",

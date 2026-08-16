@@ -84,18 +84,18 @@ class InstallGeneratorTest < Rails::Generators::TestCase
 
       # Column types resolve at MIGRATION RUN time, so one file works across the
       # dev/prod database split as well as across the CI matrix.
-      assert_match(/return :jsonb if connection\.adapter_name\.downcase\.include\?\("postgresql"\)/, migration)
+      assert_match(%r{return :jsonb if connection\.adapter_name\.downcase\.match\?\(/postg/\)}, migration)
       assert_match(/def json_column_type/, migration)
 
       # MySQL 8 refuses a default on a JSON column, so the default itself is a
       # branch rather than a literal.
       assert_match(/def json_column_default/, migration)
       assert_match(/def json_array_default/, migration)
-      assert_match(/return nil if connection\.adapter_name\.downcase\.include\?\("mysql"\)/, migration)
+      assert_match(%r{return nil if connection\.adapter_name\.downcase\.match\?\(/mysql\|trilogy/\)}, migration)
 
       # A silently truncated agreement is the worst failure this gem has, so
       # document bodies get MEDIUMTEXT on MySQL and ordinary TEXT elsewhere.
-      assert_match(/return :mediumtext if connection\.adapter_name\.downcase\.include\?\("mysql"\)/, migration)
+      assert_match(%r{return :mediumtext if connection\.adapter_name\.downcase\.match\?\(/mysql\|trilogy/\)}, migration)
       assert_match(/t\.send\(text_column_type, :content\)/, migration)
     end
   end

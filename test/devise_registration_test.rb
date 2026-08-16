@@ -110,6 +110,46 @@ class DeviseRegistrationTest < ActiveSupport::TestCase
     assert_includes controller.resource.errors[:email], "is not accepted"
   end
 
+  test "a declined required statement refuses the signup with localized inline and base errors" do
+    resource = User.new(email: "declined-terms@example.com", name: "Declined")
+    presentation = present_clickwrap(
+      :signup,
+      actor: nil,
+      prospective_actor: resource,
+      registration_flow_id: "devise-registration-flow"
+    )
+    controller = DeviseLikeRegistrationsController.new.tap do |c|
+      c.resource_to_build = resource
+      c.submitted_clickwrap = submission_for(presentation, { terms: "0", privacy_notice: "1" })
+    end
+
+    controller.create
+
+    assert_equal :failure, controller.response_branch
+    refute resource.persisted?
+    assert_no_clickwrap_event :signup
+    # The person sees the reference screens' sentence, beside the control it
+    # belongs to AND on the summary — never a developer-facing message.
+    expected = I18n.t("clickwrap.errors.required_statement")
+    assert_equal expected, controller.send(:clickwrap_errors)["terms"]
+    assert_includes resource.errors[:base], expected
+  end
+
+  test "a submission with no clickwrap envelope refuses the signup instead of raising" do
+    resource = User.new(email: "no-envelope@example.com", name: "Cached Form")
+    controller = DeviseLikeRegistrationsController.new.tap do |c|
+      c.resource_to_build = resource
+      c.submitted_clickwrap = nil
+    end
+
+    controller.create
+
+    assert_equal :failure, controller.response_branch
+    refute User.exists?(email: "no-envelope@example.com")
+    assert_no_clickwrap_event :signup
+    assert_includes resource.errors[:base], I18n.t("clickwrap.errors.presentation_no_longer_valid")
+  end
+
   test "an evidence write failure escapes and rolls the account back before Devise can sign it in" do
     controller = controller_for(User.new(email: "atomic-devise@example.com", name: "Atomic"))
 

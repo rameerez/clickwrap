@@ -65,6 +65,32 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_clickwrap_receipt_verifies event.receipt
   end
 
+  test "clickwrap_submission_params_from reads the rendered form back like a browser would" do
+    login_as @user
+    get "/legal/policies/signup"
+    assert_response :success
+
+    post "/legal/policies/signup", params: {
+      **clickwrap_submission_params_from(response)
+    }
+
+    assert_clickwrap_current :signup, actor: @user
+    assert_clickwrap_agreed_to :terms, actor: @user
+    assert_clickwrap_acknowledged :privacy_notice, actor: @user
+  end
+
+  test "clickwrap_submission_params_from honors per-statement overrides and refuses a tokenless page" do
+    login_as @user
+    get "/legal/policies/signup"
+
+    params = clickwrap_submission_params_from(response.body, answers: { terms: false })
+    assert_equal "0", params.dig("clickwrap_submission", "answers", "terms")
+    assert_equal "1", params.dig("clickwrap_submission", "answers", "privacy_notice")
+
+    error = assert_raises(ArgumentError) { clickwrap_submission_params_from("<html></html>") }
+    assert_match(/no clickwrap presentation token/, error.message)
+  end
+
   test "a required control left unchecked re-renders the screen with an error and records nothing" do
     login_as @user
     get "/legal/policies/signup"

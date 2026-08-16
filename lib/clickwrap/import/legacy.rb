@@ -190,6 +190,11 @@ module Clickwrap
 
           event.save!
           event.finalize_integrity!
+          # Project into current state, exactly as a capture would: the point
+          # of a migration is that `agreed_to?` keeps answering what the old
+          # system answered. The projection carries this event's id, so the
+          # imported provenance is one join away from every "yes".
+          CurrentState.apply!(event)
         end
 
         Result.new(

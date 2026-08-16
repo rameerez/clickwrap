@@ -6,6 +6,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Changes driven by the first real-host integration (CarHey):
+
+### Changed
+
+- **Imported legacy evidence now satisfies the everyday predicates.**
+  `Clickwrap.import_legacy!` projects into current state exactly as a capture
+  does, so `agreed_to?`, `acknowledged?`, and `current_for?` keep answering
+  what the source system answered — a migration no longer implies mass forced
+  re-acceptance. Provenance is unchanged (`imported_legacy` event type,
+  `imported_provider` attribution, unknowns named in the receipt), and
+  `require_current_version: true` still re-prompts when documents move on.
+  0.1.0 was never published, so no installed application observes a behavior
+  change.
+- The Devise adapter refuses a submission with a missing/stale presentation or
+  a declined required statement on the re-rendered form, with the gem's
+  localized user-facing sentences (inline beside the control and on `:base`) —
+  never a raw exception or a developer-facing message.
+- The framework-integration modules (`FormBuilderExtensions`,
+  `ControllerHelpers`, `Registration`, `DocumentRenderers::Markdown`) are
+  required at boot instead of autoloaded, so hosts whose other gems load
+  Action View/Action Controller first no longer fail with an uninitialized
+  constant.
+- The install migration recognizes the PostGIS adapter as PostgreSQL (jsonb)
+  and Trilogy as MySQL; the generated initializer selects the `:safe_text`
+  renderer explicitly instead of writing `nil` (which disabled rendering).
+
+### Added
+
+- `config.document_renderer = :markdown` — real HTML through whichever
+  Markdown library the host already bundles (commonmarker, redcarpet, or
+  kramdown; no new dependency), with leading YAML front matter stripped from
+  the rendered representation only, the engine name and version recorded in
+  the receipt, and the same safe-list sanitizer as the reference renderer.
+- Spanish locale (`config/locales/es.yml`).
+- `clickwrap_submission_params_from(response)` test helper: host integration
+  tests read the signed presentation token and its controls back off the
+  rendered page, the way a browser does.
+
 ## [0.1.0] - 2026-08-15
 
 First implemented release. `clickwrap` turns terms acceptance, privacy notice

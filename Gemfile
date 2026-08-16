@@ -30,6 +30,12 @@ group :test do
   # `.simplecov` file, which is the layout the whole gem ecosystem uses.
   gem "simplecov", "~> 0.22", require: false
 
+  # Optional integration contract only, like Devise above. The :markdown
+  # document renderer uses whichever Markdown library the HOST bundles
+  # (commonmarker, redcarpet, or kramdown) and adds no runtime dependency;
+  # kramdown is the pure-Ruby one, so it is the one the test lane exercises.
+  gem "kramdown", require: false
+
   # Rails frameworks the dummy app boots that are NOT runtime dependencies of
   # the gem itself. Clickwrap never requires a job backend or a mailer, but the
   # dummy app exercises the after-commit hook and the retention tasks against

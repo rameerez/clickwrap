@@ -42,12 +42,27 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_empty event.documents
 
     # A migration preserves what the old database says happened, including its
-    # unknowns, but it cannot retroactively turn that row into a verified human
-    # act through Clickwrap's presentation/capture path. Imported evidence is
-    # historical evidence, never a live grant.
-    refute_clickwrap_current :signup, actor: @user
-    refute @user.clickwraps.agreed_to?(:terms)
-    refute @user.clickwraps.acknowledged?(:privacy_notice)
+    # unknowns — and it keeps ANSWERING it. The application answered "did this
+    # person agree?" with yes the day before the migration; an import that
+    # flipped that answer would force every existing user back through
+    # re-acceptance, which is the history-rewriting imports exist to avoid.
+    # What stays different is the evidence, not the answer: the event carries
+    # `imported_provider` attribution and names its unknowns, and
+    # `require_current_version` still sends people back when the documents
+    # move on. (The CarHey migration is where this semantic was settled.)
+    assert_clickwrap_current :signup, actor: @user
+    assert @user.clickwraps.agreed_to?(:terms)
+    assert @user.clickwraps.acknowledged?(:privacy_notice)
+    state = Clickwrap::StatementState.find_by(statement_key: "terms",
+                                              actor_reference: @user.to_gid.to_s)
+    assert_equal "imported_legacy", Clickwrap::Event.find(state.current_event_id).event_type
+
+    # The actor's own records screen shows their imported history too — an
+    # empty list would imply they never agreed to anything — and the imported
+    # receipt verifies like any other.
+    imported_receipt = @user.clickwraps.receipts.last
+    assert_equal state.current_event_id, imported_receipt.event_id
+    assert_clickwrap_receipt_verifies imported_receipt
   end
 
   test "import_legacy! is idempotent and dry-runnable" do

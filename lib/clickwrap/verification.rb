@@ -237,7 +237,12 @@ module Clickwrap
                                                          event_id: event.id)
         end
 
-        if state.state == "active" && !event.human_action?
+        # An active grant needs a source that can legitimately grant: a human
+        # action this application captured, or a legacy record imported with
+        # its provenance. An exemption or a lifecycle event backing an
+        # "active" projection is a hand-crafted row, and stays refused.
+        active_grant_source = event.human_action? || event.event_type == "imported_legacy"
+        if state.state == "active" && !active_grant_source
           return Result.failure(:no_evidence, policy_key: policy.key,
                                               statement_key: statement.key,
                                               event_id: event.id)

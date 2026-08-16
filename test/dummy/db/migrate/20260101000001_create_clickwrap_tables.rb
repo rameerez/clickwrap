@@ -843,7 +843,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
   end
 
   def json_column_type
-    return :jsonb if connection.adapter_name.downcase.include?("postgresql")
+    return :jsonb if connection.adapter_name.downcase.match?(/postg/) # postgresql, postgis
 
     :json
   end
@@ -852,14 +852,14 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
   # default for SQLite/PostgreSQL, nil for MySQL. The models handle nil
   # gracefully by defaulting to {} in their accessors.
   def json_column_default
-    return nil if connection.adapter_name.downcase.include?("mysql")
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
 
     {}
   end
 
   # Same MySQL caveat as `json_column_default`, but for list-shaped columns.
   def json_array_default
-    return nil if connection.adapter_name.downcase.include?("mysql")
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
 
     []
   end
@@ -869,7 +869,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
   # `:mediumtext` maps to MEDIUMTEXT on MySQL (16 MB) and to ordinary TEXT
   # everywhere else.
   def text_column_type
-    return :mediumtext if connection.adapter_name.downcase.include?("mysql")
+    return :mediumtext if connection.adapter_name.downcase.match?(/mysql|trilogy/)
 
     :text
   end

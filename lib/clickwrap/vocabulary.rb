@@ -91,9 +91,18 @@ module Clickwrap
     ].freeze
 
     # Event types that record an act by a human through a Clickwrap
-    # presentation. Only these can satisfy `agreed_to?`, `consented_to?` and
-    # the other human-action predicates.
+    # presentation. These satisfy `agreed_to?`, `consented_to?` and the other
+    # human-action predicates — as does `imported_legacy`, which carries what a
+    # previous system recorded about a human action (an exemption never does:
+    # it records that no human acted).
     HUMAN_ACTION_EVENT_TYPES = %w[capture correction renewal scope_change].freeze
+
+    # What belongs in an actor's own receipts collection: every act they
+    # performed here, plus their history imported from a previous system or
+    # recorded by an external provider. A migrated user's records screen must
+    # show their history, not an empty list that implies they never agreed to
+    # anything.
+    ACTOR_RECEIPT_EVENT_TYPES = (HUMAN_ACTION_EVENT_TYPES + %w[imported_legacy external_receipt]).freeze
 
     # Where a capture came from. This is recorded, never guessed: a missing
     # browser parameter is not evidence of a system actor.

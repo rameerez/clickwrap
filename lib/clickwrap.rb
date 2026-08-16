@@ -19,6 +19,7 @@ require_relative "clickwrap/subject_fingerprint"
 require_relative "clickwrap/remediation_token"
 require_relative "clickwrap/durable_commit_callback"
 require_relative "clickwrap/document_renderer"
+require_relative "clickwrap/document_renderers/markdown"
 require_relative "clickwrap/configuration"
 require_relative "clickwrap/macros"
 
@@ -353,3 +354,13 @@ require_relative "clickwrap/policy"
 require_relative "clickwrap/retention_class"
 require_relative "clickwrap/dsl/policy_builder"
 require_relative "clickwrap/dsl/retention_builder"
+
+# The framework-integration modules are spine files, not autoloaded code: the
+# engine's `on_load(:action_view)` / `on_load(:action_controller)` hooks run
+# IMMEDIATELY when a host's other gems have already loaded that framework by
+# the time Clickwrap's initializers register — which can be before the host's
+# autoloader can serve these constants. They must exist the moment the engine
+# file does.
+require_relative "clickwrap/form_builder_extensions"
+require_relative "clickwrap/controller_helpers"
+require_relative "clickwrap/registration"

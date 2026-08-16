@@ -144,8 +144,24 @@ module Clickwrap
         clear_clickwrap_registration_flow_when_committed(result, clickwrap_registration_policy)
 
         resource.persisted?
-      rescue Clickwrap::PresentationInvalid, Clickwrap::AnswerInvalid,
-             Clickwrap::RegistrationFailed, ActiveRecord::RecordInvalid => error
+      rescue Clickwrap::SubmissionInvalid, Clickwrap::PresentationInvalid
+        # A missing, stale, expired, or swapped presentation is a person on an
+        # old render (or a cached form with no presentation at all) — not an
+        # application error. Refuse the signup on the form Devise re-renders,
+        # with the same localized sentence the reference screens use. Never a
+        # raw 500, and never a developer-facing message in front of a person.
+        resource.errors.add(:base, I18n.t("clickwrap.errors.presentation_no_longer_valid")) if resource.errors.empty?
+        false
+      rescue Clickwrap::AnswerInvalid => error
+        # Beside the control it belongs to on the form Devise re-renders — the
+        # same inline treatment the engine's own screens use — plus once on
+        # :base so the page's summary block announces it.
+        if error.statement_key.present?
+          clickwrap_errors[error.statement_key.to_s] = I18n.t("clickwrap.errors.required_statement")
+        end
+        resource.errors.add(:base, I18n.t("clickwrap.errors.required_statement")) if resource.errors.empty?
+        false
+      rescue Clickwrap::RegistrationFailed, ActiveRecord::RecordInvalid => error
         resource.errors.add(:base, error.message) if resource.errors.empty?
         false
       end

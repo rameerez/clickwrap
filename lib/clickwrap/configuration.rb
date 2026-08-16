@@ -288,13 +288,27 @@ module Clickwrap
       @store_document_contents_in = normalized
     end
 
-    # Replaces the reference Markdown renderer. A custom renderer must return
-    # the exact rendered bytes it offered, because Clickwrap stores their digest
+    # Chooses how document bytes become the representation people are offered.
+    # `:safe_text` (the default) escapes everything into a faithful <pre>
+    # block; `:markdown` renders real HTML through whichever Markdown library
+    # the application already bundles (commonmarker, redcarpet, or kramdown —
+    # no new dependency). A custom renderer object must return the exact
+    # rendered bytes it offered, because Clickwrap stores their digest
     # alongside the original source digest. That is what preserves the
     # difference between "this Markdown file existed" and "this rendered
     # representation was offered".
     def document_renderer=(value)
-      @document_renderer = value.nil? ? nil : ensure_callable(value, "document_renderer")
+      @document_renderer =
+        case value
+        when nil then nil
+        when :markdown then DocumentRenderers::Markdown.new
+        when :safe_text then DocumentRenderer.new
+        when Symbol
+          raise ConfigurationError,
+                "document_renderer accepts :safe_text, :markdown, or an object responding " \
+                "to call(bytes, definition) — not #{value.inspect}."
+        else ensure_callable(value, "document_renderer")
+        end
     end
 
     def document_resolver=(value)

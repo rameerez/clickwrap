@@ -1,0 +1,128 @@
+# The gem's own Spanish strings.
+#
+# The same two rules as en.yml, which is the reference file:
+#
+#   1. Verbs stay matched to the kinds. A person AGREES TO Terms ("acepto") and
+#      ACKNOWLEDGES a Privacy Notice ("doy por recibida") — a privacy notice is
+#      information someone is entitled to, not a bargain they strike, and
+#      "acepto la política de privacidad" quietly turns one into the other
+#      (this is the AEPD's own distinction; see the request-evidence guide).
+#   2. Nothing here may claim, or read as claiming, that anything is compliant,
+#      enforceable, legally binding, or that a person read or understood a
+#      document. "He leído..." is deliberately absent.
+#
+# Grammatical gender: forms address the person directly ("tú") and avoid
+# gendered self-descriptions ("informado/a"), so every string works for
+# everyone without slashed suffixes.
+es:
+  clickwrap:
+    statements:
+      agreement:
+        terms: "Acepto los Términos."
+      acknowledgment:
+        privacy_notice: "Doy por recibida la Política de Privacidad."
+
+    ui:
+      error_summary_heading: "Revisa esto antes de continuar"
+      error_prefix: "Error:"
+      required: "Obligatorio"
+      optional: "Opcional"
+      opens_in_new_tab: "(se abre en una pestaña nueva)"
+      document_version: "Versión %{version}"
+      withdrawal_link: "Retira %{purpose} cuando quieras"
+
+    choices:
+      "yes": "Sí"
+      "no": "No"
+      grant: "Sí"
+      decline: "No"
+
+    errors:
+      required_statement: "Debes responder esto antes de continuar."
+      answer_not_accepted: "Esta respuesta no se ha aceptado. Revísala e inténtalo de nuevo."
+      presentation_no_longer_valid: "Esta página caducó antes de enviarse, así que se ha vuelto
+        a mostrar. Revisa tus respuestas y envíala otra vez."
+      temporarily_unavailable: "No se ha podido registrar porque la base de datos estaba
+        temporalmente ocupada. No se ha aceptado nada. Revisa tus respuestas e inténtalo de nuevo."
+
+    captures:
+      title: "Antes de continuar"
+      intro: "Revisa los documentos siguientes y marca tus respuestas. No hay nada seleccionado
+        de antemano."
+      submit_button_text: "Continuar"
+      recorded: "Gracias — ha quedado registrado."
+
+    withdrawals:
+      title: "Retirar %{purpose}"
+      explanation: "Puedes retirarlo cuando quieras, y cuesta una sola pulsación — igual que
+        costó darlo."
+      confirm_button: "Retirar"
+      confirmed: "Ese permiso ha quedado retirado."
+      already_withdrawn: "Ese permiso ya estaba retirado."
+      recorded_reason: "La persona retiró este permiso desde la pantalla de retirada de
+        consentimiento."
+      what_this_does: "Retirarlo registra que a partir de ahora has retirado este permiso. Se
+        añade un registro nuevo en lugar de borrar el anterior, así el historial sigue siendo
+        exacto."
+
+    receipts:
+      index_title: "Tus registros"
+      show_title: "Registro"
+      empty: "Aquí no hay nada todavía."
+      policy: "Política"
+      event_id: "ID del registro"
+      event_type: "Qué ocurrió"
+      recorded_at_by_server: "Registrado por el servidor el"
+      submit_button_text: "Botón de acción de la oferta del servidor"
+      acts: "Declaraciones y respuestas registradas"
+      documents: "Versiones de documentos vinculadas a este registro"
+      offered_and_not_taken: "ofrecido, no marcado"
+      canonical_json: "Descargar el JSON canónico"
+      what_this_records: "Este registro muestra la redacción y las versiones de documentos
+        exactas que esta aplicación generó como oferta, y lo que se envió de vuelta. No
+        demuestra que nadie leyera o entendiera los documentos, y no es una opinión legal
+        sobre ellos."
+
+    kinds:
+      agreement: "Acuerdo"
+      acknowledgment: "Acuse de recibo"
+      consent: "Consentimiento"
+      declaration: "Declaración"
+      attestation: "Certificación"
+      authorization: "Autorización"
+
+    actions:
+      agreed: "Aceptado"
+      acknowledged: "Recibido"
+      granted: "Concedido"
+      declined: "Rechazado"
+      declared: "Declarado"
+      attested: "Certificado"
+      authorized: "Autorizado"
+      withdrawn: "Retirado"
+      renewed: "Renovado"
+      scope_changed: "Alcance modificado"
+      superseded: "Sustituido"
+      expired: "Caducado"
+      consumed: "Utilizado"
+      revoked: "Revocado"
+      corrected: "Corregido"
+
+    event_types:
+      capture: "Enviado"
+      withdrawal: "Retirado"
+      correction: "Corregido"
+      supersession: "Sustituido"
+      expiry: "Caducado"
+      consumption: "Utilizado"
+      revocation: "Revocado"
+      renewal: "Renovado"
+      scope_change: "Alcance modificado"
+      exemption: "Exención registrada — sin acción humana"
+      imported_legacy: "Importado de registros anteriores"
+      external_receipt: "Registrado por otro proveedor"
+      disposition: "Eliminado según una regla de retención"
+      legal_hold_placed: "Puesto en retención legal"
+      legal_hold_released: "Retención legal levantada"
+      receipt_access: "Registro consultado"
+      provider_outcome: "Resultado del proveedor registrado"

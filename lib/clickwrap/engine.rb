@@ -46,6 +46,10 @@ module Clickwrap
       retention_class.rb
       dsl/policy_builder.rb
       dsl/retention_builder.rb
+      document_renderers/markdown.rb
+      form_builder_extensions.rb
+      controller_helpers.rb
+      registration.rb
     ].freeze
 
     initializer "clickwrap.autoload", before: :set_autoload_paths do

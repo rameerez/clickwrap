@@ -84,7 +84,7 @@ module Clickwrap
     end
 
     def receipts
-      ReceiptCollection.new(events.where(event_type: Vocabulary::HUMAN_ACTION_EVENT_TYPES))
+      ReceiptCollection.new(events.where(event_type: Vocabulary::ACTOR_RECEIPT_EVENT_TYPES))
     end
 
     def statement_states = StatementState.for_actor(actor_reference)

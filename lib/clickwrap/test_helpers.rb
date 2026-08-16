@@ -129,6 +129,65 @@ module Clickwrap
     module_function :submission_for
     public :submission_for
 
+    # For integration tests that POST a form the application really rendered —
+    # the signed presentation token is minted per render and bound to the
+    # session, so a test cannot fabricate it; it has to read it back out of
+    # the page, exactly like a browser:
+    #
+    #   get new_user_registration_path
+    #   post user_registration_path, params: {
+    #     user: { email: "person@example.com", password: "..." },
+    #     **clickwrap_submission_params_from(response)
+    #   }
+    #
+    # Every control the page rendered is answered affirmatively by default —
+    # what a person completing the form normally does. Decline or skip one
+    # explicitly with `answers:`:
+    #
+    #   clickwrap_submission_params_from(response, answers: { product_updates: false })
+    #
+    # @param rendered [String, #body] the HTML, or the integration response
+    # @param answers [Hash] statement key => true/false/String override
+    # @return [Hash] params ready to merge into the POST
+    def clickwrap_submission_params_from(rendered, answers: {})
+      require "nokogiri"
+
+      html = rendered.respond_to?(:body) ? rendered.body : rendered.to_s
+      page = Nokogiri::HTML(html)
+
+      token = page.at_css('input[name="clickwrap_submission[presentation_token]"]')&.[]("value")
+      if token.to_s.empty?
+        raise ArgumentError,
+              "The rendered page carries no clickwrap presentation token. GET the page that " \
+              "renders `form.clickwrap` (or `form.clickwrap_fields`) first, then pass that " \
+              "response to clickwrap_submission_params_from."
+      end
+
+      overrides = answers.transform_keys(&:to_s)
+      answered = {}
+      page.css(%([name^="clickwrap_submission[answers]["])).each do |control|
+        key = control["name"][/\[answers\]\[([^\]]+)\]/, 1]
+        next if key.nil? || answered.key?(key)
+
+        answered[key] = normalize_test_answer(overrides.fetch(key, true))
+      end
+
+      { "clickwrap_submission" => { "presentation_token" => token, "answers" => answered.compact } }
+    end
+    module_function :clickwrap_submission_params_from
+    public :clickwrap_submission_params_from
+
+    def normalize_test_answer(value)
+      case value
+      when true then "1"
+      when false then "0"
+      when nil then nil
+      else value.to_s
+      end
+    end
+    module_function :normalize_test_answer
+    private :normalize_test_answer
+
     # Presents, answers, and captures — the everyday way to get real evidence
     # into a test database.
     #

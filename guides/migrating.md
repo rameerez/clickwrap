@@ -314,9 +314,15 @@ bin/rails clickwrap:doctor
 bin/rails clickwrap:verify
 ```
 
-An imported event will not satisfy `agreed_to?` in the way a live capture does — imports are not
-in the human-action event types. If your gate needs imported history to count, that is a policy
-decision to make explicitly rather than one to discover from a failing predicate in production.
+An imported event satisfies `agreed_to?`, `acknowledged?`, and `current_for?` exactly as a live
+capture does. That is the point of a migration: your application answered "did this person
+agree?" with yes the day before the import, and an import that flipped the answer would force
+every existing user back through re-acceptance. What stays different is the evidence, not the
+answer — the event carries `imported_provider` attribution, its receipt names every unknown,
+and the state's `current_event_id` joins to that provenance in one query. If you want migrated
+users re-prompted when the documents move on, that is what `require_current_version: true`
+does, deliberately, per policy. (Exemptions remain the opposite case: no human acted, so they
+never satisfy a human-action predicate.)
 
 ---
 
