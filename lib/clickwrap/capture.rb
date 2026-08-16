@@ -36,12 +36,14 @@ module Clickwrap
                    submission: nil, answers: nil, locale: nil, capture_channel: nil,
                    acting_for: nil, authentication_context: nil, attribution_method: nil,
                    idempotency_key: nil, prospective_actor: nil,
-                   registration_flow_id: nil, consume_one_time_authorizations: true,
+                   registration_flow_id: nil, actor_may_already_exist: false,
+                   consume_one_time_authorizations: true,
                    reason: nil, event_type: "capture", root_event_id: nil,
                    predecessor_event_id: nil, statement_action_overrides: {})
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
+      @actor_may_already_exist = actor_may_already_exist == true
       @subject = subject
       @tenant = tenant
       @http_request = http_request
@@ -90,7 +92,11 @@ module Clickwrap
     def register!(&block)
       raise ArgumentError, "register! needs a block that persists the account" unless block
 
-      @attribution_method = "account_registration"
+      # Honest per act: creating the record is `account_registration`; a public
+      # form that matched an already-existing record (`actor_may_already_exist:
+      # true` — a lead-capture or newsletter form finding its row by typed
+      # email) is `public_form`, because no account was created by it.
+      @attribution_method = @prospective_actor&.persisted? ? "public_form" : "account_registration"
 
       perform(protected_action: true) do |pending|
         result = block.call(pending)
@@ -127,6 +133,7 @@ module Clickwrap
         represented_party: @acting_for,
         prospective_actor: @prospective_actor,
         registration_flow_id: @registration_flow_id,
+        actor_may_already_exist: @actor_may_already_exist,
         explicit_capture_channel: @explicit_capture_channel
       ).verify!
       manifest = verified.manifest
@@ -481,7 +488,13 @@ module Clickwrap
 
     def attribution_method
       @attribution_method ||
-        if actor.nil? && @prospective_actor then "account_registration"
+        if actor.nil? && @prospective_actor
+          # Attribution stays honest about which act this was: creating the
+          # record is `account_registration`; a public form that matched an
+          # already-existing record (a lead-capture or newsletter form finding
+          # its row by typed email) is `public_form` — an unauthenticated
+          # submission named this actor, no account was created by it.
+          @prospective_actor.persisted? ? "public_form" : "account_registration"
         elsif actor.is_a?(SystemActor) then "system_process"
         elsif actor.is_a?(AnonymousActor) then "anonymous_identifier"
         elsif authentication_context[:method].present? then "authenticated_session"

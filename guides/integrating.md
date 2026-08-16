@@ -131,6 +131,29 @@ end
 and assert the parity contract in one test: clickwrap predicates true AND
 legacy columns stamped.
 
+**Public forms with no account** — a lead magnet, a newsletter, a waitlist —
+are the same primitive with two twists: the row is found-or-created by typed
+email, and marketing consent is optional:
+
+```ruby
+lead = Lead.for_email(lead_params[:email])   # find_by email, or new
+register_with_clickwrap(:lead_capture, prospective_actor: lead,
+                        actor_may_already_exist: true) do
+  lead.save!
+end
+```
+
+`actor_may_already_exist: true` is the explicit opt-in for the upsert shape:
+a returning visitor's submission binds to the existing row with honest
+`public_form` attribution (no account was created by the act) instead of
+being refused. Model the marketing box as `consent_to ..., optional: true` —
+an unticked box records that the option was offered and not taken, silence
+being neither refusal nor grant — and give it a `withdrawal_path:` pointing
+at a real GET route (the compiler checks) where a signed token from your
+email footers can withdraw it: `Clickwrap.withdraw!(:your_purpose, actor:
+lead, because: "...")`, which tells "already withdrawn" apart from "never
+granted" so pressing the link twice stays friendly.
+
 ## 4. Custom surfaces — the three contracts
 
 Anything that is not a plain `form.clickwrap` renders three things that fail

@@ -206,16 +206,23 @@ module Clickwrap
     # the presentation binds to a short-lived registration flow, and the account
     # and its evidence commit together. The receipt records account-registration
     # attribution rather than pretending someone was already authenticated.
+    #
+    # A public form that finds or creates its record by a typed identifier (a
+    # lead-capture or newsletter form) passes `actor_may_already_exist: true`:
+    # the same flow then also accepts a prospective actor that turned out to
+    # already have a row, and the receipt records `public_form` attribution for
+    # that case — no account was created by the act, and the evidence says so.
     def register!(policy_key, prospective_actor:, subject: nil, tenant: nil, http_request: nil,
                   submission: nil, answers: nil, locale: nil, capture_channel: nil,
                   acting_for: nil, authentication_context: nil, idempotency_key: nil,
-                  registration_flow_id: nil, &)
+                  registration_flow_id: nil, actor_may_already_exist: false, &)
       Capture.new(
         policy: policy!(policy_key), actor: nil, prospective_actor: prospective_actor,
         subject: subject, tenant: tenant, http_request: http_request, submission: submission,
         answers: answers, locale: locale, capture_channel: capture_channel,
         acting_for: acting_for, authentication_context: authentication_context,
-        idempotency_key: idempotency_key, registration_flow_id: registration_flow_id
+        idempotency_key: idempotency_key, registration_flow_id: registration_flow_id,
+        actor_may_already_exist: actor_may_already_exist
       ).register!(&)
     end
 

@@ -43,9 +43,12 @@ module Clickwrap
     end
 
     # The primitive both adapters compose. A host with its own registration
-    # service can call this directly and get the same guarantees.
+    # service can call this directly and get the same guarantees. Public forms
+    # that find or create their record by a typed identifier (lead capture,
+    # newsletter signup) pass `actor_may_already_exist: true`.
     def self.perform(policy_key, prospective_actor:, http_request: nil, submission: nil,
-                     tenant: nil, locale: nil, registration_flow_id: nil, &block)
+                     tenant: nil, locale: nil, registration_flow_id: nil,
+                     actor_may_already_exist: false, &block)
       raise ArgumentError, "register_with_clickwrap needs a block that persists the account" unless block
 
       Clickwrap.register!(
@@ -56,6 +59,7 @@ module Clickwrap
         tenant: tenant,
         locale: locale,
         registration_flow_id: registration_flow_id,
+        actor_may_already_exist: actor_may_already_exist,
         &block
       )
     end

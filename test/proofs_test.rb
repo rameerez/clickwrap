@@ -318,6 +318,75 @@ class ProofsTest < ActiveSupport::TestCase
     assert_equal "stripe", event.provider_name
   end
 
+  # --- Public forms that find or create their record ---------------------------
+
+  test "a registration flow refuses an already-persisted actor by default and teaches the option" do
+    # Passing a persisted record as a prospective actor is usually a bug (the
+    # host meant capture! with `actor:`). The refusal says so, and names the
+    # explicit opt-in for the one shape where it is legitimate.
+    existing = create_user
+    registration_flow_id = SecureRandom.uuid
+
+    error = assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.register!(:marketing_preferences, prospective_actor: existing,
+                                                  registration_flow_id: registration_flow_id,
+                                                  submission: public_form_submission(
+                                                    existing, registration_flow_id
+                                                  )) do
+        existing.save!
+      end
+    end
+
+    assert_match(/actor_may_already_exist: true/, error.message)
+    assert_match(/public_form/, error.message)
+  end
+
+  test "a public form that matched an existing record captures with honest public_form attribution" do
+    # The lead-capture / newsletter shape: an anonymous visitor submits a
+    # public form, and the host finds (or creates) the row by typed email.
+    # When the row already existed, the receipt must NOT claim an account was
+    # registered — `public_form` says an unauthenticated submission named
+    # this actor, and nothing more.
+    existing = create_user
+    registration_flow_id = SecureRandom.uuid
+
+    receipt = Clickwrap.register!(:marketing_preferences, prospective_actor: existing,
+                                                          registration_flow_id: registration_flow_id,
+                                                          actor_may_already_exist: true,
+                                                          submission: public_form_submission(
+                                                            existing, registration_flow_id
+                                                          )) do
+      existing.save!
+    end
+    receipt = committed_test_receipt(receipt)
+
+    event = receipt.event.reload
+    assert_equal "public_form", event.attribution_method
+    assert_equal existing.id.to_s, event.actor_id.to_s,
+                 "the evidence must bind to the row the form matched"
+    assert existing.clickwraps.consented_to?(:product_updates)
+  end
+
+  test "the same public form still records account_registration when it created the record" do
+    # One call site, both cases, each attributed honestly: whether this
+    # submission created the row is a fact decided at capture time, not a
+    # separate code path the host has to write.
+    fresh = User.new(email: "lead-#{SecureRandom.hex(4)}@example.com", name: "New")
+    registration_flow_id = SecureRandom.uuid
+
+    receipt = Clickwrap.register!(:marketing_preferences, prospective_actor: fresh,
+                                                          registration_flow_id: registration_flow_id,
+                                                          actor_may_already_exist: true,
+                                                          submission: public_form_submission(
+                                                            fresh, registration_flow_id
+                                                          )) do
+      fresh.save!
+    end
+    receipt = committed_test_receipt(receipt)
+
+    assert_equal "account_registration", receipt.event.reload.attribution_method
+  end
+
   private
 
   def withdrawal_answers
@@ -333,5 +402,16 @@ class ProofsTest < ActiveSupport::TestCase
       submit_button_text: "Create account"
     )
     submission_for(presentation, { terms: "1", privacy_notice: "1" })
+  end
+
+  def public_form_submission(prospective_actor, registration_flow_id)
+    presentation = Clickwrap.present(
+      :marketing_preferences,
+      actor: nil,
+      prospective_actor: prospective_actor,
+      registration_flow_id: registration_flow_id,
+      submit_button_text: "Subscribe"
+    )
+    submission_for(presentation, { product_updates: "1" })
   end
 end

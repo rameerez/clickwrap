@@ -34,6 +34,17 @@ Changes driven by the first real-host integration (CarHey):
 
 ### Added
 
+- **Public forms that find or create their record:**
+  `register!(..., actor_may_already_exist: true)`. The lead-capture /
+  newsletter shape — an anonymous visitor submits a public form and the host
+  resolves the row by typed email — is one `register_with_clickwrap` call for
+  both cases now. When the submission created the row, attribution stays
+  `account_registration`; when it matched an existing row, the receipt
+  records the new `public_form` attribution instead, because no account was
+  created by the act. Without the explicit option, a persisted prospective
+  actor is still refused (that is usually a bug — the host meant `capture!`
+  with `actor:`), and the refusal teaches the option. (Forced by migrating a
+  production lead-magnet funnel whose leads upsert by email.)
 - **`Clickwrap::CaptureRefused` with `#user_facing_message`.** Every refusal a
   person can cause from a form — a stale or missing presentation, an
   unparseable submission, a declined required statement — now shares one

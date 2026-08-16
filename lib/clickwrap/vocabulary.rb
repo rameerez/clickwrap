@@ -180,6 +180,7 @@ module Clickwrap
     ATTRIBUTION_METHODS = %w[
       authenticated_session
       account_registration
+      public_form
       operator_session
       api_credential
       anonymous_identifier

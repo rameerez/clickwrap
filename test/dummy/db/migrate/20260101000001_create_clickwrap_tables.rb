@@ -322,7 +322,7 @@ class CreateClickwrapTables < ActiveRecord::Migration[7.1]
                          "capture_channel IN (#{quoted_values(%w[web_browser native_app api_client operator background_job imported_provider system])})",
                          name: "chk_clickwrap_events_channel"
     add_clickwrap_check_constraint :clickwrap_events,
-                         "attribution_method IN (#{quoted_values(%w[authenticated_session account_registration operator_session api_credential anonymous_identifier system_process imported_provider unknown])})",
+                         "attribution_method IN (#{quoted_values(%w[authenticated_session account_registration public_form operator_session api_credential anonymous_identifier system_process imported_provider unknown])})",
                          name: "chk_clickwrap_events_attribution"
 
     # ---------------------------------------------------------------------------
