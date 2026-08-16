@@ -156,7 +156,15 @@ module Clickwrap
                 "with a :bytes key). It returned #{result[:bytes].class}."
         end
 
-        if result.fetch(:media_type, "").to_s.start_with?("text/html")
+        # The safety net for renderers that made NO sanitation decision: a bare
+        # String or a Hash without sanitizer provenance gets the safe list. A
+        # renderer that DECLARED its decision — including the deliberate
+        # "none" of a byte-parity host renderer — owns it; re-sanitizing here
+        # would reparse the bytes and silently overwrite the provenance,
+        # making the stored record claim a different pipeline than the one
+        # that ran.
+        if result.fetch(:media_type, "").to_s.start_with?("text/html") &&
+           result[:sanitizer_name].to_s.empty?
           result[:bytes] = DocumentRenderer.sanitize_html(result[:bytes])
           result[:sanitizer_name] = DocumentRenderer::SANITIZER_NAME
           result[:sanitizer_version] = DocumentRenderer::SANITIZER_VERSION
