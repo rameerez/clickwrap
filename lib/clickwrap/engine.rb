@@ -34,6 +34,12 @@ module Clickwrap
       canonical_json.rb
       digest.rb
       identifier.rb
+      ip_geolocation.rb
+      ip_geolocation/location.rb
+      ip_geolocation/resolver.rb
+      ip_geolocation/null_resolver.rb
+      ip_geolocation/static_resolver.rb
+      ip_geolocation/trackdown_resolver.rb
       configuration.rb
       engine.rb
       macros.rb

@@ -7,6 +7,11 @@ require "test_helper"
 # the host's declarations, and created its tables — all with no app-code edits
 # beyond `has_clickwraps` and one config file.
 class BootTest < ActiveSupport::TestCase
+  test "the official Trackdown adapter is available in a host initializer without a private require" do
+    assert defined?(Clickwrap::IpGeolocation::TrackdownResolver)
+    assert_not defined?(::Trackdown), "naming the adapter must not load its optional dependency"
+  end
+
   test "gem has a version" do
     assert_match(/\A\d+\.\d+\.\d+\z/, Clickwrap::VERSION)
   end
