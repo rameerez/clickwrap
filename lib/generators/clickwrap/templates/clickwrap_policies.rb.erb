@@ -37,11 +37,11 @@
 
 Clickwrap.document :terms,
   version: "<%= Date.today.iso8601 %>",
-  from: Rails.root.join("app/content/legal/terms.md")
+  from: Rails.root.join("<%= terms_document_path %>")
 
 Clickwrap.document :privacy_notice,
   version: "<%= Date.today.iso8601 %>",
-  from: Rails.root.join("app/content/legal/privacy.md")
+  from: Rails.root.join("<%= privacy_document_path %>")
 
 # Several locales are several versions of the same logical document. Each is
 # published and digested separately, and the receipt records which one the

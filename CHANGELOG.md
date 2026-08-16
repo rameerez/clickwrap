@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — installer improvements (driven by installing the gem into a template application)
+
+- **Non-interactive runs skip the questions instead of jumbling them.** When
+  `rails generate clickwrap:install` runs without a terminal (a piped or
+  scripted run, CI, an AI agent), it now announces that it detected a
+  non-interactive run and takes the same collect-nothing defaults as
+  `--skip-questions`, rather than streaming interactive prompts into a pipe
+  that would have taken every `[y/N]` default anyway.
+- **Existing legal pages become the document source.** When the host already
+  keeps both legal documents at a recognized convention — Sitepress-style
+  `app/content/pages/legal/terms.html.md` + `privacy.html.md`, or a previous
+  install's `app/content/legal/*.md` — the generated `config/clickwrap.rb`
+  points its `from:` lines at those exact files and no placeholders are
+  written. What people accept and what the public legal routes render must be
+  the same bytes, and a second copy is how they silently stop being the same
+  document. Placeholders are still written when no convention matches, and a
+  convention only counts when both of its documents exist.
+
 ### Added — the hardening pass (driven by an independent adversarial audit of the CarHey integration)
 
 - **Policy-declared tenant semantics: `tenant_is :not_applicable | :optional | :required`.**

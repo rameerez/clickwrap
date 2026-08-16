@@ -42,6 +42,15 @@ module Clickwrap
 
       RECIPES = %w[privacy-minimized].freeze
 
+      # Places applications already keep the legal text their public routes
+      # serve. Both documents must exist for a convention to count; order
+      # matters, so a Sitepress-style content directory wins over files a
+      # previous install of this generator wrote.
+      EXISTING_LEGAL_CONVENTIONS = [
+        { dir: "app/content/pages/legal", terms: "terms.html.md", privacy: "privacy.html.md" },
+        { dir: "app/content/legal", terms: "terms.md", privacy: "privacy.md" }
+      ].freeze
+
       # The command-line flags name IP-geolocation fields in the plural, the way
       # a person says them out loud ("record cities"); the configuration names
       # one field ("city"). This maps one to the other so both stay readable.
@@ -186,11 +195,24 @@ module Clickwrap
         template "clickwrap_policies.rb.erb", "config/clickwrap.rb"
       end
 
-      # Placeholders only, and only when nothing is there. Clickwrap never
-      # invents legal text: the words are the host's, reviewed by the host's
-      # counsel, and a gem that shipped plausible-looking Terms would be
-      # inviting an application to publish text nobody read.
+      # Placeholders only, and only when the application has no legal text
+      # anywhere Clickwrap recognizes. Clickwrap never invents legal text: the
+      # words are the host's, reviewed by the host's counsel, and a gem that
+      # shipped plausible-looking Terms would be inviting an application to
+      # publish text nobody read.
+      #
+      # When the app ALREADY serves legal pages (a Sitepress content directory,
+      # or a previous install's files), the generated config points at those
+      # exact files instead of writing a second set: what people accept must be
+      # the same bytes the public legal routes render, and two copies of the
+      # Terms is how they silently stop being the same document.
       def create_legal_content_placeholders
+        if detected_legal_documents
+          say_status :found, "existing legal pages in #{detected_legal_documents[:dir]} — " \
+                             "config/clickwrap.rb points at them; no placeholders written", :green
+          return
+        end
+
         copy_legal_placeholder "terms.md", "app/content/legal/terms.md"
         copy_legal_placeholder "privacy.md", "app/content/legal/privacy.md"
       end
@@ -243,10 +265,18 @@ module Clickwrap
         say "       end"
         say "       (and set `config.actor_class_name` in the initializer)" unless actor_class_name
 
-        say "  #{step += 1}. Replace the placeholder legal text with your own reviewed documents:"
-        say "       app/content/legal/terms.md"
-        say "       app/content/legal/privacy.md"
-        say "       then set each `version:` in config/clickwrap.rb."
+        if detected_legal_documents
+          say "  #{step += 1}. Your existing legal pages are the documents (same bytes people"
+          say "     read and accept):"
+          say "       #{terms_document_path}"
+          say "       #{privacy_document_path}"
+          say "       Review each `version:` in config/clickwrap.rb against them."
+        else
+          say "  #{step += 1}. Replace the placeholder legal text with your own reviewed documents:"
+          say "       #{terms_document_path}"
+          say "       #{privacy_document_path}"
+          say "       then set each `version:` in config/clickwrap.rb."
+        end
 
         say "  #{step += 1}. Publish immutable snapshots:"
         say "       bin/rails clickwrap:publish"
@@ -440,6 +470,27 @@ module Clickwrap
         File.exist?(File.expand_path(path, destination_root))
       end
 
+      def detected_legal_documents
+        return @detected_legal_documents if defined?(@detected_legal_documents)
+
+        @detected_legal_documents = EXISTING_LEGAL_CONVENTIONS.find do |convention|
+          host_file?(File.join(convention[:dir], convention[:terms])) &&
+            host_file?(File.join(convention[:dir], convention[:privacy]))
+        end
+      end
+
+      # The paths the generated config's `from:` lines point at — the app's own
+      # legal files when they exist, the freshly written placeholders otherwise.
+      def terms_document_path
+        convention = detected_legal_documents
+        convention ? File.join(convention[:dir], convention[:terms]) : "app/content/legal/terms.md"
+      end
+
+      def privacy_document_path
+        convention = detected_legal_documents
+        convention ? File.join(convention[:dir], convention[:privacy]) : "app/content/legal/privacy.md"
+      end
+
       def routes_file?
         host_file?("config/routes.rb")
       end
@@ -466,7 +517,23 @@ module Clickwrap
       end
 
       def interactive?
-        !options[:skip_questions]
+        return false if options[:skip_questions]
+
+        # No terminal, no questions: a piped or scripted run (CI, a provisioning
+        # script, an AI agent) would otherwise stream every prompt into a jumble
+        # and take the [y/N] defaults anyway. Skipping deliberately keeps the
+        # same collect-nothing outcome and says so once, instead of pretending
+        # a conversation happened.
+        unless $stdin.tty?
+          @announced_non_interactive ||= begin
+            say "Non-interactive run detected: skipping questions and writing the safe, " \
+                "collect-nothing defaults (same as --skip-questions).", :yellow
+            true
+          end
+          return false
+        end
+
+        true
       end
 
       # --- The questions --------------------------------------------------------
@@ -495,7 +562,7 @@ module Clickwrap
       # flags are not: in an interactive run, Clickwrap still asks about every
       # category the operator did not explicitly decide.
       def skip_request_evidence_questions?
-        options[:skip_questions] || privacy_minimized_recipe?
+        !interactive? || privacy_minimized_recipe?
       end
 
       def ask_request_evidence_questions

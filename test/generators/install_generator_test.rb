@@ -3,6 +3,7 @@
 require "test_helper"
 require "rails/generators/test_case"
 require "generators/clickwrap/install_generator"
+require "minitest/mock"
 require "open3"
 require "rbconfig"
 require "tmpdir"
@@ -60,6 +61,66 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_file "config/clickwrap.rb", /Clickwrap\.retention :ordinary_agreement_evidence do/
 
     # Placeholders, never legal text. Both say so in their own first lines.
+    assert_file "app/content/legal/terms.md", /PLACEHOLDER/
+    assert_file "app/content/legal/privacy.md", /PLACEHOLDER/
+  end
+
+  test "a run with no terminal skips the questions and says so, instead of jumbling prompts" do
+    # Piped installs are how CI, provisioning scripts, and AI agents run this
+    # generator. Streaming interactive prompts into a pipe would interleave
+    # them with file output and silently take every [y/N] default anyway —
+    # so the generator must skip deliberately and announce the posture it took.
+    output = $stdin.stub(:tty?, false) do
+      run_generator
+    end
+
+    assert_match(/Non-interactive run detected/, output)
+    assert_match(/same as --skip-questions/, output)
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      RECORD_SETTINGS.each do |setting|
+        assert_match(/^\s*config\.#{setting} = false$/, initializer,
+                     "A non-interactive run must write the collect-nothing default for #{setting}")
+      end
+    end
+  end
+
+  test "existing Sitepress legal pages become the document source and no second copy is written" do
+    # An app that already serves its legal text (app/content/pages/legal, the
+    # Sitepress convention) must not get a SECOND set of legal files: what
+    # people accept has to be the same bytes the public legal routes render,
+    # and two copies is how they silently stop being the same document.
+    FileUtils.mkdir_p(File.join(destination_root, "app/content/pages/legal"))
+    File.write(File.join(destination_root, "app/content/pages/legal/terms.html.md"), "# Existing terms\n")
+    File.write(File.join(destination_root, "app/content/pages/legal/privacy.html.md"), "# Existing privacy\n")
+
+    output = run_generator %w[--skip-questions]
+
+    assert_match(%r{existing legal pages in app/content/pages/legal}, output)
+
+    assert_file "config/clickwrap.rb" do |config|
+      assert_match(%r{from: Rails\.root\.join\("app/content/pages/legal/terms\.html\.md"\)}, config)
+      assert_match(%r{from: Rails\.root\.join\("app/content/pages/legal/privacy\.html\.md"\)}, config)
+    end
+
+    assert_no_file "app/content/legal/terms.md"
+    assert_no_file "app/content/legal/privacy.md"
+  end
+
+  test "one existing legal page is not treated as a convention — placeholders still cover both" do
+    # Detection requires BOTH documents: pointing terms at an existing page
+    # while privacy points at a placeholder would split the pair across two
+    # directories and make the checklist half-wrong in each direction.
+    FileUtils.mkdir_p(File.join(destination_root, "app/content/pages/legal"))
+    File.write(File.join(destination_root, "app/content/pages/legal/terms.html.md"), "# Existing terms\n")
+
+    run_generator %w[--skip-questions]
+
+    assert_file "config/clickwrap.rb" do |config|
+      assert_match(%r{from: Rails\.root\.join\("app/content/legal/terms\.md"\)}, config)
+      assert_match(%r{from: Rails\.root\.join\("app/content/legal/privacy\.md"\)}, config)
+    end
+
     assert_file "app/content/legal/terms.md", /PLACEHOLDER/
     assert_file "app/content/legal/privacy.md", /PLACEHOLDER/
   end

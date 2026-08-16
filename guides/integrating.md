@@ -31,11 +31,13 @@ bin/rails db:migrate
 
 Then, before anything else works:
 
-1. **Point the documents at your REAL legal content**, not the generated
-   placeholders. If your legal pages are Markdown with YAML front matter
-   (Sitepress-style `app/content/pages/legal/*.html.md`), point `from:` at
-   those exact files — the text people accept and the text your `/legal`
-   routes serve must be one file, so they cannot drift. Set
+1. **Point the documents at your REAL legal content**, not generated
+   placeholders. If your legal pages already live at the Sitepress convention
+   (`app/content/pages/legal/terms.html.md` + `privacy.html.md`), the installer
+   detects them, points `from:` at those exact files, and writes no
+   placeholders — the text people accept and the text your `/legal` routes
+   serve must be one file, so they cannot drift. If your legal text lives
+   anywhere else, edit the two `from:` lines yourself. Set
    `config.document_renderer = :markdown` and the gem renders through
    whichever Markdown library you already bundle, front matter stripped.
 2. **Pick version labels you already own.** If the app has a
