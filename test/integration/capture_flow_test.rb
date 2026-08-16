@@ -137,6 +137,29 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_match(/match exactly one <form>/, missing.message)
   end
 
+  test "clickwrap_submission_params_from submits rendered radio choice values instead of checkbox values" do
+    html = <<~HTML
+      <form id="domain-choices">
+        <input name="clickwrap_submission[presentation_token]" value="choice-token">
+        <input name="clickwrap_submission[answers][employment_kind]" type="radio" value="employee">
+        <input name="clickwrap_submission[answers][employment_kind]" type="radio" value="contractor">
+        <input name="clickwrap_submission[answers][newsletter]" type="radio" value="yes">
+        <input name="clickwrap_submission[answers][newsletter]" type="radio" value="no">
+      </form>
+    HTML
+
+    defaults = clickwrap_submission_params_from(html)
+    assert_equal "employee", defaults.dig("clickwrap_submission", "answers", "employment_kind")
+    assert_equal "yes", defaults.dig("clickwrap_submission", "answers", "newsletter")
+
+    overrides = clickwrap_submission_params_from(
+      html,
+      answers: { employment_kind: "contractor", newsletter: false }
+    )
+    assert_equal "contractor", overrides.dig("clickwrap_submission", "answers", "employment_kind")
+    assert_equal "no", overrides.dig("clickwrap_submission", "answers", "newsletter")
+  end
+
   test "a required control left unchecked re-renders the screen with an error and records nothing" do
     login_as @user
     get "/legal/policies/signup"

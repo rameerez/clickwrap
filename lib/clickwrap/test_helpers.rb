@@ -208,12 +208,18 @@ module Clickwrap
       end
 
       overrides = answers.transform_keys(&:to_s)
-      answered = {}
-      scope.css(%([name^="clickwrap_submission[answers]["])).each do |control|
-        key = control["name"][/\[answers\]\[([^\]]+)\]/, 1]
-        next if key.nil? || answered.key?(key)
+      controls_by_statement = scope.css(%([name^="clickwrap_submission[answers]["]))
+                                   .group_by { |control| control["name"][/\[answers\]\[([^\]]+)\]/, 1] }
 
-        answered[key] = normalize_test_answer(overrides.fetch(key, true))
+      answered = controls_by_statement.each_with_object({}) do |(key, controls), result|
+        next if key.nil?
+
+        answer = if overrides.key?(key)
+                   normalize_rendered_control_answer(controls, overrides.fetch(key))
+                 else
+                   default_rendered_control_answer(controls)
+                 end
+        result[key] = answer unless answer.nil?
       end
 
       { "clickwrap_submission" => { "presentation_token" => token, "answers" => answered.compact } }
@@ -238,6 +244,34 @@ module Clickwrap
     end
     module_function :clickwrap_test_form_scope
     private :clickwrap_test_form_scope
+
+    # A checkbox's affirmative value is conventionally "1". A radio group's
+    # value is the exact choice key the server offered — sometimes "yes", but
+    # just as legitimately "employee", "contractor", or another domain word.
+    # Reading the rendered value keeps this integration helper faithful to the
+    # real form instead of fabricating a checkbox answer for every control.
+    def default_rendered_control_answer(controls)
+      first = controls.first
+      first["type"] == "radio" ? first["value"].to_s : "1"
+    end
+    module_function :default_rendered_control_answer
+
+    def normalize_rendered_control_answer(controls, value)
+      return normalize_test_answer(value) unless controls.first["type"] == "radio"
+      return nil if value.nil?
+      return controls.first["value"].to_s if value == true
+
+      if value == false
+        negative = controls.find do |control|
+          control["value"].to_s.in?(%w[no decline false 0])
+        end
+        return (negative || controls.last)["value"].to_s
+      end
+
+      value.to_s
+    end
+    module_function :normalize_rendered_control_answer
+    private :default_rendered_control_answer, :normalize_rendered_control_answer
 
     def normalize_test_answer(value)
       case value

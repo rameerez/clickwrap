@@ -722,7 +722,21 @@ post user_registration_path, params: {
 
 # Decline one statement instead:
 declined = clickwrap_params_from(new_user_registration_path, answers: { terms: false })
+
+# Choice statements submit their real rendered values. By default the helper
+# selects the first offered radio choice; name a different choice explicitly:
+contractor = clickwrap_params_from(
+  new_user_registration_path,
+  answers: { employment_kind: "contractor" }
+)
 ```
+
+Checkbox statements default to their affirmative value. Radio statements
+default to the first choice rendered by the application, so tests exercise a
+value the server actually offered instead of a fabricated checkbox value.
+Pass the exact choice key when the choice matters. For a conventional
+`yes`/`no` radio group, `false` selects `no`; explicit choice keys remain the
+clearest option for domain-specific choices.
 
 If one page renders several independent Clickwrap forms, select the exact form;
 the helper refuses an ambiguous page instead of combining one form's token with
