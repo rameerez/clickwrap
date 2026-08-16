@@ -21,6 +21,32 @@ module Clickwrap
   #   <% end %>
   #   <%= clickwrap_submit_button(preparation, class: "my-button") %>
   module ViewHelpers
+    # Host-specific navigation attributes for immutable document links. This
+    # helper deliberately lives with the helpers installed into every host
+    # view, rather than only in EngineHelper: `form.clickwrap` renders the
+    # engine's statement partial inside the host form's view context.
+    #
+    # The immutable href is evidence-critical and therefore cannot be
+    # overridden here. Hosts may only choose how their client opens it (for
+    # example, target: "_blank" or data: { turbo: false }).
+    def clickwrap_document_link_html_options(document = nil)
+      raw_options = Clickwrap.config.document_link_html_options_with.call(document)
+      unless raw_options.respond_to?(:to_h)
+        raise ConfigurationError,
+              "document_link_html_options_with must return a Hash of HTML attributes."
+      end
+
+      options = raw_options.to_h.symbolize_keys
+      if options.key?(:href)
+        raise ConfigurationError,
+              "document_link_html_options_with cannot set href. Clickwrap signs the exact " \
+              "immutable document path into the presentation manifest; this hook may only " \
+              "choose how the client opens that path."
+      end
+
+      options
+    end
+
     # The signed presentation token, under the envelope name the capture reads.
     # This is the one hidden field a clickwrap form carries — and the one whose
     # name must never be hand-typed, because a typo here is a form that looks

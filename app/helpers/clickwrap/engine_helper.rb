@@ -41,29 +41,6 @@ module Clickwrap
       clickwrap_routes.document_version_path(identifier, **)
     end
 
-    # Host-specific navigation attributes for an immutable document link. The
-    # path itself is signed into the presentation manifest; these attributes
-    # only tell the current client how to open it. A Hotwire Native host can
-    # override this one seam to add `data: { turbo: false }` without ejecting
-    # and forever maintaining the evidence-critical statement partial.
-    def clickwrap_document_link_html_options(document = nil)
-      raw_options = Clickwrap.config.document_link_html_options_with.call(document)
-      unless raw_options.respond_to?(:to_h)
-        raise ConfigurationError,
-              "document_link_html_options_with must return a Hash of HTML attributes."
-      end
-
-      options = raw_options.to_h.symbolize_keys
-      if options.key?(:href)
-        raise ConfigurationError,
-              "document_link_html_options_with cannot set href. Clickwrap signs the exact " \
-              "immutable document path into the presentation manifest; this hook may only " \
-              "choose how the client opens that path."
-      end
-
-      options
-    end
-
     # The gem's bundled stylesheet. Called from the engine's own views; hosts
     # that eject and restyle the views simply stop including it.
     def clickwrap_styles

@@ -29,6 +29,11 @@ class BootTest < ActiveSupport::TestCase
     assert_includes ActionView::Helpers::FormBuilder.ancestors, Clickwrap::FormBuilderExtensions
   end
 
+  test "host views can render the canonical statement partial without loading an engine controller" do
+    assert_includes ActionView::Base.ancestors, Clickwrap::ViewHelpers
+    assert ActionView::Base.method_defined?(:clickwrap_document_link_html_options)
+  end
+
   test "every clickwrap model is autoloadable and points at its prefixed table" do
     {
       Clickwrap::Document => "clickwrap_documents",
