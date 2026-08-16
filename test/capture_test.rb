@@ -86,6 +86,35 @@ class CaptureTest < ActiveSupport::TestCase
     assert_not @user.clickwraps.consented_to?(:partner_offers)
   end
 
+  test "protected work can read accepted answers without reaching into event rows" do
+    observed = nil
+
+    capture_clickwrap_and(
+      :research_contact,
+      actor: @user,
+      answers: { research_contact: "no" }
+    ) do |pending|
+      observed = {
+        answer: pending.answer_for(:research_contact),
+        answered: pending.answered?(:research_contact),
+        granted: pending.granted?(:research_contact),
+        declined: pending.declined?(:research_contact)
+      }
+    end
+
+    assert_equal({ answer: "no", answered: true, granted: false, declined: true }, observed)
+  end
+
+  test "pending answer helpers read unselected optional statements as silence" do
+    capture_clickwrap_and(:marketing_preferences, actor: @user, answers: {}) do |pending|
+      assert_nil pending.answer_for(:product_updates)
+      assert_not pending.answered?(:product_updates)
+      assert_not pending.granted?(:product_updates)
+      assert_not pending.declined?(:product_updates)
+      assert_raises(Clickwrap::UnknownStatementError) { pending.granted?(:typo) }
+    end
+  end
+
   test "an explicit no is recorded as declined rather than as absence" do
     capture_clickwrap(:research_contact, actor: @user, answers: { research_contact: "no" })
 

@@ -239,6 +239,23 @@ end
 withdrawal.clickwrap_receipt.verify.success?   # one line, years later
 ```
 
+When the protected domain row needs the person's submitted choice, read it
+from the pending receipt rather than parsing controller params a second time:
+
+```ruby
+capture_clickwrap_and!(:privacy_preferences, subject: membership) do |pending_receipt|
+  membership.show_on_public_profile =
+    pending_receipt.granted?(:public_profile_visibility)
+  membership.save!
+end
+```
+
+`answer_for`, `answered?`, `granted?`, and `declined?` read the validated,
+server-bound event being committed. An optional control left unselected returns
+`nil`/`false`; a statement name the policy never declared raises. Silence can
+therefore never become permission, while a typo cannot silently disable a
+feature. This keeps the browser's raw params out of protected domain logic.
+
 This model-first deployment order is safe. Before the generated column exists,
 `has_clickwrap_evidence` stays inert and `clickwrap_receipt` returns `nil`; as
 soon as the migration adds `clickwrap_event_id`, every new row is fail-closed

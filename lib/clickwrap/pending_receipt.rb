@@ -33,6 +33,35 @@ module Clickwrap
       event.statements.to_h { |statement| [statement.statement_key, statement.action] }
     end
 
+    # Read the exact answer that this pending event accepted for one statement.
+    # Protected domain work often needs it before commit: for example, an
+    # optional consent can enable one preference while an unselected consent
+    # must leave that preference disabled. Reaching through
+    # `pending_receipt.event.statements` at every call site is both noisy and
+    # dangerously easy to get wrong (an offered-but-unselected option is not a
+    # grant).
+    #
+    # Unknown statement keys fail loudly so a typo cannot silently turn into a
+    # false boolean at a consequential boundary.
+    def answer_for(statement_key)
+      statement_for(statement_key)&.answer
+    end
+
+    def answered?(statement_key)
+      statement_for(statement_key)&.answered? || false
+    end
+
+    # Consent-oriented convenience predicates. They inspect BOTH the recorded
+    # action and whether the person actually answered, so these methods never
+    # reinterpret silence as a grant or decline.
+    def granted?(statement_key)
+      answered?(statement_key) && statement_for(statement_key).action == "granted"
+    end
+
+    def declined?(statement_key)
+      answered?(statement_key) && statement_for(statement_key).action == "declined"
+    end
+
     def committed?
       refresh_commit_state_if_possible!
       @committed
@@ -108,6 +137,15 @@ module Clickwrap
     end
 
     private
+
+    def statement_for(statement_key)
+      # The policy lookup distinguishes an expected optional statement (which
+      # legitimately has no event row when left unselected) from a misspelled
+      # key. The former returns nil/false through the public helpers; the latter
+      # raises with the policy builder's precise error.
+      Clickwrap.policy!(policy_key).statement!(statement_key)
+      event.statement(statement_key)
+    end
 
     def refresh_commit_state_if_possible!
       return if @committed || @rolled_back || !@wait_for_outer_transaction
