@@ -398,4 +398,24 @@ class LifecycleTest < ActiveSupport::TestCase
     assert_not row.valid?
     assert_match(/must be linked inside/, row.errors[:clickwrap_event].to_sentence)
   end
+
+  test "has_clickwrap_evidence stays inert until its link migration has run" do
+    pre_migration_class = Class.new(ApplicationRecord) do
+      self.table_name = "users"
+
+      has_clickwrap_evidence policy: :signup,
+                             statement: :terms,
+                             actor: :self,
+                             subject: :self
+    end
+    historical_row = pre_migration_class.find(@user.id)
+
+    assert historical_row.valid?
+    assert_nil historical_row.clickwrap_receipt
+
+    new_row = pre_migration_class.new
+    new_row.valid?
+    assert_empty new_row.errors[:clickwrap_event],
+                 "the evidence contract starts when the generated column exists"
+  end
 end

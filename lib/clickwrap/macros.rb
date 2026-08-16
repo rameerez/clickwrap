@@ -84,9 +84,18 @@ module Clickwrap
       validate :validate_clickwrap_evidence_link_cannot_be_replaced
       validate :validate_clickwrap_evidence_matches_this_record
 
-      define_method(:clickwrap_receipt) { clickwrap_event&.receipt }
+      define_method(:clickwrap_receipt) do
+        has_attribute?(:clickwrap_event_id) ? clickwrap_event&.receipt : nil
+      end
 
       define_method(:validate_clickwrap_evidence_is_present_for_new_record) do
+        # A host may deploy the model macro before the link migration, and old
+        # data migrations may load today's model while replaying a schema from
+        # before Clickwrap existed. The contract becomes strict as soon as the
+        # column exists; before then there is no attribute that could carry the
+        # evidence, so the macro must stay inert instead of crashing deploys.
+        return unless has_attribute?(:clickwrap_event_id)
+
         contract = self.class.clickwrap_evidence_contract
         return unless new_record? && contract.fetch(:required_for_new_records)
         return if clickwrap_event_id.present?
@@ -98,6 +107,7 @@ module Clickwrap
       end
 
       define_method(:validate_clickwrap_evidence_link_cannot_be_replaced) do
+        return unless has_attribute?(:clickwrap_event_id)
         return unless persisted? && will_save_change_to_clickwrap_event_id?
 
         previous_id, next_id = clickwrap_event_id_change_to_be_saved
@@ -110,6 +120,8 @@ module Clickwrap
       end
 
       define_method(:validate_clickwrap_evidence_matches_this_record) do
+        return unless has_attribute?(:clickwrap_event_id)
+
         should_validate = new_record? || will_save_change_to_clickwrap_event_id?
         return unless should_validate && clickwrap_event_id.present?
 

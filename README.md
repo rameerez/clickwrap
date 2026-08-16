@@ -239,6 +239,14 @@ end
 withdrawal.clickwrap_receipt.verify.success?   # one line, years later
 ```
 
+This model-first deployment order is safe. Before the generated column exists,
+`has_clickwrap_evidence` stays inert and `clickwrap_receipt` returns `nil`; as
+soon as the migration adds `clickwrap_event_id`, every new row is fail-closed
+by default. That also lets historical data migrations replay schemas from
+before Clickwrap without loading a model method for a column that did not yet
+exist. It does not weaken current rows: after the column exists, missing,
+mismatched, or replaced links fail validation.
+
 And when a *person* causes the refusal — a stale token, a required box left unticked — every such case is one exception family carrying a sentence you can actually show them:
 
 ```ruby
