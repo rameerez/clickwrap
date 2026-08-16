@@ -118,8 +118,9 @@ module Clickwrap
     # rows while waiting for someone else's DNS.
     def perform(protected_action:, &block)
       @protected_action = protected_action
-      policy.validate_tenant!(tenant)
       @joined_existing_transaction = ::ActiveRecord::Base.connection.transaction_open?
+      replay_candidate = find_replay_candidate
+      policy.validate_tenant!(tenant) unless replay_candidate
       verified = PresentationVerifier.new(
         policy: policy,
         submission: submission,
@@ -127,12 +128,16 @@ module Clickwrap
         actor_reference: actor_reference,
         tenant_key: tenant_key,
         subject_key: subject_key,
-        subject_fingerprint: subject_fingerprint,
+        # The protected action may be the very thing that changes the bound
+        # subject. An already-committed nonce is verified against its frozen
+        # event below; recomputing the pre-action fingerprint first would make
+        # a lost-response retry fail precisely because the first attempt worked.
+        subject_fingerprint: (subject_fingerprint unless replay_candidate),
         represented_party: @acting_for,
         prospective_actor: @prospective_actor,
         registration_flow_id: @registration_flow_id,
         explicit_capture_channel: @explicit_capture_channel
-      ).verify!
+      ).verify!(for_replay: replay_candidate.present?)
       manifest = verified.manifest
       revision = verified.revision
       answers = verified.answers
@@ -140,10 +145,10 @@ module Clickwrap
       @frozen_statement_snapshots = verified.statement_snapshots
       @verified_document_versions_by_id = verified.document_versions_by_id
 
-      request_evidence = resolve_request_evidence
-
-      existing = find_existing_event(idempotency_key_for(manifest))
+      existing = replay_candidate || find_existing_event(idempotency_key_for(manifest))
       return replay(existing, answers, manifest) if existing
+
+      request_evidence = resolve_request_evidence
 
       event = nil
       pending = nil
@@ -205,6 +210,17 @@ module Clickwrap
       Event.find_by(policy_key: policy.key, idempotency_key: key)
     end
 
+    # A signed manifest is safe to inspect before the full verification pass;
+    # `Submission#manifest` has already verified its server signature. This
+    # lookup authorizes no action. It only selects the stricter historical
+    # replay path, whose context and exact answers are checked against the
+    # committed event before a receipt is returned.
+    def find_replay_candidate
+      manifest = submission&.manifest
+      key = @explicit_idempotency_key || manifest&.nonce
+      key.present? ? find_existing_event(key) : nil
+    end
+
     # A repeated identical submit returns the original receipt without running
     # the protected action again. A repeat with different answers is a replay
     # attempt, not a retry, and gets a stable failure rather than a second
@@ -232,6 +248,7 @@ module Clickwrap
                 event.actor_reference == expected_actor &&
                 event.tenant_key.to_s == tenant_key.to_s &&
                 event.subject_key.to_s == subject_key.to_s &&
+                event.subject_fingerprint.to_s == manifest.subject_fingerprint.to_s &&
                 event.capture_channel == capture_channel &&
                 event.represented_party_reference.to_s == Reference.represented_party(@acting_for).to_s
 

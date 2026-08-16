@@ -294,6 +294,9 @@ exact operation":
 - **Fingerprint the moving parts**: `subject_fingerprint_with:` recomputes
   from committed rows at capture, so anything that changed between render
   and submit refuses the submit instead of signing over a different state.
+  An exact retry of an already committed nonce is the deliberate exception:
+  Clickwrap verifies it against the frozen event and does not require the
+  protected action's pre-action fingerprint to survive its own success.
 - **The final act is `authorize …, one_time: true`,** captured by
   `capture_and!` INSIDE your own locked transaction, wrapping the debit or
   transition itself. `capture_and!` joins an open transaction, so:

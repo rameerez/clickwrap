@@ -214,7 +214,7 @@ def create
 end
 ```
 
-If the event write fails, the action rolls back. If your block raises, the event rolls back. Repeating an identical submission returns the original result without running the block twice; a conflicting replay fails with a stable `Clickwrap::ReplayRejected`.
+If the event write fails, the action rolls back. If your block raises, the event rolls back. Repeating an identical submission returns the original result without running the block twice; a conflicting replay fails with a stable `Clickwrap::ReplayRejected`. That remains true when the successful action itself changes the fingerprinted subject: once the signed nonce committed, replay verifies the frozen event context and exact answers instead of requiring the old pre-action state to still exist.
 
 Link the row to the evidence that authorized it, so the connection survives years and engineers:
 

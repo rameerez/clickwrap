@@ -31,13 +31,13 @@ module Clickwrap
         @explicit_capture_channel = explicit_capture_channel
       end
 
-      def verify!
+      def verify!(for_replay: false)
         manifest = submitted_manifest!
         capture_channel = @explicit_capture_channel || manifest.capture_channel.to_s
 
-        verify_bindings!(manifest, capture_channel)
+        verify_bindings!(manifest, capture_channel, for_replay: for_replay)
         document_versions = verify_document_digests!(manifest)
-        revision = load_revision!(manifest)
+        revision = load_revision!(manifest, require_current_policy: !for_replay)
         statement_snapshots = frozen_statement_snapshots(revision)
         verify_manifest_matches_revision!(manifest, statement_snapshots)
         answers = collect_answers(manifest)
@@ -85,13 +85,13 @@ module Clickwrap
         manifest
       end
 
-      def verify_bindings!(manifest, capture_channel)
+      def verify_bindings!(manifest, capture_channel, for_replay:)
         verify_registration_binding!(manifest)
         verify_actor_binding!(manifest)
         verify_tenant_binding!(manifest)
-        verify_channel_binding!(manifest, capture_channel)
-        verify_subject_binding!(manifest)
-        verify_represented_party_binding!(manifest)
+        verify_channel_binding!(manifest, capture_channel, for_replay: for_replay)
+        verify_subject_binding!(manifest, for_replay: for_replay)
+        verify_represented_party_binding!(manifest, for_replay: for_replay)
       end
 
       def verify_actor_binding!(manifest)
@@ -114,9 +114,9 @@ module Clickwrap
         )
       end
 
-      def verify_channel_binding!(manifest, capture_channel)
+      def verify_channel_binding!(manifest, capture_channel, for_replay:)
         unless manifest.capture_channel.to_s == capture_channel.to_s &&
-               policy.permits_capture_channel?(capture_channel)
+               (for_replay || policy.permits_capture_channel?(capture_channel))
           raise PresentationInvalid.new(
             "Policy #{policy.key} does not accept this presentation's capture channel.",
             result: Verification::Result.failure(:presentation_channel_mismatch, policy_key: policy.key)
@@ -124,13 +124,19 @@ module Clickwrap
         end
       end
 
-      def verify_subject_binding!(manifest)
+      def verify_subject_binding!(manifest, for_replay:)
         if manifest.subject_key.to_s != @subject_key.to_s
           raise PresentationInvalid.new(
             "This presentation was issued for a different subject.",
             result: Verification::Result.failure(:presentation_subject_mismatch, policy_key: policy.key)
           )
         end
+
+        # The committed event's immutable manifest digest and subject
+        # fingerprint are checked by Capture#replay. Requiring the LIVE
+        # pre-action fingerprint here would reject a safe retry whenever the
+        # successful protected action itself changed that state.
+        return if for_replay
 
         fingerprint_matches =
           if manifest.subject_fingerprint.blank? && @subject_fingerprint.blank?
@@ -147,7 +153,7 @@ module Clickwrap
         )
       end
 
-      def verify_represented_party_binding!(manifest)
+      def verify_represented_party_binding!(manifest, for_replay:)
         expected_reference = @represented_party.nil? ? "" : Reference.represented_party(@represented_party)
         expected_type = @represented_party&.class&.name.to_s
 
@@ -159,7 +165,7 @@ module Clickwrap
           )
         end
 
-        return if manifest.authority_rule == policy.authority_rule&.to_snapshot
+        return if for_replay || manifest.authority_rule == policy.authority_rule&.to_snapshot
 
         raise PresentationInvalid.new(
           "The represented-party authority rule changed after this presentation was issued. Re-render it.",
@@ -247,7 +253,7 @@ module Clickwrap
         verified
       end
 
-      def load_revision!(manifest)
+      def load_revision!(manifest, require_current_policy:)
         revision = PolicyRevision.find_by(
           policy_key: policy.key,
           revision_digest: manifest.revision_digest
@@ -268,6 +274,7 @@ module Clickwrap
           )
         end
 
+        return revision unless require_current_policy
         return revision if revision.matches_loaded_policy?
 
         raise PresentationInvalid.new(

@@ -226,6 +226,61 @@ class CaptureTest < ActiveSupport::TestCase
     end
   end
 
+  test "replay stays idempotent when the successful action changed the bound subject" do
+    Clickwrap.policy :subject_mutation_retry do
+      tenant_is :not_applicable
+
+      declare :reviewed_choice,
+              statement: "I make this choice for the subject's current state.",
+              document: nil,
+              choices: { yes: :declared, no: :declared },
+              require_an_explicit_choice: true,
+              subject_fingerprint_version: "subject-state-v1",
+              subject_fingerprint_with: ->(record) { record.state.to_s }
+
+      retain_with :regulated_evidence
+    end
+
+    withdrawal = create_withdrawal(user: @user)
+    presentation = present_clickwrap(:subject_mutation_retry, actor: @user, subject: withdrawal)
+    accepted = submission_for(presentation, { reviewed_choice: "yes" })
+    runs = 0
+
+    first = Clickwrap.capture_and!(
+      :subject_mutation_retry,
+      actor: @user,
+      subject: withdrawal,
+      submission: accepted
+    ) do
+      runs += 1
+      withdrawal.update!(state: "submitted")
+      withdrawal
+    end
+
+    second = Clickwrap.capture_and!(
+      :subject_mutation_retry,
+      actor: @user,
+      subject: withdrawal,
+      submission: accepted
+    ) do
+      runs += 1
+      withdrawal
+    end
+
+    assert_equal first.event_id, second.event_id
+    assert_equal 1, runs, "the changed post-action state must not defeat an exact retry"
+
+    changed = submission_for(presentation, { reviewed_choice: "no" })
+    assert_raises(Clickwrap::ReplayRejected) do
+      Clickwrap.capture_and!(
+        :subject_mutation_retry,
+        actor: @user,
+        subject: withdrawal,
+        submission: changed
+      ) { flunk("a conflicting replay must never run the protected action") }
+    end
+  end
+
   # --- Presentation binding ---------------------------------------------------
 
   test "a presentation issued to another actor is rejected" do
