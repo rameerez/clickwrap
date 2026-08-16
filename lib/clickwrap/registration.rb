@@ -148,7 +148,10 @@ module Clickwrap
           prospective_actor: resource,
           http_request: request,
           submission: clickwrap_submission,
-          tenant: clickwrap_current_tenant,
+          # Policy-aware on purpose: a signup policy declaring
+          # `tenant_is :not_applicable` must not inherit whatever ambient
+          # organization happens to be current in the session.
+          tenant: clickwrap_current_tenant(clickwrap_registration_policy),
           registration_flow_id: clickwrap_registration_flow_id(clickwrap_registration_policy),
           **clickwrap_registration_options
         ) do |pending_receipt|
@@ -182,9 +185,10 @@ module Clickwrap
         false
       end
 
-      def clickwrap_current_tenant
-        Clickwrap.config.find_current_tenant_with.call(self)
-      end
+      # No local tenant resolution here: ControllerHelpers#clickwrap_current_tenant
+      # (installed on every host controller) is the one policy-aware path. A
+      # zero-arity override in this PREPENDED module would shadow it for every
+      # call site in the host — the exact bug class this comment guards against.
 
       def run_after_registration_account_is_saved(account, pending_receipt)
         callback = clickwrap_after_registration_account_is_saved

@@ -246,7 +246,6 @@ module Clickwrap
         "authentication_context" => authentication_context.presence,
         "recorded_at_by_server" => Receipt.format_time(recorded_at_by_server),
         "occurred_at" => Receipt.format_time(occurred_at),
-        "recording_order" => canonical_recording_order,
         "idempotency_key" => idempotency_key,
         "http_request_id" => http_request_id,
         "http_route_name" => http_route_name,
@@ -614,15 +613,12 @@ module Clickwrap
       self.recording_sequence ||= RecordingSequence.create!.id
     end
 
-    # A historical event may predate the recording-order column. Omitting the
-    # fragment is essential: adding a made-up value during an upgrade would
-    # change the bytes covered by its already-stored digest and invalidate the
-    # receipt the migration was supposed to preserve.
-    def canonical_recording_order
-      return if recording_sequence.blank?
-
-      { "database_sequence" => recording_sequence }
-    end
+    # The recording sequence is DELIBERATELY absent from the canonical body and
+    # every receipt: it is the installation's private total order (a global
+    # counter), and publishing it would hand each receipt holder an enumerable
+    # census of how many events this installation records. Ordering questions
+    # are answered live against the database (`recorded_after?`), never off a
+    # receipt.
 
     def ensure_integrity_was_finalized
       return if event_digest.present? && digest_verified?

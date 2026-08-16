@@ -24,6 +24,10 @@ module Clickwrap
       server_observed_ip_address capture_channel authentication_method
     ].freeze
 
+    # The longest an answer can be: generous for any declared choice name,
+    # far too short for smuggled prose or a payload.
+    MAX_ANSWER_LENGTH = 120
+
     attr_reader :presentation_token, :answers
 
     def initialize(presentation_token:, answers: {})
@@ -145,6 +149,17 @@ module Clickwrap
           raise SubmissionInvalid,
                 "The answer for #{name.inspect} is a #{value.class}. Answers are single values: " \
                 "a checkbox state or the name of one declared choice."
+        end
+
+        # Answers are the one client-authored value that becomes digested
+        # evidence, so their domain is bounded: a checkbox state or a declared
+        # choice name is never longer than this. Refused, never truncated —
+        # evidence is recorded exactly or not at all.
+        if value.to_s.length > MAX_ANSWER_LENGTH
+          raise SubmissionInvalid,
+                "The answer for #{name.inspect} is #{value.to_s.length} characters. An answer " \
+                "is a checkbox state or the name of one declared choice, never free text; " \
+                "anything over #{MAX_ANSWER_LENGTH} characters is refused rather than recorded."
         end
 
         [name, value.nil? ? nil : value.to_s]

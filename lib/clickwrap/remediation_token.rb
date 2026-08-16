@@ -37,7 +37,7 @@ module Clickwrap
         verifier.generate(attributes, purpose: PURPOSE, expires_at: expires_at)
       end
 
-      def resolve!(token, policy:, actor:, tenant: nil)
+      def resolve!(token, policy:, actor:)
         attributes = verifier.verified(token.to_s, purpose: PURPOSE)
         raise RemediationInvalid, "The remediation token is missing, expired, or invalid." unless attributes
 
@@ -49,9 +49,12 @@ module Clickwrap
           raise RemediationInvalid, "The remediation token belongs to a different actor."
         end
 
-        unless secure_equal?(attributes["tenant_reference"], Reference.tenant(tenant))
-          raise RemediationInvalid, "The remediation token belongs to a different tenant."
-        end
+        # The tenant is CARRIED, not compared: the gate resolved it server-side
+        # and signed it, and the engine's own routes have no ambient tenant to
+        # compare against — a comparison here permanently 404'd every
+        # remediation issued from a tenant-scoped page. The signature is the
+        # authority; the resolved context hands the tenant back to
+        # presentation and capture exactly like the subject.
 
         subject = resolve_record(attributes["subject"], "subject")
         represented_party = resolve_record(attributes["represented_party"], "represented_party")

@@ -5,10 +5,15 @@ module Clickwrap
   # state scope. Evidence stays in Event; this table exists because a row
   # lock cannot be taken before the first projection/event creates its row.
   #
-  # Persisting one lock per identity avoids adapter-specific advisory locks and
-  # gives PostgreSQL, MySQL, and SQLite the same correctness contract. Callers
-  # acquire several identities in digest order so policies with more than one
-  # one-time statement cannot deadlock by choosing a different order.
+  # Persisting one lock per identity avoids adapter-specific advisory locks.
+  # On PostgreSQL and MySQL each acquisition is a real row lock; SQLite emits
+  # no locking clause (Arel's SQLite visitor is a no-op for FOR UPDATE), so
+  # what serializes writers there is the database-wide write lock — a
+  # different mechanism whose contention surfaces as SQLITE_BUSY rather than
+  # a blocked row. The concurrency test lane runs on PostgreSQL and MySQL for
+  # exactly this reason. Callers acquire several identities in digest order so
+  # policies with more than one one-time statement cannot deadlock by
+  # choosing a different order.
   class StatementIdentityLock < ApplicationRecord
     self.table_name = "clickwrap_statement_identity_locks"
 

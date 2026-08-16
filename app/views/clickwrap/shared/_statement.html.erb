@@ -80,12 +80,18 @@
       <% statement.documents.each do |document| %>
         <li class="clickwrap-documents__item">
           <% if document.path.present? %>
+            <% link_options = clickwrap_document_link_html_options(document) %>
             <%= link_to document.label, document.path,
                   class: "clickwrap-documents__link",
-                  **clickwrap_document_link_html_options(document) %>
-            <span class="clickwrap-documents__hint">
-              <%= t("clickwrap.ui.opens_in_new_tab") %>
-            </span>
+                  **link_options %>
+            <%# The hint tells the truth about what the host's navigation hook
+                actually does — a same-window link labelled "opens in a new
+                tab" would be the page lying about itself. %>
+            <% if link_options[:target].to_s == "_blank" %>
+              <span class="clickwrap-documents__hint">
+                <%= t("clickwrap.ui.opens_in_new_tab") %>
+              </span>
+            <% end %>
           <% else %>
             <span class="clickwrap-documents__link clickwrap-documents__link--unavailable">
               <%= document.label %>

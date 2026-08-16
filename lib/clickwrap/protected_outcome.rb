@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  # Builds and verifies the exact result a protected database action records in
-  # its evidence event. Hosts provide ordinary canonical facts; Clickwrap owns
-  # the stable reference and the digest over the complete claim.
+  # Builds the exact result a protected database action records in its
+  # evidence event, and re-derives its digest so the recorded claim cannot be
+  # edited after the fact. What the digest binds is what the recorder
+  # returned — it does not independently verify the recorder told the truth.
+  # Hosts provide ordinary canonical facts; Clickwrap owns the stable
+  # reference and the digest over the complete claim.
   #
   #   Clickwrap.protected_outcome(
   #     action: :submitted,

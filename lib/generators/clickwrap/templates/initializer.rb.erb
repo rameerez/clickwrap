@@ -167,8 +167,14 @@ Clickwrap.configure do |config|
 
   # Actors read their own receipts. Anything wider is your decision, and a
   # foreign id returns not found rather than leaking that it exists.
+  #
+  # The `present?` check is load-bearing: `receipt.actor` is legitimately nil
+  # for imported evidence and after an actor's account is deleted, and a
+  # signed-out viewer is nil too — a bare `==` would let nil equal nil and
+  # fail open on exactly those receipts.
   config.authorize_receipt_access_with = lambda do |controller, receipt|
-    controller.<%= current_actor_method_name %> == receipt.actor
+    controller.<%= current_actor_method_name %>.present? &&
+      controller.<%= current_actor_method_name %> == receipt.actor
   end
 
   # Unredacted request evidence — the raw IP address, User-Agent, and

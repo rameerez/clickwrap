@@ -3,10 +3,12 @@
 module Clickwrap
   # The head of one tamper-evident event chain.
   #
-  # Chaining is off unless configured, and when it is on the scope is per tenant
-  # or per aggregate, never one global chain. A single chain across unrelated
-  # tenants turns every capture into a queue behind every other capture, and
-  # buys assurance nobody asked for at a cost everybody pays.
+  # Chaining is off unless configured. The scope is tenant-and-policy: a
+  # tenanted installation gets one chain per (tenant, policy). An UNTENANTED
+  # installation's scope is the literal "global/<policy_key>" — one chain per
+  # policy across all actors, which means every capture of that policy
+  # serializes behind every other. Enable chaining on hot policies knowing
+  # that queue exists; per-actor scoping is future work, not current behavior.
   #
   # What a chain detects: an event rewritten or removed after the fact, as long
   # as the head remains trustworthy. What it does not do: stop a party with full

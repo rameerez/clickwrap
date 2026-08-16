@@ -36,13 +36,16 @@ module Clickwrap
     # link its screen rules can route, while the web wants a new tab.
     def clickwrap_document_link_html_options(document = nil)
       raw_options = instance_exec(document, &Clickwrap.config.document_link_html_options_with)
-      unless raw_options.respond_to?(:to_h)
+      unless raw_options.is_a?(Hash) || raw_options.is_a?(ActiveSupport::HashWithIndifferentAccess)
         raise ConfigurationError,
               "document_link_html_options_with must return a Hash of HTML attributes."
       end
 
       options = raw_options.to_h.symbolize_keys
-      if options.key?(:href)
+      # Case-insensitive on purpose: HTML lowercases attribute names and keeps
+      # the FIRST duplicate, so a smuggled "HREF" would win over the signed
+      # immutable path in the rendered link.
+      if options.keys.any? { |key| key.to_s.casecmp?("href") }
         raise ConfigurationError,
               "document_link_html_options_with cannot set href. Clickwrap signs the exact " \
               "immutable document path into the presentation manifest; this hook may only " \

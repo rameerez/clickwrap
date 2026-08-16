@@ -25,21 +25,32 @@ module Clickwrap
                     acting_for: nil, http_request: nil)
         require_reason!(because, "Withdrawing consent")
 
-        for_purpose = StatementState
-                      .for_actor(reference_for(actor))
-                      .for_purpose(purpose_key)
-                      .where(kind: "consent", tenant_key: Reference.tenant(tenant),
-                             subject_key: Reference.subject(subject),
-                             represented_party_reference: Reference.represented_party(acting_for))
+        candidates = StatementState
+                     .for_actor(reference_for(actor))
+                     .for_purpose(purpose_key)
+                     .where(kind: "consent",
+                            subject_key: Reference.subject(subject),
+                            represented_party_reference: Reference.represented_party(acting_for))
+                     .to_a
 
-        states = for_purpose.where(state: "active")
+        # Tenant is matched under EACH state's own policy semantics, exactly as
+        # the grant was recorded: a consent captured under
+        # `tenant_is :not_applicable` lives at a nil tenant key, and the
+        # ambient organization in the withdrawing session must not hide it —
+        # that would make consent granted personally unwithdrawable the moment
+        # the person joins an organization.
+        for_purpose = candidates.select do |state|
+          state.tenant_key == expected_tenant_key_for(state, tenant)
+        end
+
+        states = for_purpose.select { |state| state.state == "active" }
 
         if states.empty?
           # Two different situations, told apart, because a person pressing
           # "withdraw" twice is not the same as an application withdrawing
           # something that was never granted — and a controller showing the
           # first person an error would be both wrong and alarming.
-          if for_purpose.where(state: "withdrawn").exists?
+          if for_purpose.any? { |state| state.state == "withdrawn" }
             raise AlreadyWithdrawnError,
                   "Consent for #{purpose_key.inspect} was already withdrawn. Nothing further " \
                   "was recorded; withdrawing twice is not an error worth showing a person."
@@ -51,12 +62,33 @@ module Clickwrap
                 "there may be nothing here to find."
         end
 
-        events = states.map do |state|
-          transition!(state, to: "withdrawn", event_type: "withdrawal", action: "withdrawn",
-                             because: because, http_request: http_request, actor: actor)
+        # One transaction for every matching state: a person withdrawing a
+        # purpose granted under several statements must never end up half
+        # withdrawn with an error implying nothing happened.
+        events = StatementState.transaction do
+          states.map do |state|
+            transition!(state, to: "withdrawn", event_type: "withdrawal", action: "withdrawn",
+                               because: because, http_request: http_request, actor: actor)
+          end
         end
 
         events.length == 1 ? events.first : events
+      end
+
+      # The tenant key this state's grant was recorded under, given what the
+      # withdrawing caller can see. The state's own policy translates the
+      # caller's ambient tenant (`:not_applicable` policies always record nil);
+      # a state whose policy is no longer declared falls back to the raw value,
+      # which is the only reading its records can support.
+      def expected_tenant_key_for(state, tenant)
+        policy = begin
+          Clickwrap.policy!(state.policy_key)
+        rescue UnknownPolicyError
+          nil
+        end
+        return Reference.tenant(tenant) if policy.nil?
+
+        Reference.tenant(policy.tenant_from_controller(tenant))
       end
 
       # Records a corrected factual statement. A correction does not imply the
@@ -235,12 +267,21 @@ module Clickwrap
 
       # Expires everything past its validity. Reporting and tidiness only:
       # verification evaluates expiry live against the clock, so evidence never
-      # becomes wrongly valid because a job did not run.
+      # becomes wrongly valid because a job did not run — which is also why one
+      # contended row (a person withdrawing mid-sweep) skips instead of
+      # aborting the whole batch and leaving every later state untouched.
       def expire_due!(at: Clickwrap.now)
-        StatementState.due_for_expiry(at).map do |state|
-          transition!(state, to: "expired", event_type: "expiry", action: "expired",
-                             because: "The validity period recorded at capture ended", actor: nil, at: at)
+        expired = []
+        StatementState.due_for_expiry(at).find_each do |state|
+          expired << transition!(state, to: "expired", event_type: "expiry", action: "expired",
+                                        because: "The validity period recorded at capture ended",
+                                        actor: nil, at: at)
+        rescue LifecycleError, ::ActiveRecord::ActiveRecordError
+          # This row moved under the sweep (withdrawn, consumed, or locked by a
+          # live transition). The next sweep — or live verification — owns it.
+          next
         end
+        expired
       end
 
       # An explicitly recorded system exemption.
@@ -267,13 +308,22 @@ module Clickwrap
         revision = PolicyRevision.freeze_for(policy)
 
         ::ActiveRecord::Base.transaction do
+          # Actor lock BEFORE the event insert: creating the event reserves the
+          # chain head, and every writer must take these two locks in the same
+          # order (actor first, chain head second — the order capture uses) or
+          # two concurrent paths deadlock against each other.
+          StatementIdentityLock.acquire_for_actor!(reference_for(actor))
+
           event = Event.create!(
             event_type: "exemption",
             policy_key: policy.key,
             policy_revision: revision,
             actor: actor.is_a?(::ActiveRecord::Base) ? actor : nil,
             actor_reference: reference_for(actor),
-            tenant_key: tenant&.to_s,
+            # Reference.tenant, never to_s: an Active Record tenant's to_s is a
+            # per-process memory address, which would make the exemption
+            # permanently unfindable (and no two exemptions equal).
+            tenant_key: Reference.tenant(tenant),
             subject: subject.is_a?(::ActiveRecord::Base) ? subject : nil,
             subject_key: StatementState.subject_key_for(subject),
             capture_channel: "system",
@@ -318,6 +368,11 @@ module Clickwrap
         human_operator = actor.present? && !actor.is_a?(SystemActor)
 
         Event.transaction do
+          # Actor lock BEFORE the event insert (which reserves the chain head):
+          # every evidence writer takes these two locks actor-first, the order
+          # capture uses, so no two paths can deadlock against each other.
+          StatementIdentityLock.acquire_for_actor!(event.actor_reference)
+
           appended = Event.create!(
             {
               event_type: event_type,

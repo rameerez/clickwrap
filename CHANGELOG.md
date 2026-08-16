@@ -6,6 +6,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the hardening pass (driven by an independent adversarial audit of the CarHey integration)
+
+- **Policy-declared tenant semantics: `tenant_is :not_applicable | :optional | :required`.**
+  Presentation, capture, verification, and import all resolve the tenant
+  through the policy's declaration, and the resolved tenant is signed into
+  the presentation manifest — so a personal policy can never inherit an
+  ambient organization from the session, and an organization member can no
+  longer be dead-ended by a `presentation_tenant_mismatch` between a
+  tenant-less render and a tenant-injecting submit. Withdrawal matches each
+  grant under its own policy's semantics, so consent granted personally stays
+  withdrawable after the person joins an organization; exemptions record the
+  canonical tenant reference. Declare `tenant_is :not_applicable` explicitly
+  on personal policies — it is the difference between "this evidence never
+  changes identity" and "whatever organization happened to be current."
+- **Import chronology and revision honesty.** An imported historical grant
+  can never replace a newer live state (effective-time-first comparison, with
+  server recording order as tie-breaker only); imported evidence carries an
+  explicit legacy-import revision identity that can never satisfy
+  `require_current_revision: true`; and **`counts_as_current: false`**
+  quarantines an import — it satisfies no predicate, survives projection
+  REBUILDS quarantined, and exists for exactly the case where counsel has not
+  yet blessed a legacy source (a bundled checkbox, an unverified column).
+  Import idempotency covers statement mappings and provenance.
+- **Serialized evidence writes.** Every state-mutating path (capture, import,
+  exemption, lifecycle transitions, provider outcomes, projection rebuild)
+  takes a per-actor identity lock first and the chain head second, in one
+  documented order, so concurrent writers block instead of deadlocking and
+  lost-update races on statement states are gone. The concurrency lane runs
+  on PostgreSQL and MySQL — SQLite cannot express row locks.
+- **`recorded_after?` is off ULIDs.** Ordering questions are answered by a
+  durable database sequence under a unique chain position; ULID comparison —
+  process-local monotonicity — is no longer presented as an ordering
+  guarantee anywhere. The sequence is the installation's PRIVATE order: it is
+  deliberately absent from canonical bodies and receipts, because publishing
+  a global counter would hand every receipt holder an enumerable census of
+  installation activity.
+- **Atomic protected outcomes.** `record_protected_outcome_with:` on a
+  one-time authorization records the exact result of the protected action —
+  built via `Clickwrap.protected_outcome`, digest-covered, committed in the
+  same transaction, refused on recorder-version drift — so "this evidence
+  authorized this exact operation" names the operation's amount, record, and
+  state instead of implying them.
+- **Immutable document navigation.** The signed manifest binds each
+  statement's immutable document path; choice/radio statements render their
+  document links (previously only checkboxes did); and
+  `config.document_link_html_options_with` lets hosts choose HOW links open
+  (evaluated in the rendering view, so `hotwire_native_app?` works) while the
+  href itself is refused under any capitalization. The "opens in a new tab"
+  hint renders only when the link actually does.
+- **Engine route authorization.** Receipts and withdrawal routes require a
+  present actor before the host callback runs, and the generated
+  authorization example now guards `nil == nil` explicitly. Remediation
+  tokens CARRY their signed tenant into presentation and capture instead of
+  comparing it against an ambient value the engine's routes cannot have.
+- **Evidence-contract model links.** `has_clickwrap_evidence` takes the full
+  contract (`policy:`, `statement:`, `actor:`, `subject:`, optional
+  `tenant:`/`represented_party:`/`required_for_new_records:`), validates a
+  linked event against it, refuses link replacement, and supports model-first
+  deployments (inert until the column exists; strict from then on).
+- **Submission hardening.** Forged envelope fields raise instead of being
+  dropped; answers are bounded at `Submission::MAX_ANSWER_LENGTH` characters
+  and refused — never truncated — beyond it (an answer is a checkbox state or
+  a declared choice name, not free text).
+- Atomic represented-party creation (`create_represented_party_with_clickwrap`
+  and `including_when_this_action_creates_the_organization:`), atomic local
+  projections for external actions, request-aware geolocation provenance, and
+  pending-receipt answer readers (`answer_for`, `answered?`, `granted?`,
+  `declined?`) that read the validated event being committed instead of
+  re-parsing browser params.
+
 Changes driven by the first real-host integration (CarHey):
 
 ### Changed

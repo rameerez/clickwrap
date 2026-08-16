@@ -125,8 +125,11 @@ module Clickwrap
 
     # When a split integration uses Rails' ordinary form.submit, compare the
     # button Rails actually rendered with the words already signed into the
-    # presentation. This is an evidence invariant, not a heuristic, so drift is
-    # refused in every environment instead of being left as a development log.
+    # presentation, refused in every environment rather than left as a
+    # development log. Honest bound: this hook covers `form.submit` — a raw
+    # <button> tag, `form.button`, or `submit_tag` bypasses it, which is why
+    # the custom-surface helpers exist (`clickwrap_submit_button` words the
+    # button FROM the manifest, so there is nothing to drift).
     def submit(value = nil, options = {})
       html = super
       clickwrap_verify_split_submit_button!(html) if @clickwrap_expected_submit_button_text

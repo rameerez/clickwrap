@@ -366,8 +366,7 @@ module Clickwrap
       context = RemediationToken.resolve!(
         token,
         policy: Clickwrap.policy!(policy_key),
-        actor: clickwrap_current_actor,
-        tenant: clickwrap_current_tenant(policy_key)
+        actor: clickwrap_current_actor
       )
 
       authorize_clickwrap_remediation_context!(

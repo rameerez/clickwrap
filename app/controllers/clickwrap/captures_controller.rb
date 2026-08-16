@@ -23,7 +23,8 @@ module Clickwrap
 
     def create
       capture_clickwrap!(@policy.key, subject: @remediation_subject,
-                                      acting_for: @remediation_represented_party)
+                                      acting_for: @remediation_represented_party,
+                                      **remediation_tenant_option)
 
       redirect_to @return_to, allow_other_host: false, notice: t("clickwrap.captures.recorded")
     rescue AnswerInvalid => error
@@ -72,6 +73,7 @@ module Clickwrap
         @remediation_token = nil
         @remediation_subject = nil
         @remediation_represented_party = nil
+        @remediation_tenant = nil
         return
       end
 
@@ -79,6 +81,9 @@ module Clickwrap
       @remediation_token = token
       @remediation_subject = @remediation_context.subject
       @remediation_represented_party = @remediation_context.represented_party
+      # The signed token carries the tenant the gate resolved; the engine's own
+      # routes have no ambient tenant, so this is the only truthful source.
+      @remediation_tenant = @remediation_context.tenant_reference.presence
     end
 
     def present_policy
@@ -87,8 +92,16 @@ module Clickwrap
         subject: @remediation_subject,
         acting_for: @remediation_represented_party,
         locale: I18n.locale,
-        submit_button_text: submit_button_text
+        submit_button_text: submit_button_text,
+        **remediation_tenant_option
       )
+    end
+
+    # Included only when a signed token carried a tenant: a token-less flow
+    # keeps the ordinary policy-aware ambient resolution, while a tokened flow
+    # must use exactly the tenant the issuing gate resolved and signed.
+    def remediation_tenant_option
+      @remediation_tenant.nil? ? {} : { tenant: @remediation_tenant }
     end
 
     # The words on the button, recorded in the manifest exactly as rendered. A

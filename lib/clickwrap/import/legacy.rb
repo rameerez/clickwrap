@@ -200,6 +200,11 @@ module Clickwrap
         event = nil
 
         ::ActiveRecord::Base.transaction do
+          # Actor lock BEFORE the event insert: saving the event reserves the
+          # chain head, and every writer takes these two locks actor-first
+          # (the order capture uses) so concurrent paths cannot deadlock.
+          StatementIdentityLock.acquire_for_actor!(actor_reference)
+
           event = build_event(now, revision)
           build_statements(event, now)
           build_documents(event)

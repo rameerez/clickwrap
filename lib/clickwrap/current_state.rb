@@ -35,6 +35,11 @@ module Clickwrap
       # leaving evidence whose current state nobody can query.
       def apply!(event)
         return event unless INITIAL_EVENT_TYPES.include?(event.event_type)
+        # An import quarantined with `counts_as_current: false` must stay
+        # quarantined through every path — including a projection REBUILD.
+        # Without this guard, `rebuild_for!` would launder consent the host
+        # explicitly declined to honour into an active grant.
+        return event unless projects_into_current_state?(event)
 
         StatementIdentityLock.acquire_for_actor!(event.actor_reference)
         identities = event.statements.map { |statement| identity_for(event, statement) }
@@ -130,6 +135,17 @@ module Clickwrap
                .to_a
                .each { |event| replay!(event) }
         end
+      end
+
+      # Whether this event is allowed to shape the projection. Captures and
+      # every other initial type always do; an `imported_legacy` event carries
+      # its own answer in the structured provenance it was written with.
+      # Imports that predate the flag project (they were written with exactly
+      # that intent); only an explicit `counts_as_current: false` quarantines.
+      def projects_into_current_state?(event)
+        return true unless event.event_type == "imported_legacy"
+
+        event.provider_verification.to_h["counts_as_current"] != false
       end
 
       private

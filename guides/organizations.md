@@ -93,7 +93,11 @@ reference, so it cannot be moved to another organization between render and
 submit.
 
 If the application uses the organization as its Clickwrap tenant too, configure
-that once:
+the resolver once — **and declare tenant semantics on every policy**, because
+the resolver alone reproduces a real production bug: an organization member's
+session resolves an ambient organization on every request, so a *personal*
+policy (a driver declaration, a payout gate) would silently bind — or refuse —
+under whatever organization happened to be current:
 
 ```ruby
 Clickwrap.configure do |config|
@@ -101,11 +105,34 @@ Clickwrap.configure do |config|
     controller.current_organization
   }
 end
+
+Clickwrap.policy :driver_declaration do
+  tenant_is :not_applicable   # personal evidence: joining an org changes nothing
+
+  declare :non_professional_driver,
+    document: :terms,
+    statement: "I share rides in my personal car, not as commercial transport."
+
+  retain_with :ordinary_agreement_evidence
+end
+
+Clickwrap.policy :organization_terms do
+  tenant_is :required         # org-scoped evidence: the org is passed deliberately
+
+  agree_to :terms
+  permit_acting_for_organization when_actor_is_at_least: :admin
+
+  retain_with :ordinary_agreement_evidence
+end
 ```
 
-The controller helper then supplies the tenant automatically. `acting_for:`
-stays explicit because “this happened inside Acme” and “this person intended to
-bind Acme” are not interchangeable claims.
+`tenant_is :not_applicable` policies always record a nil tenant regardless of
+the ambient organization; `:required` policies refuse to present or capture
+without one; `:optional` (the default) passes the resolved value through.
+Presentation, capture, verification, withdrawal, and import all translate the
+ambient value through the same declaration. `acting_for:` stays explicit
+because “this happened inside Acme” and “this person intended to bind Acme”
+are not interchangeable claims.
 
 ## What is checked at presentation and submit
 

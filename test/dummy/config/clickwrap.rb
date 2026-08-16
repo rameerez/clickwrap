@@ -80,6 +80,8 @@ Clickwrap.policy :current_terms do
   retain_with :ordinary_agreement_evidence
 end
 
+# Tenant-scoped marketing consent (the default `tenant_is :optional`): the
+# engine's tenant-aware withdrawal tests exercise this shape.
 Clickwrap.policy :marketing_preferences do
   consent_to :product_updates,
              document: :marketing_notice,
@@ -90,6 +92,21 @@ Clickwrap.policy :marketing_preferences do
   consent_to :partner_offers,
              document: :marketing_notice,
              statement: "I agree to receive offers from selected partners.",
+             optional: true,
+             withdrawal_path: "/settings/privacy"
+
+  retain_with :marketing_consent_evidence
+end
+
+# Personal marketing consent (`tenant_is :not_applicable`): joining or
+# switching organizations must never change what this consent means or hide
+# it from withdrawal.
+Clickwrap.policy :personal_newsletter do
+  tenant_is :not_applicable
+
+  consent_to :personal_newsletter,
+             document: :marketing_notice,
+             statement: "I agree to receive the newsletter.",
              optional: true,
              withdrawal_path: "/settings/privacy"
 

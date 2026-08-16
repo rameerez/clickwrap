@@ -581,8 +581,7 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     context = Clickwrap::RemediationToken.resolve!(
       token,
       policy: policy,
-      actor: actor,
-      tenant: organization
+      actor: actor
     )
 
     assert_equal organization, context.represented_party
@@ -590,11 +589,10 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     assert_equal "/organization/settings", context.return_to
   end
 
-  test "a remediation route cannot be moved to another actor or tenant" do
+  test "a remediation route cannot be moved to another actor, and its tenant is the signed one" do
     actor = create_user
     another_actor = create_user
     organization = create_test_organization
-    another_organization = create_test_organization
     policy = Clickwrap.policy!(:organization_terms)
     token = Clickwrap::RemediationToken.issue(
       policy: policy,
@@ -607,21 +605,18 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
       Clickwrap::RemediationToken.resolve!(
         token,
         policy: policy,
-        actor: another_actor,
-        tenant: organization
+        actor: another_actor
       )
     end
     assert_match(/different actor/, actor_error.message)
 
-    tenant_error = assert_raises(Clickwrap::RemediationInvalid) do
-      Clickwrap::RemediationToken.resolve!(
-        token,
-        policy: policy,
-        actor: actor,
-        tenant: another_organization
-      )
-    end
-    assert_match(/different tenant/, tenant_error.message)
+    # The tenant is CARRIED by the signed token, never compared against the
+    # resolving request's ambient value: the engine's own routes have no
+    # ambient tenant, so a comparison would 404 every remediation issued from
+    # a tenant-scoped page. The signature is the authority — whatever context
+    # resolves this token, the capture happens under the signed tenant.
+    context = Clickwrap::RemediationToken.resolve!(token, policy: policy, actor: actor)
+    assert_equal organization.to_gid.to_s, context.tenant_reference
   end
 
   test "a represented organization that disappears cannot be recovered from an old remediation route" do
@@ -641,8 +636,7 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
       Clickwrap::RemediationToken.resolve!(
         token,
         policy: policy,
-        actor: actor,
-        tenant: organization
+        actor: actor
       )
     end
     assert_match(/represented party no longer exists/, error.message)
@@ -665,8 +659,7 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
       Clickwrap::RemediationToken.resolve!(
         tampered,
         policy: policy,
-        actor: actor,
-        tenant: organization
+        actor: actor
       )
     end
 
@@ -681,8 +674,7 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
       Clickwrap::RemediationToken.resolve!(
         expired,
         policy: policy,
-        actor: actor,
-        tenant: organization
+        actor: actor
       )
     end
   end
