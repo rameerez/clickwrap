@@ -204,6 +204,27 @@ module Clickwrap
       ).capture_and!(&)
     end
 
+    # A prospective represented-party flow for records such as a new customer
+    # organization. The form binds the record type and a server-owned browser
+    # flow before the record exists. This block must persist that exact record
+    # and its host authority relationship; Clickwrap then verifies authority,
+    # rebinds the final stable reference, and commits all of it together.
+    def create_represented_party!(policy_key, actor:, represented_party:,
+                                  represented_party_creation_flow_id:,
+                                  subject: nil, tenant: nil, http_request: nil,
+                                  submission: nil, answers: nil, locale: nil,
+                                  capture_channel: nil, authentication_context: nil,
+                                  attribution_method: nil, idempotency_key: nil, &)
+      Capture.new(
+        policy: policy!(policy_key), actor: actor, subject: subject, tenant: tenant,
+        http_request: http_request, submission: submission, answers: answers, locale: locale,
+        capture_channel: capture_channel, acting_for: represented_party,
+        authentication_context: authentication_context, attribution_method: attribution_method,
+        idempotency_key: idempotency_key,
+        represented_party_creation_flow_id: represented_party_creation_flow_id
+      ).create_represented_party!(&)
+    end
+
     # Signup, modeled honestly: at first render there is no persisted actor, so
     # the presentation binds to a short-lived registration flow, and the account
     # and its evidence commit together. The receipt records account-registration

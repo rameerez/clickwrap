@@ -578,11 +578,14 @@ end
       submit: "Accept for #{current_organization.name}" %>
 ```
 
-Authority is reread from the membership at submit, and the receipt records the
-human actor, represented organization, actual membership role, authority
-criterion, source, and verification time separately. Clickwrap records the
-configured authorization fact; it does not decide whether that role is legally
-sufficient. See [Binding an organization through a human actor](guides/organizations.md).
+Authority is checked when the form is presented and reread from the membership
+inside the capture transaction. The receipt records the human actor,
+represented organization, actual role at both moments, authority criterion,
+source, and verification times separately. Clickwrap records the configured
+application-authorization fact; it does not decide whether that role is legally
+sufficient. The same integration can create a brand-new organization and its
+owner membership atomically through `create_represented_party_with_clickwrap`.
+See [Binding an organization through a human actor](guides/organizations.md).
 
 ## Recipes
 
@@ -723,7 +726,16 @@ def create
 end
 ```
 
-At submit, `clickwrap` requires a current membership in that exact organization, rereads and locks the membership role *inside* the capture transaction (an admin demoted between render and submit is refused), and rejects a token rendered for one organization and submitted for another. The receipt then records the human actor, the represented organization, the actual membership role, the authority criterion, and the verification time — all as separate facts. An organizational acceptance never quietly answers a personal one, and vice versa:
+When the form is rendered, `clickwrap` verifies authority and signs that
+presentation-time source, role, criterion, and verification time into the
+manifest. At submit it requires a current membership in that exact
+organization and rereads and locks the membership role *inside* the capture
+transaction. An admin demoted between render and submit is refused; a still-
+authorized role change is recorded honestly as two different snapshots. A
+token rendered for one organization is rejected for another. The receipt keeps
+the human actor, represented organization, both authority checks, and the
+protected outcome as separate facts. An organizational acceptance never
+quietly answers a personal one, and vice versa:
 
 ```ruby
 user.clickwraps.current_for?(:organization_terms, acting_for: organization)  # => true
@@ -731,6 +743,62 @@ user.clickwraps.current_for?(:organization_terms)                            # =
 ```
 
 That receipt is exactly what you'll be asked to produce if the agreement is ever disputed: who accepted, for which company, in what role, verified when. Whether that role was *sufficient to bind the company* is a question for your counsel when they choose the `when_actor_is_at_least:` criterion — `clickwrap` records the facts that answer it. Works out of the box with the [`organizations`](https://github.com/rameerez/organizations) gem, or with your own authority model via a registered adapter. The [organizations guide](guides/organizations.md) has the full walkthrough.
+
+If the organization does not exist until this same form creates it, opt into
+that materially different flow explicitly:
+
+```ruby
+Clickwrap.policy :organization_creation do
+  declare :authority_and_content_rights,
+    statement: "I am authorized to create and act for this organization and may use the content I submit.",
+    document: nil,
+    protected_outcome_version: "created-organization-v1",
+    record_protected_outcome_with: ->(organization) {
+      Clickwrap.protected_outcome(
+        action: :created,
+        record: organization,
+        facts: { name: organization.name }
+      )
+    }
+
+  permit_acting_for_organization(
+    when_actor_is_at_least: :owner,
+    including_when_this_action_creates_the_organization: true
+  )
+
+  retain_with :ordinary_agreement_evidence
+end
+```
+
+```erb
+<%= form_with model: @organization do |form| %>
+  <%= form.clickwrap :organization_creation,
+        acting_for: @organization,
+        submit: "Create organization" %>
+<% end %>
+```
+
+```ruby
+create_represented_party_with_clickwrap(
+  :organization_creation,
+  represented_party: @organization
+) do |pending_receipt|
+  @organization.save!
+  @organization.add_member!(current_user, role: :owner)
+  @organization.update!(creation_clickwrap_event_id: pending_receipt.event_id)
+  @organization
+end
+```
+
+The form helper creates a server-owned browser-flow binding automatically. The
+manifest says authority is `not_yet_verifiable` because the membership does not
+exist yet; after the protected block saves the exact organization and owner
+membership, the adapter verifies them and Clickwrap rebinds the final GlobalID
+before commit. If any part fails, none of the organization, membership,
+evidence, or protected outcome commits. The explicit declaration is still what
+records the human's claim of pre-existing real-world authority: an owner role
+created by the transaction proves an application fact, not the truth or legal
+sufficiency of that claim.
 
 ## Testing your integration
 

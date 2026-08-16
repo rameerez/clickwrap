@@ -162,7 +162,21 @@ module Clickwrap
       elsif @template.respond_to?(:clickwrap_document_version_path)
         options[:document_version_path_with] = ->(version) { @template.clickwrap_document_version_path(version) }
       end
+      if controller.respond_to?(:clickwrap_authentication_context, true)
+        options[:authentication_context] = controller.send(:clickwrap_authentication_context)
+      end
       options[:capture_channel] = capture_channel if capture_channel
+
+      if acting_for.respond_to?(:new_record?) && acting_for.new_record?
+        unless controller.respond_to?(:clickwrap_represented_party_creation_flow_id, true)
+          raise ConfigurationError,
+                "Creating a represented party with Clickwrap needs a controller session to " \
+                "bind the browser flow. Include Clickwrap::ControllerHelpers in the parent controller."
+        end
+
+        options[:represented_party_creation_flow_id] =
+          controller.send(:clickwrap_represented_party_creation_flow_id, policy_key)
+      end
 
       if options[:actor].nil? && @object.respond_to?(:new_record?) && @object.new_record?
         controller = @template.try(:controller)

@@ -38,6 +38,9 @@ module Clickwrap
                 subject_fingerprint: nil, registration_flow_id: nil,
                 prospective_actor_type: nil, represented_party_reference: nil,
                 represented_party_type: nil, authority_rule: nil,
+                represented_party_creation_flow_id: nil,
+                represented_party_will_be_created_by_protected_action: false,
+                authority_at_presentation: nil,
                 capture_channel: "web_browser", issued_at: nil, expires_at: nil, nonce: nil)
         issued_at ||= Clickwrap.now
         expires_at ||= issued_at + Clickwrap.config.presentation_valid_for
@@ -54,7 +57,11 @@ module Clickwrap
           "represented_party" => {
             "reference" => represented_party_reference,
             "type" => represented_party_type,
-            "authority_rule" => authority_rule
+            "authority_rule" => authority_rule,
+            "creation_flow_id" => represented_party_creation_flow_id,
+            "will_be_created_by_protected_action" =>
+              represented_party_will_be_created_by_protected_action == true,
+            "authority_at_presentation" => authority_at_presentation
           }.compact.presence,
           "tenant_key" => tenant_key,
           "subject" => { "reference" => subject_key, "fingerprint" => subject_fingerprint }.compact.presence,
@@ -125,6 +132,13 @@ module Clickwrap
     def represented_party_reference = attributes.dig("represented_party", "reference")
     def represented_party_type = attributes.dig("represented_party", "type")
     def authority_rule = attributes.dig("represented_party", "authority_rule")
+    def represented_party_creation_flow_id = attributes.dig("represented_party", "creation_flow_id")
+
+    def represented_party_will_be_created_by_protected_action?
+      attributes.dig("represented_party", "will_be_created_by_protected_action") == true
+    end
+
+    def authority_at_presentation = attributes.dig("represented_party", "authority_at_presentation")
     def tenant_key = attributes["tenant_key"]
     def subject_key = attributes.dig("subject", "reference")
     def subject_fingerprint = attributes.dig("subject", "fingerprint")

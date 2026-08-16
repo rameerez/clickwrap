@@ -156,6 +156,7 @@ module Clickwrap
       # authority is sufficient.
       def permit_acting_for(*represented_party_types, using: :host,
                             when_actor_is_at_least: nil, when_actor_has_permission: nil,
+                            including_when_this_action_creates_the_represented_party: false,
                             **unknown_options)
         refuse_unknown_options!("permit_acting_for", unknown_options)
         if represented_party_types.compact.all? { |type| type.to_s.strip.empty? }
@@ -169,7 +170,9 @@ module Clickwrap
           represented_party_types: represented_party_types,
           adapter_name: using,
           minimum_role: when_actor_is_at_least,
-          required_permission: when_actor_has_permission
+          required_permission: when_actor_has_permission,
+          allow_represented_party_creation:
+            including_when_this_action_creates_the_represented_party
         )
       end
 
@@ -182,6 +185,7 @@ module Clickwrap
       #
       def permit_acting_for_organization(when_actor_is_at_least: nil,
                                          when_actor_has_permission: nil,
+                                         including_when_this_action_creates_the_organization: false,
                                          **unknown_options)
         refuse_unknown_options!("permit_acting_for_organization", unknown_options)
         if when_actor_is_at_least.nil? && when_actor_has_permission.nil?
@@ -195,7 +199,9 @@ module Clickwrap
           "Organizations::Organization",
           using: :organizations_membership,
           when_actor_is_at_least:,
-          when_actor_has_permission:
+          when_actor_has_permission:,
+          including_when_this_action_creates_the_represented_party:
+            including_when_this_action_creates_the_organization
         )
       end
 

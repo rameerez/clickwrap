@@ -38,6 +38,8 @@ module Clickwrap
     def initialize(policy:, actor: nil, subject: nil, tenant: nil, locale: nil,
                    submit_button_text: nil, capture_channel: :web_browser,
                    registration_flow_id: nil, prospective_actor: nil, acting_for: nil,
+                   represented_party_creation_flow_id: nil,
+                   authentication_context: nil,
                    document_version_path_with: nil)
       @policy = policy
       @actor = actor
@@ -49,6 +51,8 @@ module Clickwrap
       @capture_channel = capture_channel.to_s
       @registration_flow_id = registration_flow_id
       @acting_for = acting_for
+      @represented_party_creation_flow_id = represented_party_creation_flow_id
+      @authentication_context = (authentication_context || {}).to_h.symbolize_keys
       @document_version_path_with = document_version_path_with
 
       return unless @document_version_path_with && !@document_version_path_with.respond_to?(:call)
@@ -67,6 +71,7 @@ module Clickwrap
       validate_represented_party_binding!
       validate_channel!
       validate_locale!
+      authority_at_presentation = authority_at_presentation_snapshot
 
       revision = PolicyRevision.freeze_for(policy)
       resolved = policy.statements.map { |statement| resolve_statement(statement) }
@@ -87,6 +92,10 @@ module Clickwrap
         represented_party_reference: represented_party_reference,
         represented_party_type: @acting_for&.class&.name,
         authority_rule: policy.authority_rule&.to_snapshot,
+        represented_party_creation_flow_id: @represented_party_creation_flow_id,
+        represented_party_will_be_created_by_protected_action:
+          prospective_represented_party?,
+        authority_at_presentation: authority_at_presentation,
         capture_channel: capture_channel
       )
 
@@ -126,6 +135,7 @@ module Clickwrap
 
     def represented_party_reference
       return nil if @acting_for.nil?
+      return "represented_party_creation/#{@represented_party_creation_flow_id}" if prospective_represented_party?
 
       Reference.represented_party(@acting_for)
     end
@@ -160,7 +170,10 @@ module Clickwrap
 
     def validate_represented_party_binding!
       if @acting_for.nil?
-        return unless policy.permits_acting_for?
+        if @represented_party_creation_flow_id.present?
+          raise DefinitionError,
+                "A represented-party creation flow needs `acting_for:` to name the exact new record."
+        end
 
         # A policy may support represented-party actions and ordinary personal
         # actions. No represented party on this particular presentation is a
@@ -168,12 +181,51 @@ module Clickwrap
         return
       end
 
-      return if policy.permits_acting_for_party?(@acting_for)
+      unless policy.permits_acting_for_party?(@acting_for)
+        allowed = policy.authority_rule&.represented_party_types
+        raise DefinitionError,
+              "Policy #{policy.key} does not permit acting for #{@acting_for.class.name}. " \
+              "Allowed represented-party types: #{allowed&.join(", ").presence || "(none)"}."
+      end
 
-      allowed = policy.authority_rule&.represented_party_types
-      raise DefinitionError,
-            "Policy #{policy.key} does not permit acting for #{@acting_for.class.name}. " \
-            "Allowed represented-party types: #{allowed&.join(", ").presence || "(none)"}."
+      if prospective_represented_party?
+        unless policy.authority_rule.allows_represented_party_creation?
+          raise DefinitionError,
+                "Policy #{policy.key} does not permit creating the represented party inside " \
+                "the protected action. Opt in explicitly in the represented-party authority rule."
+        end
+        if @represented_party_creation_flow_id.blank?
+          raise DefinitionError,
+                "Presenting a new represented party needs " \
+                "`represented_party_creation_flow_id:` from server-owned session state."
+        end
+      elsif @represented_party_creation_flow_id.present?
+        raise DefinitionError,
+              "`represented_party_creation_flow_id:` is only valid while `acting_for:` is a new record."
+      end
+    end
+
+    def prospective_represented_party?
+      @acting_for.respond_to?(:new_record?) && @acting_for.new_record?
+    end
+
+    def authority_at_presentation_snapshot
+      return nil if @acting_for.nil?
+
+      if prospective_represented_party?
+        return {
+          "state" => "not_yet_verifiable",
+          "reason" => "represented_party_will_be_created_by_protected_action"
+        }
+      end
+
+      AuthorityVerifier.verify!(
+        policy: policy,
+        actor: actor,
+        represented_party: @acting_for,
+        tenant: tenant,
+        authentication_context: @authentication_context
+      ).to_snapshot
     end
 
     def default_locale

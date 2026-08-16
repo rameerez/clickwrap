@@ -94,11 +94,48 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     assert event.authority_verified_at
     assert_equal "1", event.authority_details.fetch("adapter_version")
     assert_equal "admin", event.authority_details.fetch("minimum_role")
+    presented_authority = event.authority_details.fetch("authority_at_presentation")
+    assert_equal "verified", presented_authority.fetch("state")
+    assert_equal "organizations.membership", presented_authority.fetch("source")
+    assert_equal "admin", presented_authority.fetch("role")
+    assert presented_authority.fetch("verified_at").present?
     assert event.digest_verified?
 
     acting_for = receipt.to_h.dig("actor", "acting_for")
     assert_equal organization.to_gid.to_s, acting_for.fetch("reference")
     assert_equal "admin", acting_for.fetch("authority_role")
+  end
+
+  test "authority is verified when the form is presented and reread when it is captured" do
+    actor = create_user
+    organization = create_test_organization
+    admin_membership = membership_for(actor, role: :admin)
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([admin_membership])
+
+    presentation = present_for(actor, organization)
+    presented = presentation.manifest.authority_at_presentation
+
+    assert_equal "verified", presented.fetch("state")
+    assert_equal "admin", presented.fetch("role")
+    assert_equal "organizations.membership", presented.fetch("source")
+
+    owner_membership = membership_for(actor, role: :owner)
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([owner_membership])
+    receipt = capture_presentation(actor, organization, presentation)
+
+    assert_equal "owner", receipt.event.authority_role
+    assert_equal "admin",
+                 receipt.event.authority_details.dig("authority_at_presentation", "role")
+  end
+
+  test "an actor without authority cannot receive an organization-bound presentation" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :member)
+                                                                               ])
+
+    assert_raises(Clickwrap::AuthorityNotVerified) { present_for(actor, organization) }
   end
 
   test "owner inherits an admin minimum role" do
@@ -150,10 +187,10 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     organization.clickwrap_memberships = Organizations::MembershipRelation.new([
                                                                                  membership_for(actor, role: :member)
                                                                                ])
-    assert_raises(Clickwrap::AuthorityNotVerified) { capture_for(actor, organization) }
+    assert_raises(Clickwrap::AuthorityNotVerified) { present_for(actor, organization) }
 
     organization.clickwrap_memberships = Organizations::MembershipRelation.new([])
-    assert_raises(Clickwrap::AuthorityNotVerified) { capture_for(actor, organization) }
+    assert_raises(Clickwrap::AuthorityNotVerified) { present_for(actor, organization) }
   end
 
   test "authority is checked at submit so a role removed after presentation is denied" do
@@ -312,6 +349,197 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     assert_equal "export_data", receipt.event.authority_details.fetch("required_permission")
   end
 
+  test "a policy must explicitly opt in before it can create the represented organization" do
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Prospective")
+
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.present(
+        :organization_terms,
+        actor: actor,
+        acting_for: organization,
+        represented_party_creation_flow_id: SecureRandom.uuid,
+        submit_button_text: "Create organization"
+      )
+    end
+
+    assert_match(/does not permit creating the represented party/, error.message)
+  end
+
+  test "a new organization and its represented-party evidence commit together" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Prospective")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    assert presentation.manifest.represented_party_will_be_created_by_protected_action?
+    assert_equal flow_id, presentation.manifest.represented_party_creation_flow_id
+    assert_equal "not_yet_verifiable",
+                 presentation.manifest.authority_at_presentation.fetch("state")
+
+    receipt = Clickwrap.create_represented_party!(
+      :organization_creation,
+      actor: actor,
+      represented_party: organization,
+      represented_party_creation_flow_id: flow_id,
+      submission: submission_for(presentation, "terms" => "1")
+    ) do
+      organization.save!
+      owner_membership = membership_for(actor, role: :owner)
+      organization.clickwrap_memberships = Organizations::MembershipRelation.new([owner_membership])
+      organization
+    end
+    receipt = committed_test_receipt(receipt)
+    event = receipt.event.reload
+
+    assert_equal organization.to_gid.to_s, event.represented_party_reference
+    assert_equal "owner", event.authority_role
+    assert_equal "organizations.membership", event.authority_source
+    assert_equal true,
+                 event.authority_details.fetch("represented_party_was_created_by_protected_action")
+    assert_equal "not_yet_verifiable",
+                 event.authority_details.dig("authority_at_presentation", "state")
+    assert event.digest_verified?
+  end
+
+  test "a new organization rolls back when post-creation authority cannot be verified" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "No owner")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    assert_raises(Clickwrap::AuthorityNotVerified) do
+      Clickwrap.create_represented_party!(
+        :organization_creation,
+        actor: actor,
+        represented_party: organization,
+        represented_party_creation_flow_id: flow_id,
+        submission: submission_for(presentation, "terms" => "1")
+      ) do
+        organization.save!
+        organization.clickwrap_memberships = Organizations::MembershipRelation.new([])
+        organization
+      end
+    end
+
+    assert_not Organizations::Organization.exists?(name: "No owner")
+    assert_no_clickwrap_event :organization_creation
+  end
+
+  test "a failed evidence write never creates the represented organization" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Atomic")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    Clickwrap::Testing.fail_next_event_write do
+      assert_raises(Clickwrap::EventWriteFailed) do
+        Clickwrap.create_represented_party!(
+          :organization_creation,
+          actor: actor,
+          represented_party: organization,
+          represented_party_creation_flow_id: flow_id,
+          submission: submission_for(presentation, "terms" => "1")
+        ) do
+          organization.save!
+          owner_membership = membership_for(actor, role: :owner)
+          organization.clickwrap_memberships = Organizations::MembershipRelation.new([owner_membership])
+          organization
+        end
+      end
+    end
+
+    assert_not Organizations::Organization.exists?(name: "Atomic")
+  end
+
+  test "the represented-party creation block must persist the exact prospective record" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Unpersisted")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    error = assert_raises(Clickwrap::RepresentedPartyCreationFailed) do
+      Clickwrap.create_represented_party!(
+        :organization_creation,
+        actor: actor,
+        represented_party: organization,
+        represented_party_creation_flow_id: flow_id,
+        submission: submission_for(presentation, "terms" => "1")
+      ) { Organizations::Organization.create!(name: "Different") }
+    end
+
+    assert_match(/did not persist the exact represented party/, error.message)
+    assert_not Organizations::Organization.exists?(name: "Different")
+    assert_no_clickwrap_event :organization_creation
+  end
+
+  test "a represented-party creation presentation cannot cross browser flows" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Prospective")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+
+    error = assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.create_represented_party!(
+        :organization_creation,
+        actor: actor,
+        represented_party: organization,
+        represented_party_creation_flow_id: SecureRandom.uuid,
+        submission: submission_for(presentation, "terms" => "1")
+      ) { organization.save! }
+    end
+
+    assert_equal :represented_party_creation_flow_mismatch, error.result.error
+    assert_not organization.persisted?
+  end
+
+  test "an identical represented-party creation retry returns the original receipt without creating twice" do
+    define_organization_creation_policy
+    actor = create_user
+    organization = Organizations::Organization.new(name: "Once")
+    flow_id = SecureRandom.uuid
+    presentation = present_new_organization_for(actor, organization, flow_id)
+    submission = submission_for(presentation, "terms" => "1")
+    runs = 0
+
+    first = Clickwrap.create_represented_party!(
+      :organization_creation,
+      actor: actor,
+      represented_party: organization,
+      represented_party_creation_flow_id: flow_id,
+      submission: submission
+    ) do
+      runs += 1
+      organization.save!
+      owner_membership = membership_for(actor, role: :owner)
+      organization.clickwrap_memberships = Organizations::MembershipRelation.new([owner_membership])
+      organization
+    end
+    first = committed_test_receipt(first)
+
+    retry_record = Organizations::Organization.new(name: "Ignored retry input")
+    second = Clickwrap.create_represented_party!(
+      :organization_creation,
+      actor: actor,
+      represented_party: retry_record,
+      represented_party_creation_flow_id: flow_id,
+      submission: submission
+    ) do
+      runs += 1
+      retry_record.save!
+    end
+
+    assert_equal first.event_id, second.event_id
+    assert_equal 1, runs
+    assert_equal 1, Organizations::Organization.where(name: "Once").count
+    assert_not Organizations::Organization.exists?(name: "Ignored retry input")
+  end
+
   test "a remediation route preserves the exact organization and tenant selected by the server" do
     actor = create_user
     organization = create_test_organization
@@ -446,6 +674,17 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
     end
   end
 
+  def define_organization_creation_policy
+    Clickwrap.policy :organization_creation do
+      agree_to :terms
+      permit_acting_for_organization(
+        when_actor_is_at_least: :owner,
+        including_when_this_action_creates_the_organization: true
+      )
+      retain_with :ordinary_agreement_evidence
+    end
+  end
+
   def create_test_organization
     Organizations::Organization.create!(name: "Represented #{SecureRandom.hex(3)}")
   end
@@ -465,6 +704,16 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
       actor: actor,
       tenant: organization,
       acting_for: organization
+    )
+  end
+
+  def present_new_organization_for(actor, organization, flow_id)
+    Clickwrap.present(
+      :organization_creation,
+      actor: actor,
+      acting_for: organization,
+      represented_party_creation_flow_id: flow_id,
+      submit_button_text: "Create organization"
     )
   end
 

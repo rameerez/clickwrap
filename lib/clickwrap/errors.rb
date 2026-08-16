@@ -104,6 +104,10 @@ module Clickwrap
   # prospective actor the presentation was issued for.
   class RegistrationFailed < Error; end
 
+  # Raised when a represented-party creation block returns without persisting
+  # the exact new record whose type and browser flow were bound at presentation.
+  class RepresentedPartyCreationFailed < Error; end
+
   # Raised when delegated action was not explicitly permitted by the policy and
   # positively verified by the host's authority callback.
   class AuthorityNotVerified < Error; end

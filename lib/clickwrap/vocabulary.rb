@@ -220,6 +220,7 @@ module Clickwrap
       presentation_policy_mismatch
       represented_party_mismatch
       represented_party_authority_mismatch
+      represented_party_creation_flow_mismatch
       registration_flow_mismatch
       registration_actor_type_mismatch
       document_digest_mismatch

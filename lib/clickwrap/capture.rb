@@ -37,6 +37,7 @@ module Clickwrap
                    acting_for: nil, authentication_context: nil, attribution_method: nil,
                    idempotency_key: nil, prospective_actor: nil,
                    registration_flow_id: nil,
+                   represented_party_creation_flow_id: nil,
                    consume_one_time_authorizations: true,
                    record_protected_outcome: true,
                    reason: nil, event_type: "capture", root_event_id: nil,
@@ -57,6 +58,8 @@ module Clickwrap
       @attribution_method = attribution_method
       @explicit_idempotency_key = idempotency_key
       @registration_flow_id = registration_flow_id
+      @represented_party_creation_flow_id = represented_party_creation_flow_id
+      @creating_represented_party = false
       @consume_one_time_authorizations = consume_one_time_authorizations
       @record_protected_outcome = record_protected_outcome == true
       @reason = reason
@@ -109,6 +112,39 @@ module Clickwrap
       end
     end
 
+    # Creates the exact new record named by `represented_party:` and binds it
+    # to the evidence before either can commit. Presentation records honestly
+    # that membership authority was not yet verifiable; after the block saves
+    # the record and creates its authority relationship, the adapter rereads
+    # that relationship inside this same transaction and the finalized event
+    # is rebound to the persisted represented party.
+    def create_represented_party!(&block)
+      unless block
+        raise ArgumentError,
+              "create_represented_party! needs a block that persists the represented party"
+      end
+      unless @acting_for.respond_to?(:new_record?) && @acting_for.new_record?
+        raise RepresentedPartyCreationFailed,
+              "create_represented_party! needs the exact new `represented_party:` record " \
+              "that was used to render the presentation."
+      end
+
+      @creating_represented_party = true
+
+      perform(protected_action: true) do |pending|
+        result = block.call(pending)
+
+        unless @acting_for.persisted?
+          raise RepresentedPartyCreationFailed,
+                "The represented-party creation block did not persist the exact represented party " \
+                "whose type was bound at presentation. Save that record inside the block, create " \
+                "its authority relationship there, and return the protected action result."
+        end
+
+        result
+      end
+    end
+
     private
 
     # Everything that can be checked without a transaction is checked without
@@ -136,7 +172,9 @@ module Clickwrap
         represented_party: @acting_for,
         prospective_actor: @prospective_actor,
         registration_flow_id: @registration_flow_id,
-        explicit_capture_channel: @explicit_capture_channel
+        explicit_capture_channel: @explicit_capture_channel,
+        represented_party_creation_flow_id: @represented_party_creation_flow_id,
+        creating_represented_party: @creating_represented_party
       ).verify!(for_replay: replay_candidate.present?)
       manifest = verified.manifest
       revision = verified.revision
@@ -144,6 +182,7 @@ module Clickwrap
       @capture_channel = verified.capture_channel
       @frozen_statement_snapshots = verified.statement_snapshots
       @verified_document_versions_by_id = verified.document_versions_by_id
+      @verified_manifest = manifest
 
       existing = replay_candidate || find_existing_event(idempotency_key_for(manifest))
       return replay(existing, answers, manifest) if existing
@@ -155,7 +194,7 @@ module Clickwrap
 
       begin
         run_in_transaction do
-          verify_represented_party_authority!
+          verify_represented_party_authority! unless @creating_represented_party
           lock_statement_identities!(manifest)
 
           event = append_event!(manifest, revision, answers, request_evidence)
@@ -164,6 +203,8 @@ module Clickwrap
           )
 
           @protected_action_result = block.call(pending)
+
+          complete_represented_party_creation!(pending) if @creating_represented_party
 
           record_protected_outcome!(event)
           event.finalize_integrity!
@@ -250,13 +291,24 @@ module Clickwrap
                 event.subject_key.to_s == subject_key.to_s &&
                 event.subject_fingerprint.to_s == manifest.subject_fingerprint.to_s &&
                 event.capture_channel == capture_channel &&
-                event.represented_party_reference.to_s == Reference.represented_party(@acting_for).to_s
+                replay_represented_party_matches?(event, manifest)
 
       return if matches && event.digest_verified?
 
       raise ReplayRejected,
             "This idempotency key was already used with a different actor, tenant, subject, " \
             "policy revision, presentation, or capture channel. Render a new presentation."
+    end
+
+    def replay_represented_party_matches?(event, manifest)
+      if manifest.represented_party_will_be_created_by_protected_action?
+        return event.represented_party_reference.present? &&
+               event.authority_source.present? &&
+               event.authority_role.present? &&
+               event.authority_verified_at.present?
+      end
+
+      event.represented_party_reference.to_s == Reference.represented_party(@acting_for).to_s
     end
 
     # --- Locking --------------------------------------------------------------
@@ -275,7 +327,7 @@ module Clickwrap
           actor_reference: actor_reference,
           tenant_key: tenant_key,
           subject_key: subject_key,
-          represented_party_reference: Reference.represented_party(@acting_for)
+          represented_party_reference: represented_party_identity_reference
         )
       end
 
@@ -327,7 +379,7 @@ module Clickwrap
         actor: actor,
         actor_reference: actor_reference,
         actor_snapshot: actor_snapshot,
-        represented_party: @acting_for,
+        represented_party: (@acting_for unless @creating_represented_party),
         authority_decision: @authority_decision,
         tenant_key: tenant_key,
         subject: subject,
@@ -381,46 +433,44 @@ module Clickwrap
     def verify_represented_party_authority!
       return if @acting_for.nil?
 
-      unless policy.permits_acting_for_party?(@acting_for)
-        raise AuthorityNotVerified,
-              "Policy #{policy.key} does not permit an actor to act for #{@acting_for.class.name}. " \
-              "Declare the represented-party type and a reviewed server-side authority rule."
-      end
+      decision = AuthorityVerifier.verify!(
+        policy: policy,
+        actor: actor,
+        represented_party: @acting_for,
+        tenant: tenant,
+        authentication_context: authentication_context
+      )
+      details = decision.details.merge(
+        "authority_at_presentation" => @verified_manifest.authority_at_presentation
+      )
+      details["represented_party_was_created_by_protected_action"] = true if
+        @creating_represented_party
+      @authority_decision = AuthorityDecision.new(
+        authorized: true,
+        source: decision.source,
+        role: decision.role,
+        verified_at: decision.verified_at,
+        details: details
+      )
+    end
 
-      rule = policy.authority_rule
-      adapter = Clickwrap.config.represented_party_authority_adapter(rule.adapter_name)
-      raw = if adapter
-              adapter.verify(
-                actor: actor,
-                represented_party: @acting_for,
-                authority_rule: rule,
-                tenant: tenant,
-                authentication_context: authentication_context
-              )
-            else
-              Clickwrap.config.verify_actor_can_act_for_represented_party_with.call(
-                actor: actor,
-                represented_party: @acting_for,
-                policy: policy,
-                tenant: tenant,
-                authentication_context: authentication_context
-              )
-            end
-      @authority_decision = AuthorityDecision.from(raw)
+    def complete_represented_party_creation!(pending)
+      verify_represented_party_authority!
 
-      unless @authority_decision.authorized?
-        raise AuthorityNotVerified,
-              "The host authority check did not authorize this actor to act for the represented party."
-      end
-
-      missing = %i[source role verified_at].select do |attribute|
-        @authority_decision.public_send(attribute).blank?
-      end
-      return if missing.empty?
-
-      raise AuthorityNotVerified,
-            "An authorized represented-party action must record #{missing.join(", ")}. Return " \
-            "those facts from `verify_actor_can_act_for_represented_party_with`."
+      represented_party_type = if @acting_for.class.respond_to?(:polymorphic_name)
+                                 @acting_for.class.polymorphic_name
+                               else
+                                 @acting_for.class.name
+                               end
+      pending.event.update_columns(
+        represented_party_type: represented_party_type,
+        represented_party_id: @acting_for.id,
+        represented_party_reference: Reference.represented_party(@acting_for),
+        authority_source: @authority_decision.source,
+        authority_role: @authority_decision.role,
+        authority_verified_at: @authority_decision.verified_at,
+        authority_details: @authority_decision.details
+      )
     end
 
     # --- After the write ------------------------------------------------------
@@ -487,6 +537,12 @@ module Clickwrap
     end
 
     def tenant_key = Reference.tenant(tenant)
+
+    def represented_party_identity_reference
+      return "represented_party_creation/#{@represented_party_creation_flow_id}" if @creating_represented_party
+
+      Reference.represented_party(@acting_for)
+    end
 
     def subject_key = StatementState.subject_key_for(subject)
 

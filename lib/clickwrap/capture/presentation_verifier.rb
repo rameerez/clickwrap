@@ -17,7 +17,9 @@ module Clickwrap
 
       def initialize(policy:, submission:, explicit_answers:, actor_reference:, tenant_key:,
                      subject_key:, subject_fingerprint:, represented_party:,
-                     prospective_actor:, registration_flow_id:, explicit_capture_channel:)
+                     prospective_actor:, registration_flow_id:, explicit_capture_channel:,
+                     represented_party_creation_flow_id: nil,
+                     creating_represented_party: false)
         @policy = policy
         @submission = submission
         @explicit_answers = explicit_answers
@@ -29,6 +31,8 @@ module Clickwrap
         @prospective_actor = prospective_actor
         @registration_flow_id = registration_flow_id
         @explicit_capture_channel = explicit_capture_channel
+        @represented_party_creation_flow_id = represented_party_creation_flow_id
+        @creating_represented_party = creating_represented_party == true
       end
 
       def verify!(for_replay: false)
@@ -154,6 +158,20 @@ module Clickwrap
       end
 
       def verify_represented_party_binding!(manifest, for_replay:)
+        if manifest.represented_party_will_be_created_by_protected_action?
+          return verify_represented_party_creation_binding!(manifest, for_replay: for_replay)
+        end
+
+        if @creating_represented_party
+          raise PresentationInvalid.new(
+            "This presentation was issued for an already-existing represented party, not for creation.",
+            result: Verification::Result.failure(
+              :represented_party_creation_flow_mismatch,
+              policy_key: policy.key
+            )
+          )
+        end
+
         expected_reference = @represented_party.nil? ? "" : Reference.represented_party(@represented_party)
         expected_type = @represented_party&.class&.name.to_s
 
@@ -165,10 +183,66 @@ module Clickwrap
           )
         end
 
-        return if for_replay || manifest.authority_rule == policy.authority_rule&.to_snapshot
+        authority_was_verified = @represented_party.nil? ||
+                                 manifest.authority_at_presentation.to_h["state"] == "verified"
+        return if for_replay || (manifest.authority_rule == policy.authority_rule&.to_snapshot &&
+                                 authority_was_verified)
 
         raise PresentationInvalid.new(
           "The represented-party authority rule changed after this presentation was issued. Re-render it.",
+          result: Verification::Result.failure(
+            :represented_party_authority_mismatch,
+            policy_key: policy.key
+          )
+        )
+      end
+
+      def verify_represented_party_creation_binding!(manifest, for_replay:)
+        unless @creating_represented_party &&
+               @represented_party.respond_to?(:new_record?) && @represented_party.new_record?
+          raise PresentationInvalid.new(
+            "A represented-party creation presentation must be completed through " \
+            "`Clickwrap.create_represented_party!` with the exact new record.",
+            result: Verification::Result.failure(
+              :represented_party_creation_flow_mismatch,
+              policy_key: policy.key
+            )
+          )
+        end
+
+        expected_flow_id = @represented_party_creation_flow_id.to_s
+        expected_reference = "represented_party_creation/#{expected_flow_id}"
+        binding_matches = expected_flow_id.present? &&
+                          Digest.secure_compare?(
+                            manifest.represented_party_creation_flow_id.to_s,
+                            expected_flow_id
+                          ) &&
+                          Digest.secure_compare?(
+                            manifest.represented_party_reference.to_s,
+                            expected_reference
+                          ) &&
+                          Digest.secure_compare?(
+                            manifest.represented_party_type.to_s,
+                            @represented_party.class.name.to_s
+                          )
+        unless binding_matches
+          raise PresentationInvalid.new(
+            "This represented-party creation presentation belongs to a different browser flow or record type.",
+            result: Verification::Result.failure(
+              :represented_party_creation_flow_mismatch,
+              policy_key: policy.key
+            )
+          )
+        end
+
+        authority_snapshot_is_honest =
+          manifest.authority_at_presentation.to_h["state"] == "not_yet_verifiable"
+        rule_matches = manifest.authority_rule == policy.authority_rule&.to_snapshot &&
+                       policy.authority_rule&.allows_represented_party_creation?
+        return if for_replay || (rule_matches && authority_snapshot_is_honest)
+
+        raise PresentationInvalid.new(
+          "The represented-party creation authority rule changed after this presentation was issued. Re-render it.",
           result: Verification::Result.failure(
             :represented_party_authority_mismatch,
             policy_key: policy.key

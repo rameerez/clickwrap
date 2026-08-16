@@ -17,10 +17,12 @@ module Clickwrap
     :represented_party_types,
     :adapter_name,
     :minimum_role,
-    :required_permission
+    :required_permission,
+    :allow_represented_party_creation
   ) do
     def initialize(represented_party_types: [], adapter_name: :host,
-                   minimum_role: nil, required_permission: nil)
+                   minimum_role: nil, required_permission: nil,
+                   allow_represented_party_creation: false)
       normalized_types = Array(represented_party_types).filter_map do |type|
         name = type.is_a?(Class) ? type.name : type.to_s
         name unless name.strip.empty?
@@ -36,9 +38,12 @@ module Clickwrap
         represented_party_types: normalized_types,
         adapter_name: adapter_name.to_s,
         minimum_role: minimum_role&.to_s,
-        required_permission: required_permission&.to_s
+        required_permission: required_permission&.to_s,
+        allow_represented_party_creation: allow_represented_party_creation == true
       )
     end
+
+    def allows_represented_party_creation? = allow_represented_party_creation == true
 
     def permits?(represented_party)
       return false if represented_party.nil?
@@ -53,7 +58,9 @@ module Clickwrap
         "represented_party_types" => represented_party_types,
         "authority_adapter" => adapter_name,
         "when_actor_is_at_least" => minimum_role,
-        "when_actor_has_permission" => required_permission
+        "when_actor_has_permission" => required_permission,
+        "including_when_this_action_creates_the_represented_party" =>
+          allows_represented_party_creation?
       }.compact
     end
   end
@@ -73,6 +80,16 @@ module Clickwrap
     end
 
     def authorized? = authorized == true
+
+    def to_snapshot
+      {
+        "state" => authorized? ? "verified" : "not_verified",
+        "source" => source,
+        "role" => role,
+        "verified_at" => verified_at&.iso8601(6),
+        "details" => details.presence
+      }.compact
+    end
 
     def self.from(value)
       return value if value.is_a?(self)
@@ -104,6 +121,54 @@ module Clickwrap
       end
 
       new(**attributes)
+    end
+  end
+
+  # One fail-closed path for presentation-time and capture-time authority
+  # checks. The represented-party adapter owns the authorization fact;
+  # Clickwrap only validates that an affirmative decision carries enough
+  # provenance to become meaningful evidence.
+  class AuthorityVerifier
+    def self.verify!(policy:, actor:, represented_party:, tenant:, authentication_context:)
+      unless policy.permits_acting_for_party?(represented_party)
+        raise AuthorityNotVerified,
+              "Policy #{policy.key} does not permit an actor to act for " \
+              "#{represented_party.class.name}. Declare the represented-party type and a " \
+              "reviewed server-side authority rule."
+      end
+
+      rule = policy.authority_rule
+      adapter = Clickwrap.config.represented_party_authority_adapter(rule.adapter_name)
+      raw = if adapter
+              adapter.verify(
+                actor: actor,
+                represented_party: represented_party,
+                authority_rule: rule,
+                tenant: tenant,
+                authentication_context: authentication_context
+              )
+            else
+              Clickwrap.config.verify_actor_can_act_for_represented_party_with.call(
+                actor: actor,
+                represented_party: represented_party,
+                policy: policy,
+                tenant: tenant,
+                authentication_context: authentication_context
+              )
+            end
+      decision = AuthorityDecision.from(raw)
+
+      unless decision.authorized?
+        raise AuthorityNotVerified,
+              "The host authority check did not authorize this actor to act for the represented party."
+      end
+
+      missing = %i[source role verified_at].select { |attribute| decision.public_send(attribute).blank? }
+      return decision if missing.empty?
+
+      raise AuthorityNotVerified,
+            "An authorized represented-party action must record #{missing.join(", ")}. Return " \
+            "those facts from `verify_actor_can_act_for_represented_party_with`."
     end
   end
 end

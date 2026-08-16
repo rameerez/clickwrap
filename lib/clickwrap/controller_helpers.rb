@@ -331,6 +331,25 @@ module Clickwrap
       result
     end
 
+    # Creates a new represented party (for example, an organization) and its
+    # authority evidence as one transaction. The form can pass the same new
+    # record as `acting_for:`; this helper owns the server-side browser-flow
+    # binding and clears it only after durable commit.
+    def create_represented_party_with_clickwrap(policy_key, represented_party:, **options, &)
+      resolved = clickwrap_capture_options(policy_key, options)
+      result = Clickwrap.create_represented_party!(
+        policy_key,
+        represented_party: represented_party,
+        represented_party_creation_flow_id:
+          clickwrap_represented_party_creation_flow_id(policy_key),
+        **resolved,
+        &
+      )
+
+      clear_clickwrap_represented_party_creation_flow_when_committed(result, policy_key)
+      result
+    end
+
     # Whatever the host chose to record about how this request was
     # authenticated. Clickwrap does not inspect the session itself: what counts
     # as an authentication context is the host's decision, and the default is an
@@ -374,6 +393,18 @@ module Clickwrap
       flows[policy_key.to_s] ||= SecureRandom.uuid
     end
 
+    def clickwrap_represented_party_creation_flow_id(policy_key)
+      unless respond_to?(:session)
+        raise ConfigurationError,
+              "Represented-party creation needs a controller session. API clients must create " \
+              "their own server-side represented_party_creation_flow_id and pass it to both " \
+              "Clickwrap.present and Clickwrap.create_represented_party!."
+      end
+
+      flows = (session[:clickwrap_represented_party_creation_flows] ||= {})
+      flows[policy_key.to_s] ||= SecureRandom.uuid
+    end
+
     def clear_clickwrap_registration_flow_id(policy_key)
       session[:clickwrap_registration_flows]&.delete(policy_key.to_s)
     end
@@ -383,6 +414,18 @@ module Clickwrap
         result.when_durably_committed { clear_clickwrap_registration_flow_id(policy_key) }
       elsif result.committed?
         clear_clickwrap_registration_flow_id(policy_key)
+      end
+    end
+
+    def clear_clickwrap_represented_party_creation_flow_when_committed(result, policy_key)
+      clear = lambda do
+        session[:clickwrap_represented_party_creation_flows]&.delete(policy_key.to_s)
+      end
+
+      if result.respond_to?(:when_durably_committed)
+        result.when_durably_committed(&clear)
+      elsif result.committed?
+        clear.call
       end
     end
 

@@ -150,6 +150,35 @@ class FormBuilderTest < ActionView::TestCase
     assert_equal "operator", Clickwrap::PresentationManifest.from_token(presentation_token).to_h["capture_channel"]
   end
 
+  test "a new represented party gets a server-owned creation flow without host hidden fields" do
+    Clickwrap.policy :organization_creation do
+      agree_to :terms
+      permit_acting_for(
+        "Organization",
+        including_when_this_action_creates_the_represented_party: true
+      )
+      retain_with :ordinary_agreement_evidence
+    end
+    organization = Organization.new(name: "Prospective")
+
+    render inline: <<~ERB, locals: { organization: organization }
+      <%= form_with url: "/organizations", method: :post do |form| %>
+        <%= form.clickwrap :organization_creation,
+              actor: @user,
+              acting_for: organization,
+              submit: "Create organization" %>
+      <% end %>
+    ERB
+
+    manifest = Clickwrap::PresentationManifest.from_token(presentation_token)
+    assert manifest.represented_party_will_be_created_by_protected_action?
+    assert manifest.represented_party_creation_flow_id.present?
+    assert_equal "not_yet_verifiable", manifest.authority_at_presentation.fetch("state")
+    assert_equal "Organization", manifest.represented_party_type
+    assert_equal ["clickwrap_submission[presentation_token]"],
+                 hidden_field_names - %w[authenticity_token utf8 _method]
+  end
+
   # --- An explicit yes/no decision --------------------------------------------
 
   test "an explicit choice renders every option unselected inside a labelled group" do
