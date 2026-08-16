@@ -70,8 +70,8 @@ module Clickwrap
       # names the provider that was asked, because "MaxMind had no row for this
       # address" and "no resolver was configured at all" are different facts and
       # a receipt has to be able to tell them apart.
-      def self.unavailable(reason:, provider_name: nil)
-        new(unavailable_reason: reason.to_s, provider_name: provider_name)
+      def self.unavailable(reason:, provider_name: nil, **provenance)
+        new(unavailable_reason: reason.to_s, provider_name:, **provenance)
       end
 
       def unavailable? = !unavailable_reason.to_s.strip.empty?

@@ -513,8 +513,7 @@ module Clickwrap
     end
 
     def ip_geolocation_resolver=(value)
-      @ip_geolocation_resolver =
-        ensure_adapter(value, "ip_geolocation_resolver", :resolve, :capabilities)
+      @ip_geolocation_resolver = ensure_ip_geolocation_resolver(value, "ip_geolocation_resolver")
     end
 
     # Register more than one resolver and let each server-owned policy select
@@ -528,8 +527,10 @@ module Clickwrap
               "because initializer order changed."
       end
 
-      @ip_geolocation_resolvers[key] =
-        ensure_adapter(resolver, "IP-geolocation resolver #{key}", :resolve, :capabilities)
+      @ip_geolocation_resolvers[key] = ensure_ip_geolocation_resolver(
+        resolver,
+        "IP-geolocation resolver #{key}"
+      )
     end
 
     def ip_geolocation_resolver_for(name = nil)
@@ -789,6 +790,29 @@ module Clickwrap
       end
 
       value
+    end
+
+    def ensure_ip_geolocation_resolver(value, name)
+      adapter = ensure_adapter(value, name, :resolve, :capabilities)
+      return nil if adapter.nil?
+
+      parameters = adapter.method(:resolve).parameters
+      accepts_http_request = parameters.any? do |kind, parameter_name|
+        kind == :keyrest || (%i[key keyreq].include?(kind) && parameter_name == :http_request)
+      end
+      return adapter if accepts_http_request
+
+      raise ConfigurationError,
+            "#{name} must implement `#resolve(ip_address, http_request: nil)`. The request is " \
+            "explicit because request-backed providers such as Cloudflare need it to read " \
+            "their location headers and record whether the host verified that CDN path. " \
+            "Update #{adapter.class} to accept the `http_request:` keyword, even if that " \
+            "resolver does not use it."
+    rescue NameError
+      raise ConfigurationError,
+            "#{name} exposes #resolve but Clickwrap could not inspect its parameters. Define " \
+            "`#resolve(ip_address, http_request: nil)` explicitly so request provenance is " \
+            "never dropped by an opaque adapter."
     end
 
     def ensure_class_name(value, name)

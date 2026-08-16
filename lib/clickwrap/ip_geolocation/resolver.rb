@@ -12,8 +12,8 @@ module Clickwrap
     # The adapter contract every IP geolocation resolver implements.
     #
     #   class MyResolver < Clickwrap::IpGeolocation::Resolver
-    #     def resolve(ip_address)
-    #       row = MyProvider.lookup(ip_address) or
+    #     def resolve(ip_address, http_request: nil)
+    #       row = MyProvider.lookup(ip_address, http_request:) or
     #         return Location.unavailable(reason: "provider_had_no_row", provider_name: "my_provider")
     #
     #       Location.new(
@@ -70,9 +70,9 @@ module Clickwrap
       # provider_name:)`. Returning nil is permitted for an adapter that has
       # nothing at all to say; Clickwrap records it as `resolver_returned_no_result`,
       # which is a less useful receipt than a reason you wrote yourself.
-      def resolve(ip_address)
+      def resolve(ip_address, http_request: nil)
         raise NotImplementedError,
-              "#{self.class} must implement #resolve(ip_address) and return a " \
+              "#{self.class} must implement #resolve(ip_address, http_request: nil) and return a " \
               "Clickwrap::IpGeolocation::Location (or nil). See the contract in " \
               "lib/clickwrap/ip_geolocation/resolver.rb."
       end

@@ -199,13 +199,13 @@ resolution time, invites a reader to treat a guess about an address as a fact ab
 
 | Field | What it is | Where it comes from | Does not establish | Encrypted | Who can read it | In a default export | Deletion trigger | After deletion the receipt says |
 |---|---|---|---|---|---|---|---|---|
-| `ip_geolocation_provider_name` | Which resolver answered, e.g. `trackdown` | The resolver's own `provider_name` | That the provider was right | No | Authorized `ip_geolocation` viewers | No | Kept after deletion | Unchanged |
-| `ip_geolocation_provider_source` | Which source within that provider was configured, e.g. a MaxMind database or Cloudflare headers | The resolver. The Trackdown adapter records the **configured** selection, because Trackdown does not report which source answered under `:auto` | That this source is the one that answered | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
+| `ip_geolocation_provider_name` | Which provider actually answered, e.g. `maxmind` or `cloudflare` | The resolver's own `provider_name`; the Trackdown adapter copies the answering provider even under `:auto` | That the provider was right | No | Authorized `ip_geolocation` viewers | No | Kept after deletion | Unchanged |
+| `ip_geolocation_provider_source` | Which source answered, e.g. a MaxMind local database or Cloudflare request headers | The resolver's result; the Trackdown adapter copies its per-result `provider_source` | That the source was accurate or arrived over a trusted path | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_database_version` | The provider database build the answer came from | The resolver, when it exposes one | That the build was current | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_database_sha256` | A digest of that database build | The resolver, when it exposes one | That the digest was independently checked | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_accuracy_radius_confidence_percentage` | The confidence the provider attaches to its accuracy radius | The resolver, when it exposes one | Precision. It is the provider's own statistic about its own estimate | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_was_estimated` | Always `true` for a stored result | Set unconditionally: no IP-geolocation answer from any provider is an observation | — it is the qualifier | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
-| `ip_geolocation_source_was_verified_by_host` | Whether the host stated that the result arrived over a path it verified | `false` unless the host passed `source_verified_by_host: true` when constructing the resolver | That the path really is verified. Clickwrap cannot check the claim; it records who made it | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
+| `ip_geolocation_source_was_verified_by_host` | Whether the host's verifier vouched for the exact request path | The resolver's per-result trust state. Trackdown defaults request-backed results to unverified and calls the host's provider-specific verifier for each request | That the verifier was designed or deployed correctly. Clickwrap records the result; the host owns that proof | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_resolved_at` | When the estimate was produced | The resolver's own time, or the server clock at extraction when the resolver reports none | Anything about the person | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
 | `ip_geolocation_unavailable_reason` | Why no estimate was stored | See the list below | — | No | Anyone who can read the receipt | Yes, when the state is `unavailable` | — | — |
 | `ip_geolocation_recorded_at` | When the estimate was written | Server clock at capture | — | No | Authorized `ip_geolocation` viewers | No | Kept | Unchanged |
@@ -375,11 +375,20 @@ in your own reader and pick exactly one.
 gem and must never become one.
 
 ```bash
-bundle add trackdown
+bundle add trackdown --version ">= 0.4"
 ```
 
 ```ruby
 # clickwrap-doc-test: syntax-only — requires the optional trackdown gem installed above
+Trackdown.configure do |trackdown|
+  # This flag must be set by infrastructure that actually authenticated or
+  # allowlisted the Cloudflare-to-origin path. It must not come from CF-* header
+  # presence, because a client reaching the origin can send those headers too.
+  trackdown.verify_request_came_through_trusted_cloudflare_path_with do |request|
+    request.env["my_app.cloudflare_origin_was_verified"] == true
+  end
+end
+
 Clickwrap.configure do |config|
   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 end
@@ -395,40 +404,45 @@ The adapter is where the evidence discipline lives:
   country or city it could not determine, and Cloudflare's own "no country" code is `"XX"`.
   Written into a receipt those would be indistinguishable from a country a provider actually
   reported, so they become `nil` and the result is recorded as unavailable with a reason.
-- **Every read is defensive.** Fields are read through `respond_to?`, so a newer Trackdown that
-  starts supplying an accuracy radius is picked up with no change here, and an older one
-  reports `nil` instead of raising in the middle of a capture.
+- **The minimum version fails loudly.** Trackdown 0.4 is required because it supplies
+  per-result provider, source, resolution time, uncertainty, database provenance, and
+  per-request host trust. An older loaded version is refused at the initializer line instead
+  of making Clickwrap invent those facts.
+- **Every optional field read is defensive.** A field one Trackdown provider cannot supply is
+  `nil` instead of an exception in the middle of a capture.
 - **`estimated` is always true.** No provider's answer is an observation of where anybody was.
-- **Cloudflare header presence is not trust.** Trackdown's Cloudflare provider reads request
-  environment values directly ([pinned provider](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/providers/cloudflare_provider.rb#L29-L64))
-  *(pinned source code)*. `CF-*` headers are ordinary request headers and anyone who can reach
-  your origin can send them. The only way a result is marked as arriving over a verified path
-  is for you to say so:
+- **Trust is per request, never process-wide.** Clickwrap passes the exact `http_request` from
+  the protected capture to `Trackdown.locate`. Trackdown runs the provider-specific host
+  verifier on that request and returns `source_was_verified_by_host?`; the adapter copies that
+  answer. The former experimental constructor-wide boolean is refused because it could bless
+  direct-origin requests after one deployment claim.
+- **Cloudflare header presence is not trust.** Trackdown's
+  [Cloudflare provider](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/cloudflare_provider.rb)
+  reads request environment values, while its
+  [configuration](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/configuration.rb)
+  leaves results unverified unless the host's callback vouches for that request. Follow
+  Trackdown's exact
+  [origin-protection guidance](https://github.com/rameerez/trackdown/blob/v0.4.0/README.md#did-the-request-really-come-through-your-cdn);
+  `CF-*` header presence alone is never the callback.
 
-  ```ruby
-  config.ip_geolocation_resolver =
-    Clickwrap::IpGeolocation::TrackdownResolver.new(source_verified_by_host: true)
-  ```
-
-  Passing `true` is you stating that your deployment blocks direct origin access, or that
-  trusted infrastructure re-sets those headers. Clickwrap records the claim and its owner.
-
-Trackdown's result object at the pinned commit exposes country, city, region, timezone,
-coordinates, and postal code
-([pinned result object](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/location_result.rb#L5-L55))
-*(pinned source code)*. The provenance Clickwrap would like it to expose upstream — resolution
-time, database build version and digest, MaxMind accuracy radius, an explicit `estimated?`
-flag, and host-verified source state — is scoped in
-[Trackdown issue #8](https://github.com/rameerez/trackdown/issues/8) *(project issue)*. Until
-then the adapter reports the capabilities the installed release actually has, and a field the
-provider cannot supply is reported as `resolver_cannot_supply_authorized_fields` rather than
-as an address that had no value.
+Trackdown 0.4's
+[result object](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/location_result.rb)
+exposes the answering provider and source, resolution time, explicit availability and estimate
+state, MaxMind accuracy radius and database build metadata, and per-request source trust. The
+work was reviewed in [Trackdown PR #9](https://github.com/rameerez/trackdown/pull/9) and closed
+the contract scoped in [Trackdown issue #8](https://github.com/rameerez/trackdown/issues/8).
+The adapter copies only named fields. It serializes the exact MaxMind build epoch as
+`database_build_epoch:<integer>` and normalizes a 64-hex database digest to Clickwrap's
+`sha256:<hex>` form.
 
 **Other providers.** `config.ip_geolocation_resolver` accepts anything responding to
-`#resolve`; `Clickwrap::IpGeolocation::Resolver` is the contract, about forty lines to
-implement. For tests, use `Clickwrap::IpGeolocation::StaticResolver`, which answers from a
-fixed table — a real provider makes request-evidence assertions fail because a database was
-rebuilt rather than because the allowlist changed.
+`#resolve(ip_address, http_request: nil)` and `#capabilities`;
+`Clickwrap::IpGeolocation::Resolver` is the full contract. The explicit request keyword keeps
+request-backed provenance from being discarded by an adapter. A resolver that does not need
+the request still accepts and ignores it. For tests, use
+`Clickwrap::IpGeolocation::StaticResolver`, which answers from a fixed table — a real provider
+makes request-evidence assertions fail because a database was rebuilt rather than because the
+allowlist changed.
 
 ---
 
@@ -493,6 +507,6 @@ can never undo or stand in for the Clickwrap event. Clickwrap ships no Footprint
 | [`ActionDispatch::RemoteIp`](https://api.rubyonrails.org/classes/ActionDispatch/RemoteIp.html) | Vendor documentation |
 | [Ironclad bulk retrieval, `connection_data.remote_address`](https://clickwrap-developer.ironcladapp.com/docs/retrieving-data-in-bulk) | Vendor documentation |
 | [RFC 791](https://www.rfc-editor.org/info/rfc791/) — IPv4 addresses are 32 bits, which is why the annex binding digest is keyed rather than a plain hash | Technical standard |
-| [Trackdown pinned result object](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/location_result.rb#L5-L55), [pinned Cloudflare provider](https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/providers/cloudflare_provider.rb#L29-L64) | Pinned source code |
+| [Trackdown v0.4.0 result object](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/location_result.rb), [configuration](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/configuration.rb), [Cloudflare provider](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/cloudflare_provider.rb), [MaxMind provider](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/maxmind_provider.rb), [PR #9](https://github.com/rameerez/trackdown/pull/9) | Pinned released source and project change record |
 | [Footprinted pinned model](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/footprint.rb#L7-L52), [tracking concern](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/model.rb#L7-L65) | Pinned source code |
 | The field selection, the ordering of evidentiary priority, and every API prescription above | Product-design inference |

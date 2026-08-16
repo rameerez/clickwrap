@@ -178,6 +178,20 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/must respond to #resolve/, error.message)
   end
 
+  test "an IP geolocation adapter cannot silently discard request provenance" do
+    old_contract_resolver = Class.new do
+      def resolve(_ip_address) = nil
+      def capabilities = []
+    end.new
+
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.config.ip_geolocation_resolver = old_contract_resolver
+    end
+
+    assert_match(/resolve\(ip_address, http_request: nil\)/, error.message)
+    assert_match(/request-backed providers such as Cloudflare/, error.message)
+  end
+
   # --- Retention calculations -------------------------------------------------
 
   test "an unregistered retention calculation is refused with the name it was asked for" do

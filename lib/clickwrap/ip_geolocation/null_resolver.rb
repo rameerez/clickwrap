@@ -22,7 +22,7 @@ module Clickwrap
     class NullResolver < Resolver
       REASON = "no_resolver_configured"
 
-      def resolve(_ip_address)
+      def resolve(_ip_address, http_request: nil)
         Location.unavailable(reason: REASON)
       end
 

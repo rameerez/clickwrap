@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 class DummyIpGeolocationResolver
-  def resolve(_ip_address) = nil
+  def resolve(_ip_address, http_request: nil) = nil
   def capabilities = Clickwrap::Vocabulary::IP_GEOLOCATION_DATA_FIELDS.map(&:to_sym)
 end
 
@@ -17,7 +17,9 @@ Clickwrap.configure do |config|
     controller.current_organization if controller.respond_to?(:current_organization)
   end
 
-  config.authorize_receipt_access_with = ->(controller, receipt) { controller.current_user&.clickwrap_actor_reference == receipt.actor_reference }
+  config.authorize_receipt_access_with = lambda do |controller, receipt|
+    controller.current_user&.clickwrap_actor_reference == receipt.actor_reference
+  end
 
   # Deliberately NOT the default. The dummy needs a way to exercise the
   # unredacted-export path, and this is what a host writes when it has decided

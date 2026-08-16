@@ -70,7 +70,7 @@ module Clickwrap
 
       attr_reader :capabilities
 
-      def resolve(ip_address)
+      def resolve(ip_address, http_request: nil)
         @locations_by_ip_address.fetch(ip_address.to_s.strip) do
           Location.unavailable(reason: NO_FIXTURE_REASON, provider_name: @provider_name)
         end

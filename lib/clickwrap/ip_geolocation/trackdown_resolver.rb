@@ -1,10 +1,12 @@
 # frozen_string_literal: true
 
+require "rubygems/version"
+
 module Clickwrap
   module IpGeolocation
     # The optional official adapter for the `trackdown` gem.
     #
-    #   bundle add trackdown
+    #   bundle add trackdown --version ">= 0.4"
     #
     #   Clickwrap.configure do |config|
     #     config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
@@ -34,15 +36,16 @@ module Clickwrap
     # receipt could explain. Clickwrap copies named fields, one at a time, and
     # the extractor then keeps only the subset the server-owned policy allowed.
     #
-    # Pinned source for the mapping (immutable commit, not a moving branch):
-    #   result object -> https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/location_result.rb#L5-L55
-    #   Cloudflare    -> https://github.com/rameerez/trackdown/blob/41587b1413cd3743a86b115806812216bc45250e/lib/trackdown/providers/cloudflare_provider.rb#L29-L64
-    # The provenance fields Clickwrap would like Trackdown to expose upstream —
-    # resolution time, database build version and digest, MaxMind accuracy
-    # radius, an explicit estimated flag, and host-verified source state — are
-    # scoped in https://github.com/rameerez/trackdown/issues/8.
+    # Pinned sources for the mapping (released tag, not a moving branch):
+    #   result object -> https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/location_result.rb
+    #   Cloudflare    -> https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/cloudflare_provider.rb
+    #   MaxMind       -> https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/maxmind_provider.rb
+    # Trackdown 0.4.0 closed the provenance gap scoped in
+    # https://github.com/rameerez/trackdown/issues/8. This adapter requires that
+    # release rather than silently manufacturing the missing facts itself.
     class TrackdownResolver < Resolver
       PROVIDER_NAME = "trackdown"
+      MINIMUM_TRACKDOWN_VERSION = Gem::Version.new("0.4.0")
 
       # Trackdown returns the string "Unknown" for a country or city it could
       # not determine, and Cloudflare's own "no country" code is "XX"
@@ -69,52 +72,63 @@ module Clickwrap
         accuracy_radius_in_kilometers: %i[accuracy_radius accuracy_radius_in_kilometers]
       }.freeze
 
-      # What the pinned Trackdown release supplies, used only when the result
-      # class cannot be inspected. It deliberately omits the accuracy radius:
-      # neither the MaxMind nor the Cloudflare provider exposes one at that
-      # commit, and a capability claimed but never delivered would turn "this
-      # provider cannot supply a radius" into "this address had no radius".
+      # What Trackdown 0.4 can supply across its providers, used only when the
+      # result class cannot be inspected. Cloudflare does not supply an accuracy
+      # radius, while MaxMind does; with Trackdown's default :auto provider the
+      # adapter can therefore supply it even though any one lookup may not.
       PINNED_CAPABILITIES = %i[
         country region city postal_code latitude_and_longitude timezone continent metro_code
+        accuracy_radius_in_kilometers
       ].freeze
 
       attr_reader :capabilities
 
-      # `source_verified_by_host:` is the ONLY way this adapter will ever mark a
-      # result as arriving over a verified path, and it is false by default.
-      #
-      # Say it plainly, because it is the mistake this parameter exists to
-      # prevent: the presence of Cloudflare's `CF-*` headers is not proof of a
-      # trusted origin path. Those headers are ordinary request headers, and
-      # anyone who can reach the origin server directly can send them. Passing
-      # true here is the host stating that its deployment blocks direct origin
-      # access, or that trusted infrastructure strips and re-sets those headers
-      # before the application sees them. Clickwrap cannot check that claim; it
-      # records who made it.
-      def initialize(source_verified_by_host: false, provider_source: nil)
+      # Trust is per request in Trackdown 0.4. A host registers its verifier with
+      # Trackdown, Trackdown runs it against the same request that supplied the
+      # CDN headers, and this adapter copies the result's explicit trust state.
+      # A constructor-wide boolean would overclaim every request after one
+      # deployment assertion, so the old experimental option is refused by name.
+      def initialize(provider_source: nil, source_verified_by_host: nil)
         super()
         require "trackdown" unless defined?(::Trackdown)
+        ensure_supported_trackdown_version!
 
-        @source_verified_by_host = source_verified_by_host == true
-        @provider_source = (provider_source || configured_provider_source).to_s
+        unless source_verified_by_host.nil?
+          raise ConfigurationError,
+                "TrackdownResolver no longer accepts `source_verified_by_host:`. Trackdown " \
+                "0.4 verifies source trust per request. Configure " \
+                "`Trackdown.configuration.verify_request_came_through_trusted_cloudflare_path_with` " \
+                "or the matching CloudFront helper; the resolver will record the result's " \
+                "`source_was_verified_by_host?` value."
+        end
+
+        @provider_source_fallback = (provider_source || configured_provider_source).to_s
         @capabilities = detect_capabilities.freeze
 
         freeze
       rescue ::LoadError => error
         raise ConfigurationError,
               "Clickwrap::IpGeolocation::TrackdownResolver needs the `trackdown` gem, which is " \
-              "not installed. Run `bundle add trackdown` and configure it (it needs either a " \
+              "not installed. Run `bundle add trackdown --version \">= 0.4\"` and configure " \
+              "it (it needs either a " \
               "MaxMind database or Cloudflare visitor-location headers), or set " \
               "`config.ip_geolocation_resolver = nil` and turn off the IP-geolocation fields " \
               "your policies enable. The underlying load error was: #{error.message}"
       end
 
-      def resolve(ip_address)
+      def resolve(ip_address, http_request: nil)
         address = ip_address.to_s.strip
         return unavailable("no_ip_address_to_resolve") if address.empty?
 
-        result = ::Trackdown.locate(address)
+        result = ::Trackdown.locate(address, request: http_request)
         return unavailable("provider_returned_no_result") if result.nil?
+
+        if result.respond_to?(:unavailable?) && result.unavailable?
+          return unavailable(
+            text(result, :unavailable_reason) || "provider_returned_unavailable",
+            result:
+          )
+        end
 
         location = build_location(result)
 
@@ -124,7 +138,7 @@ module Clickwrap
         # are mapped away that is an empty answer, and an empty answer is an
         # unavailable result with a reason on it — not a location whose every
         # field happens to be blank.
-        return unavailable("provider_supplied_no_location_fields") unless location.any_data_field?
+        return unavailable("provider_supplied_no_location_fields", result:) unless location.any_data_field?
 
         location
       rescue StandardError => error
@@ -140,8 +154,17 @@ module Clickwrap
 
       private
 
-      def unavailable(reason)
-        Location.unavailable(reason: reason, provider_name: PROVIDER_NAME)
+      def unavailable(reason, result: nil)
+        Location.unavailable(
+          reason:,
+          provider_name: provider_name(result),
+          provider_source: provider_source(result),
+          database_version: database_version(result),
+          database_sha256: database_sha256(result),
+          estimated: true,
+          source_was_verified_by_host: source_was_verified_by_host?(result),
+          resolved_at: resolved_at(result)
+        )
       end
 
       def build_location(result)
@@ -160,18 +183,18 @@ module Clickwrap
           # is why it maps to the continent CODE column rather than a name.
           continent_code: text(result, :continent, :continent_code),
           metro_code: text(result, :metro_code),
-          provider_name: PROVIDER_NAME,
-          provider_source: @provider_source,
-          database_version: text(result, :database_version, :database_build_version),
-          database_sha256: text(result, :database_sha256, :database_digest),
+          provider_name: provider_name(result),
+          provider_source: provider_source(result),
+          database_version: database_version(result),
+          database_sha256: database_sha256(result),
           accuracy_radius_in_kilometers: number(result, :accuracy_radius_in_kilometers, :accuracy_radius),
           accuracy_radius_confidence_percentage: number(result, :accuracy_radius_confidence_percentage),
           # Always. No IP geolocation result from any provider is an
           # observation of where anyone was; it is an estimate about an address,
           # and this flag is what keeps a receipt from implying otherwise.
           estimated: true,
-          source_was_verified_by_host: @source_verified_by_host,
-          resolved_at: Clickwrap.now
+          source_was_verified_by_host: source_was_verified_by_host?(result),
+          resolved_at: resolved_at(result)
         )
       end
 
@@ -213,9 +236,73 @@ module Clickwrap
         nil
       end
 
-      # Which Trackdown provider was asked. Trackdown does not report which one
-      # actually answered under its `:auto` setting, so this records the
-      # configured selection rather than claiming to know the answering source.
+      def ensure_supported_trackdown_version!
+        version = Gem::Version.new(::Trackdown::VERSION.to_s) if defined?(::Trackdown::VERSION)
+        return if version && version >= MINIMUM_TRACKDOWN_VERSION
+
+        installed = version ? version.to_s : "unknown"
+        raise ConfigurationError,
+              "Clickwrap::IpGeolocation::TrackdownResolver requires trackdown >= " \
+              "#{MINIMUM_TRACKDOWN_VERSION}; the loaded version is #{installed}. Run " \
+              "`bundle update trackdown` before enabling this resolver. Earlier releases do " \
+              "not expose the per-request source trust and provider provenance Clickwrap " \
+              "would otherwise have to guess."
+      rescue ArgumentError
+        raise ConfigurationError,
+              "Clickwrap::IpGeolocation::TrackdownResolver could not parse the loaded " \
+              "Trackdown::VERSION (#{::Trackdown::VERSION.inspect}). Install trackdown >= " \
+              "#{MINIMUM_TRACKDOWN_VERSION} before enabling this resolver."
+      end
+
+      def provider_name(result)
+        text(result, :provider_name, :provider) || PROVIDER_NAME
+      end
+
+      def provider_source(result)
+        text(result, :provider_source) || @provider_source_fallback
+      end
+
+      # Trackdown exposes MaxMind's exact database build epoch rather than a
+      # marketing-style version label. Preserve that integer in a
+      # self-describing string: formatting it as a date would throw away the
+      # fact that it came from the database metadata and could create timezone
+      # ambiguity years later.
+      def database_version(result)
+        legacy_version = text(result, :database_version, :database_build_version)
+        return legacy_version if legacy_version
+
+        epoch = first_value(result, %i[database_build_epoch])
+        return nil unless epoch.is_a?(Numeric)
+
+        "database_build_epoch:#{epoch.to_i}"
+      end
+
+      def database_sha256(result)
+        digest = text(result, :database_sha256, :database_digest)
+        return nil if digest.nil?
+        return digest if digest.match?(/\Asha256:[0-9a-f]{64}\z/i)
+        return "sha256:#{digest.downcase}" if digest.match?(/\A[0-9a-f]{64}\z/i)
+
+        # Do not relabel a provider's non-SHA value as SHA-256. Retaining it is
+        # more honest than inventing an algorithm; a host can still inspect the
+        # upstream value and a verifier will not mistake it for our digest form.
+        digest
+      end
+
+      def source_was_verified_by_host?(result)
+        result.respond_to?(:source_was_verified_by_host?) &&
+          result.source_was_verified_by_host? == true
+      rescue StandardError
+        false
+      end
+
+      def resolved_at(result)
+        first_value(result, %i[resolved_at]) || Clickwrap.now
+      end
+
+      # Fallback provenance for failures that occur before Trackdown can return
+      # a result. Successful Trackdown 0.4 results name the provider that
+      # actually answered, including when configuration.provider is `:auto`.
       def configured_provider_source
         return "unspecified" unless ::Trackdown.respond_to?(:configuration)
 

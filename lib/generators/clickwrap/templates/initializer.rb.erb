@@ -326,9 +326,10 @@ Clickwrap.configure do |config|
   config.ip_geolocation_resolver = <%= ip_geolocation_resolver_class_name %>.new
 <%- else -%>
   # Required before any IP-geolocation field can be enabled, here or in a
-  # policy. The official optional resolver is `trackdown`:
+  # policy. The official optional resolver requires trackdown >= 0.4 so the
+  # provider that actually answered and per-request source trust are preserved:
   #
-  #   bundle add trackdown
+  #   bundle add trackdown --version ">= 0.4"
   #   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
   config.ip_geolocation_resolver = nil
 <%- end -%>

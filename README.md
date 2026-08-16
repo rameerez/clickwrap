@@ -468,11 +468,23 @@ have their own reviewed disposition path and leave a digest-linked tombstone.
 There is deliberately no `gdpr_compliant_mode` or `maximum_evidence` switch —
 every field is named individually, in plain English.
 
-For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) is the optional official resolver:
+For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) 0.4 or newer is the optional official resolver:
 
 ```ruby
+Trackdown.configure do |trackdown|
+  trackdown.verify_request_came_through_trusted_cloudflare_path_with do |request|
+    request.env["my_app.cloudflare_origin_was_verified"] == true
+  end
+end
+
 config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 ```
+
+Clickwrap passes the exact Rack request to Trackdown and records the provider that actually
+answered, its source and database provenance, and Trackdown's per-request trust result. It
+never treats CDN header presence as proof of a trusted path. The host must derive the Rack
+flag above from its real origin protection; Trackdown documents the supported patterns in
+[“Did the request really come through your CDN?”](https://github.com/rameerez/trackdown/blob/v0.4.0/README.md#did-the-request-really-come-through-your-cdn).
 
 The [request evidence guide](guides/request-evidence.md) covers every field, the provenance model, and the privacy boundaries.
 

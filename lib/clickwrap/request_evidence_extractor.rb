@@ -350,7 +350,7 @@ module Clickwrap
     end
 
     def call_resolver
-      resolver.resolve(observed_ip_address)
+      resolver.resolve(observed_ip_address, http_request: http_request)
     rescue StandardError => error
       # Recorded, never swallowed. The reason carries the error CLASS and never
       # its message: a provider's message can quote the address it was given,
