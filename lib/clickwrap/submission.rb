@@ -12,6 +12,7 @@ module Clickwrap
   # silently doing nothing and looking like it worked.
   class Submission
     ENVELOPE_KEY = :clickwrap_submission
+    ENVELOPE_KEYS = %w[presentation_token answers].freeze
 
     # Names a client must never be able to set. They exist as a check rather
     # than a filter: a request containing one is a request worth failing.
@@ -55,16 +56,38 @@ module Clickwrap
         envelope = params[key] || params[key.to_s]
         return nil if envelope.nil?
 
-        if envelope.respond_to?(:permit!)
-          envelope.permit(:presentation_token, answers: {}).to_h
-        elsif envelope.is_a?(Hash)
-          envelope.to_h
-        else
+        raw = if envelope.respond_to?(:to_unsafe_h)
+                # This is an evidence/security parser, not a mass-assignment
+                # boundary. `permit` would silently erase unknown fields before
+                # we could refuse them, making a forged server-owned field look
+                # as though it worked. Read the envelope, validate its complete
+                # shape below, and only then select the two values we understand.
+                envelope.to_unsafe_h
+              elsif envelope.is_a?(Hash)
+                envelope.to_h
+              end
+
+        unless raw
           raise SubmissionInvalid,
                 "The #{key} parameter must be an object containing a presentation_token and " \
                 "an answers object. It was #{envelope.class}; Clickwrap did not try to guess " \
                 "how to reinterpret it."
         end
+
+        normalized_keys = raw.keys.map(&:to_s)
+        duplicate_keys = normalized_keys.tally.select { |_, count| count > 1 }.keys
+        unknown_keys = normalized_keys.uniq - ENVELOPE_KEYS
+        if duplicate_keys.any? || unknown_keys.any?
+          problems = []
+          problems << "duplicate keys #{duplicate_keys.join(", ")}" if duplicate_keys.any?
+          problems << "unknown keys #{unknown_keys.join(", ")}" if unknown_keys.any?
+          raise SubmissionInvalid,
+                "The #{key} envelope contains #{problems.join(" and ")}. It may contain only " \
+                "presentation_token and answers; policy, authority, identity, retention, and " \
+                "request-evidence decisions are server-owned."
+        end
+
+        raw
       end
     end
 

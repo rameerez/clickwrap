@@ -43,6 +43,49 @@ class SecurityTest < ActiveSupport::TestCase
     end
   end
 
+  test "unknown envelope fields are refused instead of silently filtered" do
+    token = present_clickwrap(:signup, actor: @user).token
+
+    [
+      {
+        clickwrap_submission: {
+          presentation_token: token,
+          answers: { terms: "1", privacy_notice: "1" },
+          authority_role: "owner"
+        }
+      },
+      ActionController::Parameters.new(
+        clickwrap_submission: {
+          presentation_token: token,
+          answers: { terms: "1", privacy_notice: "1" },
+          represented_party_id: "attacker-chosen"
+        }
+      )
+    ].each do |params|
+      error = assert_raises(Clickwrap::SubmissionInvalid) do
+        Clickwrap::Submission.from_params(params)
+      end
+
+      assert_match(/may contain only presentation_token and answers/, error.message)
+    end
+  end
+
+  test "duplicate string and symbol envelope keys are refused as ambiguous" do
+    params = {
+      clickwrap_submission: {
+        "presentation_token" => "first",
+        presentation_token: "second",
+        answers: {}
+      }
+    }
+
+    error = assert_raises(Clickwrap::SubmissionInvalid) do
+      Clickwrap::Submission.from_params(params)
+    end
+
+    assert_match(/duplicate keys presentation_token/, error.message)
+  end
+
   test "public capture methods do not expose lifecycle event or action overrides" do
     presentation = present_clickwrap(:signup, actor: @user)
     submission = submission_for(presentation, { terms: "1", privacy_notice: "1" })
