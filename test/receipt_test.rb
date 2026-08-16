@@ -82,6 +82,21 @@ class ReceiptTest < ActiveSupport::TestCase
     assert @receipt.verify.success?
   end
 
+  test "adding recording order preserves the canonical bytes of older receipts" do
+    event = @receipt.event
+    legacy_body = event.canonical_body.except("recording_order")
+
+    # Model an event written before the upgrade column existed. The migration
+    # deliberately leaves this value nil, so rebuilding its canonical body
+    # must produce exactly the old digest instead of retroactively claiming an
+    # order the database never recorded at the time.
+    event.recording_sequence = nil
+    event.event_digest = Clickwrap::Digest.digest_canonical(legacy_body)
+
+    refute event.canonical_body.key?("recording_order")
+    assert event.digest_verified?
+  end
+
   test "a lawfully disposed core event is incomplete rather than failed as tampering" do
     Clickwrap::Retention::Disposition.dispose_core_event!(
       @receipt.event,

@@ -35,9 +35,11 @@ module Clickwrap
       end
 
       # Whether this result's evidence was durably sequenced after another's.
-      # Every event reserves a database-assigned sequence, so this remains true
-      # across actors, app processes, and same-microsecond writes; ULID lexical
-      # order is deliberately not used as chronology.
+      # Events written after the recording-order migration reserve a
+      # database-assigned sequence, so this remains true across actors, app
+      # processes, and same-microsecond writes; ULID lexical order is
+      # deliberately not used as chronology. It returns false for either event
+      # predating that migration because an upgrade cannot invent honest order.
       #
       #   declaration.recorded_after?(acknowledgments)  # => true or false
       #
