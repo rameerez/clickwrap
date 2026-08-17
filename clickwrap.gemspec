@@ -47,4 +47,17 @@ Gem::Specification.new do |spec|
   spec.add_dependency "activerecord", ">= 7.1.0", "< 9.0"
   spec.add_dependency "activesupport", ">= 7.1.0", "< 9.0"
   spec.add_dependency "railties", ">= 7.1.0", "< 9.0"
+
+  # The two below were always runtime dependencies — `lib/clickwrap.rb` requires
+  # the document renderer at boot, and the renderer requires `loofah` and
+  # `rails-html-sanitizer` — and they resolved only because Action View happens
+  # to depend on them. Declaring them adds nothing to anybody's bundle; it
+  # states what this gem already loads, so the day Action View's dependency
+  # graph changes, clickwrap does not discover it in production.
+  #
+  # They are not optional, either: sanitizing is how a stored document becomes
+  # a representation that can be offered, and its identity and version are
+  # recorded in the provenance beside the digest.
+  spec.add_dependency "loofah", ">= 2.21", "< 3.0"
+  spec.add_dependency "rails-html-sanitizer", ">= 1.6", "< 2.0"
 end
