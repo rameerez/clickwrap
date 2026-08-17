@@ -198,19 +198,99 @@ class BootTest < ActiveSupport::TestCase
     end
   end
 
-  test "every public constant is autoloadable from its own file" do
-    # Zeitwerk maps one constant to one file. Two classes sharing a file resolve
-    # under eager loading and then raise NameError in an ordinary development
-    # app, which is how `Clickwrap.system_actor` was broken everywhere except
-    # this suite until a real host app tried it.
-    assert_equal "system/seed", Clickwrap.system_actor("seed").clickwrap_actor_reference
-    assert_equal "anonymous/checkout_1", Clickwrap.anonymous_actor("checkout_1").clickwrap_actor_reference
+  # --- One constant, one file, for every file --------------------------------
+  #
+  # Zeitwerk maps one constant to one file. Two classes sharing a file resolve
+  # under eager loading and then raise NameError in an ordinary development app,
+  # which is how `Clickwrap.system_actor` was broken everywhere except this
+  # suite until a real host app tried it.
+  #
+  # This used to check two constants while claiming to check every one. It now
+  # walks the files themselves and asks, of each, the question Zeitwerk asks:
+  # does this file define exactly the constant its path names?
 
-    { Clickwrap::AnonymousActor => "lib/clickwrap/anonymous_actor.rb",
-      Clickwrap::SystemActor => "lib/clickwrap/system_actor.rb" }.each do |constant, path|
-      expected = Clickwrap::Engine.root.join(path).to_s
-      assert_equal expected, Object.const_source_location(constant.name).first
+  CLICKWRAP_LIB = Clickwrap::Engine.root.join("lib/clickwrap").to_s
+
+  # Zeitwerk defines these from their paths. The models directories are
+  # collapsed, so `models/event.rb` names `Clickwrap::Event` rather than
+  # `Clickwrap::Models::Event`.
+  def self.zeitwerk_managed_files
+    Dir[File.join(CLICKWRAP_LIB, "**", "*.rb")].reject do |path|
+      Clickwrap::Engine::ZEITWERK_IGNORED.include?(path.delete_prefix("#{CLICKWRAP_LIB}/"))
+    end.sort
+  end
+
+  def self.constant_name_for(path)
+    relative = path.delete_prefix("#{CLICKWRAP_LIB}/").delete_suffix(".rb")
+    relative = relative.delete_prefix("models/concerns/").delete_prefix("models/")
+
+    "Clickwrap::#{relative.split("/").map(&:camelize).join("::")}"
+  end
+
+  test "every file Zeitwerk manages defines exactly the constant its path names" do
+    files = self.class.zeitwerk_managed_files
+
+    # A guard against this sweep silently becoming a no-op if the layout moves.
+    assert_operator files.length, :>=, 50,
+                    "found only #{files.length} autoloadable files, so this proves nothing"
+
+    offenders = files.filter_map do |path|
+      name = self.class.constant_name_for(path)
+      relative = path.delete_prefix("#{Clickwrap::Engine.root}/")
+
+      next "#{relative} defines no #{name}" unless Object.const_defined?(name)
+
+      source = Object.const_source_location(name)&.first
+      next if source == path
+
+      "#{name} is expected in #{relative} but is defined in " \
+        "#{source&.delete_prefix("#{Clickwrap::Engine.root}/") || "no file"}"
     end
+
+    assert_empty offenders, "Zeitwerk's one-constant-per-file rule is broken:\n#{offenders.join("\n")}"
+  end
+
+  test "no constant hitches a ride in a file Zeitwerk manages for another one" do
+    # The other direction, and the one that actually bit: a second class added
+    # to an existing file resolves perfectly under eager loading and raises
+    # NameError the first time a development app refers to it lazily, because
+    # Zeitwerk has no file to load it from.
+    #
+    # Only files the loader MANAGES are held to this. `errors.rb` deliberately
+    # defines forty constants and is required explicitly at boot, which is why
+    # it is on the ignore list.
+    managed = self.class.zeitwerk_managed_files.to_set
+
+    stowaways = Clickwrap.constants.filter_map do |short_name|
+      constant = Clickwrap.const_get(short_name)
+      next unless constant.is_a?(Module)
+
+      # A namespace module Zeitwerk creates from a DIRECTORY resolves no matter
+      # which file happened to write `module X` first, so it is not riding
+      # along on anything.
+      next if File.directory?(File.join(CLICKWRAP_LIB, short_name.to_s.underscore))
+
+      source = Object.const_source_location("Clickwrap::#{short_name}")&.first
+      next unless source && managed.include?(source)
+      next if File.basename(source) == "#{short_name.to_s.underscore}.rb"
+
+      "Clickwrap::#{short_name} rides along in " \
+        "#{source.delete_prefix("#{Clickwrap::Engine.root}/")}, which Zeitwerk loads for " \
+        "another constant — it needs its own file"
+    end
+
+    assert_empty stowaways, stowaways.join("\n")
+  end
+
+  test "every explicitly required spine file has actually been loaded" do
+    # These are `require`d by lib/clickwrap.rb at boot and therefore IGNORED by
+    # the loader, so Zeitwerk's naming rule does not apply to them and nothing
+    # would notice one silently dropping out of the require list.
+    missing = Clickwrap::Engine::ZEITWERK_IGNORED.reject do |file|
+      $LOADED_FEATURES.include?(File.join(CLICKWRAP_LIB, file))
+    end
+
+    assert_empty missing, "ignored by the autoloader and never required: #{missing.join(", ")}"
   end
 
   test "every public lifecycle and import entry point names its own keywords" do

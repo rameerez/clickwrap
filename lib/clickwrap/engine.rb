@@ -43,6 +43,7 @@ module Clickwrap
       configuration.rb
       engine.rb
       macros.rb
+      authority.rb
       registry.rb
       localized_text.rb
       document_definition.rb
