@@ -425,23 +425,18 @@ module Clickwrap
         Clickwrap.config.trusted_proxy_configuration_digest
       end
 
+      # No table of former spellings. `documents:`, `assertion:`, and
+      # `link_labels:` were renamed before this gem was ever released, so there
+      # is no application anywhere that wrote them — and carrying a migration
+      # note for a migration nobody had to make invents a history the gem does
+      # not have. The full list of supported options is the answer.
       def refuse_unknown_statement_options!(statement_key, options)
         unknown = options.keys.map(&:to_sym) - STATEMENT_OPTIONS
         return if unknown.empty?
 
-        aliases = {
-          documents: :document,
-          assertion: :statement,
-          link_labels: :link_label
-        }
-        replacements = unknown.filter_map do |option|
-          "`#{option}:` was renamed to `#{aliases.fetch(option)}:`" if aliases.key?(option)
-        end
-        correction = replacements.empty? ? "" : " #{replacements.join("; ")}."
-
         raise DefinitionError,
               "Statement #{statement_key} in policy #{@key} has unknown option#{"s" if unknown.many?} " \
-              "#{unknown.map { |option| "`#{option}:`" }.join(", ")}.#{correction} " \
+              "#{unknown.map { |option| "`#{option}:`" }.join(", ")}. " \
               "Supported options are: #{STATEMENT_OPTIONS.map { |option| "`#{option}:`" }.join(", ")}. " \
               "Clickwrap never ignores policy options."
       end
