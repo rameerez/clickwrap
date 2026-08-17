@@ -1,27 +1,25 @@
 <%#
-  One statement on a line of its own: one control, one label carrying the exact
-  first-person sentence the receipt will record, the documents it is about, and
-  its own error.
+  ONE CONTROL: one checkbox or one choice group, one label carrying the exact
+  words the server offered, the documents it is about, and its own error.
 
-  This is what a statement gets when the composed line could not honestly absorb
-  it — an optional consent, a recorded yes/no, copy the application wrote itself,
-  a purpose someone can withdraw — and what an entire policy gets when nothing in
-  it composes.
+  It renders two things, the same way. A single statement — an optional consent,
+  a recorded yes/no, an assertion the application worded itself, anything a
+  policy's composed line could not honestly absorb — and the composed line
+  itself, which is one control standing for several statements at once. Both
+  answer the same questions about a control (name, id, required, choices, error)
+  and this file asks nothing else of them.
 
   Rules this file exists to keep:
 
-    * one control per statement — two acts never share a checkbox here, because
-      "agreed to the Terms" and "acknowledged the Privacy Notice" are different
-      facts with different lifecycles. (The composed line in _fields.html.erb is
-      one control for several statements, and it is allowed to be because the
-      server signs which statements it covered and answers all of them from the
-      one box. Two controls answering one statement each is the shape that
-      cannot be reconstructed later.);
+    * a control means exactly what the server signed it means. The composed line
+      is one box for several statements ONLY because the manifest says which
+      ones and the server answers all of them from it; two boxes answering one
+      statement each is the shape nothing can reconstruct later;
     * the control is REAL and starts EMPTY. There is no `checked` anywhere in
       this file and there never will be: a pre-ticked box records the page's
       default rather than a person's action;
-    * the label contains the assertion and is tied to the control, so pressing
-      the words works and assistive technology announces them together;
+    * the label contains the words and is tied to the control, so pressing them
+      works and assistive technology announces them together;
     * document links come BEFORE the action and carry the document's own name
       (not "click here");
     * `required` is progressive enhancement only. THE SERVER DECIDES. A browser
@@ -73,10 +71,13 @@
     %>
     <div class="clickwrap-statement__control">
       <%= check_box_tag statement.control_name, "1", false, control_options %>
-      <%= label_tag statement.control_id, statement.assertion, class: "clickwrap-statement__label" %>
+      <%= label_tag statement.control_id, clickwrap_statement_label(statement),
+            class: "clickwrap-statement__label" %>
     </div>
   <% end %>
 
+  <%# Only for a statement standing on its own. The composed line's links are
+      inside its sentence, so it has none to list here. %>
   <% if statement.documents.any? %>
     <ul class="clickwrap-documents">
       <% statement.documents.each do |document| %>

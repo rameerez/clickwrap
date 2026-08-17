@@ -89,6 +89,19 @@ module Clickwrap
       (controller if respond_to?(:controller)) || self
     end
 
+    # The words that go in one control's label: a statement's own first-person
+    # assertion, or — when the control is the composed line — the whole
+    # sentence with its document links rendered inside it.
+    #
+    # One helper for both is what lets the reference statement partial render
+    # either without knowing which it has, and what makes a host's ejected
+    # partial style the composed line for free.
+    def clickwrap_statement_label(control)
+      return clickwrap_combined_sentence(control) if control.is_a?(Clickwrap::Presenter::Combined)
+
+      control.assertion
+    end
+
     # The composed one-line offer, as markup: the sentence the presentation
     # signed, with each document rendered as a real link where the words for it
     # go. This is what the single checkbox's label contains, and it is a helper
@@ -129,7 +142,11 @@ module Clickwrap
       link = link_to(document.label, document.path, class: "clickwrap-documents__link", **options)
       return link unless options[:target].to_s == "_blank"
 
-      safe_join([link, tag.span(t("clickwrap.ui.opens_in_new_tab"), class: "clickwrap-sr-only")], " ")
+      # The separating space lives INSIDE the sr-only span, which is out of
+      # flow: a space between the elements would be laid out, and the sentence
+      # would read "…Privacy Policy ." with a gap before its own full stop.
+      hint = tag.span(" #{t("clickwrap.ui.opens_in_new_tab")}", class: "clickwrap-sr-only")
+      safe_join([link, hint])
     end
 
     # The signed presentation token, under the envelope name the capture reads.

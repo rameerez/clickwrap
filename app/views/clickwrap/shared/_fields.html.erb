@@ -18,11 +18,14 @@
 
     [ ] I agree to the Terms of Service and I acknowledge the Privacy Policy.
 
-  The presenter decides whether a policy can be offered that way, and signs the
-  exact sentence into the manifest when it is. Everything the sentence could not
+  The presenter decides whether a policy can be offered that way and signs the
+  exact sentence into the manifest when it can. Everything that line could not
   honestly absorb — an optional consent, a recorded yes/no, copy the application
-  wrote itself — renders as its own control BELOW the line, and a policy with
-  nothing composable renders entirely that way.
+  wrote itself — follows it as a control of its own, and a policy with nothing
+  composable is entirely that. Both go through the same statement partial, which
+  is why `itemized_statements` is the list to walk and `statements` is not:
+  rendering a second control for a statement the line already answers offers a
+  choice nobody has.
 
   What this partial deliberately does NOT contain is a hidden field carrying a
   server-owned decision. No IP address, no browser user-agent, no geolocation,
@@ -47,15 +50,15 @@
   wrapper_classes = ["clickwrap", "clickwrap-fields", wrapper_options.delete(:class)].compact
 
   combined = presentation.combined
-  # One control answers every statement it covers, so it shows one message.
+  # One control shows one message, whether it answers one statement or three.
   combined_error = combined && errors.values_at(*combined.statement_keys).compact.first
+  controls = [combined, *presentation.itemized_statements].compact
 
-  error_entries = []
-  error_entries << { control_id: combined.control_id, message: Array(combined_error).join(" ") } if combined_error
-  presentation.itemized_statements.each do |statement|
-    next if errors[statement.key].blank?
+  error_entries = controls.filter_map do |control|
+    message = control.equal?(combined) ? combined_error : errors[control.key]
+    next if message.blank?
 
-    error_entries << { control_id: statement.control_id, message: Array(errors[statement.key]).join(" ") }
+    { control_id: control.control_id, message: Array(message).join(" ") }
   end
 %>
 <%= tag.div(**wrapper_options, class: wrapper_classes) do %>
@@ -67,40 +70,10 @@
   <%= hidden_field_tag "clickwrap_submission[presentation_token]", presentation.token, id: nil %>
 
   <div class="clickwrap-statements">
-    <% if combined %>
-      <%#
-        One checkbox, one label, one sentence, with the documents linked inside
-        it. `required` is progressive enhancement only — THE SERVER DECIDES, and
-        it decides for every statement this control covers. There is no `checked`
-        here and there never will be.
-      %>
-      <%
-        control_options = { id: combined.control_id, class: "clickwrap-statement__checkbox", required: true }
-        control_options[:"aria-invalid"] = "true" if combined_error
-        control_options[:"aria-describedby"] = combined.error_id if combined_error
-        combined_classes = ["clickwrap-statement", "clickwrap-statement--combined"]
-        combined_classes << "clickwrap-statement--invalid" if combined_error
-      %>
-      <div class="<%= combined_classes.join(" ") %>">
-        <div class="clickwrap-statement__control">
-          <%= check_box_tag combined.control_name, "1", false, control_options %>
-          <%= label_tag combined.control_id, clickwrap_combined_sentence(combined),
-                class: "clickwrap-statement__label" %>
-        </div>
-
-        <% if combined_error %>
-          <p class="clickwrap-statement__error" id="<%= combined.error_id %>">
-            <span class="clickwrap-statement__error-prefix"><%= t("clickwrap.ui.error_prefix") %></span>
-            <%= Array(combined_error).join(" ") %>
-          </p>
-        <% end %>
-      </div>
-    <% end %>
-
-    <% presentation.itemized_statements.each do |statement| %>
+    <% controls.each do |control| %>
       <%= render "clickwrap/shared/statement",
-            statement: statement,
-            error: errors[statement.key] %>
+            statement: control,
+            error: control.equal?(combined) ? combined_error : errors[control.key] %>
     <% end %>
   </div>
 

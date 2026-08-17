@@ -48,6 +48,12 @@ module Clickwrap
     # not a statement and never becomes one: the statements it covers keep their
     # own kinds, documents, answers, and lifecycles in the evidence. What this
     # object describes is the offer a person saw.
+    #
+    # It answers everything a Statement answers about a CONTROL — the name, the
+    # id, the error id, whether it is required, whether it has choices — so the
+    # reference views render one control the same way whether it stands for one
+    # act or three, and a host's ejected statement partial styles both. What it
+    # does not answer is anything about an act, because it is not one.
     Combined = Data.define(:sentence, :fragments, :joiner, :terminator, :statement_keys,
                            :control_name, :control_id, :error_id) do
       def covers?(statement_key) = statement_keys.include?(statement_key.to_s)
@@ -57,6 +63,25 @@ module Clickwrap
       # `clickwrap_statement_check_box` and get the same markup contract a
       # statement gets.
       def required? = true
+      def optional? = false
+      def checkbox? = true
+      def choices = nil
+      def requires_an_explicit_choice? = false
+
+      # Composed, so there is no single kind — and "combined" is what the
+      # rendered class name should say, because that is what a person is
+      # looking at.
+      def kind = "combined"
+
+      # The words, without their links. The views render the linked form
+      # through `clickwrap_statement_label`; this is for anything reading the
+      # offer as text.
+      def assertion = sentence
+
+      # The links live inside the sentence, so there is no list of documents to
+      # render beneath it.
+      def documents = [].freeze
+      def withdrawal_path = nil
 
       # The statement whose name the single control carries. Every covered
       # statement is answered by it; this is the one whose key it is submitted
