@@ -12,6 +12,16 @@ module Clickwrap
   # that skipped the manifest would produce evidence that looks identical and
   # proves considerably less.
   class Presenter
+    # The only two kinds a composed sentence may absorb. A consent must stay
+    # unbundled to be separately withdrawable and separately provable, and a
+    # declaration, attestation, or authorization is a specific assertion someone
+    # should have to read on its own line rather than find folded into a
+    # sentence about something else.
+    COMPOSABLE_KINDS = %w[agreement acknowledgment].freeze
+
+    # Where a sentence fragment puts the documents it is about.
+    DOCUMENTS_PLACEHOLDER = "%{documents}"
+
     Statement = Data.define(:key, :kind, :assertion, :label, :required, :optional, :choices,
                             :requires_an_explicit_choice, :documents, :control_name,
                             :control_id, :error_id, :purpose_key, :withdrawal_path) do
@@ -26,13 +36,44 @@ module Clickwrap
                            :rendered_content_digest, :renderer_name, :renderer_version,
                            :sanitizer_name, :sanitizer_version, :version_id, :path)
 
-    Result = Data.define(:policy, :manifest, :token, :statements, :submit_button_text,
+    # One statement's share of a composed sentence, already split around the
+    # place its documents go. Kept as parts rather than a template with a
+    # placeholder so a view can drop real links into the middle of a sentence
+    # without ever concatenating HTML into translated text.
+    Fragment = Data.define(:statement_key, :kind, :prefix, :suffix, :documents, :documents_joiner) do
+      def to_text = "#{prefix}#{documents.map(&:label).join(documents_joiner)}#{suffix}"
+    end
+
+    # The one control and the one sentence a composable policy renders. It is
+    # not a statement and never becomes one: the statements it covers keep their
+    # own kinds, documents, answers, and lifecycles in the evidence. What this
+    # object describes is the offer a person saw.
+    Combined = Data.define(:sentence, :fragments, :joiner, :terminator, :statement_keys,
+                           :control_name, :control_id, :error_id) do
+      def covers?(statement_key) = statement_keys.include?(statement_key.to_s)
+
+      # The statement whose name the single control carries. Every covered
+      # statement is answered by it; this is the one whose key it is submitted
+      # under, so a browser sends one value and the server fans it out.
+      def answered_as = statement_keys.first
+    end
+
+    Result = Data.define(:policy, :manifest, :token, :statements, :combined, :submit_button_text,
                          :locale, :actor, :subject, :represented_party, :tenant_key) do
       def statement(key) = statements.find { |candidate| candidate.key == key.to_s }
+      def combined? = !combined.nil?
       def policy_key = policy.key
       def revision = manifest.revision_digest
       def to_h = manifest.to_h
       def as_json(*) = manifest.to_h
+
+      # The statements this presentation renders as controls of their own:
+      # everything the composed line could not honestly absorb.
+      def itemized_statements
+        return statements if combined.nil?
+
+        statements.reject { |statement| combined.covers?(statement.key) }
+      end
     end
 
     def initialize(policy:, actor: nil, subject: nil, tenant: nil, locale: nil,
@@ -41,7 +82,8 @@ module Clickwrap
                    represented_party_creation_flow_id: nil,
                    authentication_context: nil,
                    document_version_path_with: nil,
-                   default_document_version_path_with: nil)
+                   default_document_version_path_with: nil,
+                   combined: true)
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
@@ -60,6 +102,7 @@ module Clickwrap
       # own Hotwire Native treatment attached, and it is asked LAST, after a
       # document's declared `link:` has had its say.
       @default_document_version_path_with = default_document_version_path_with
+      @combined = combined != false
 
       return unless @document_version_path_with && !@document_version_path_with.respond_to?(:call)
 
@@ -81,6 +124,7 @@ module Clickwrap
 
       revision = PolicyRevision.freeze_for(policy)
       resolved = policy.statements.map { |statement| resolve_statement(statement) }
+      combined = compose(resolved)
 
       manifest = PresentationManifest.build(
         policy: policy,
@@ -112,6 +156,7 @@ module Clickwrap
         manifest: manifest,
         token: manifest.to_token,
         statements: resolved,
+        combined: combined,
         submit_button_text: @submit_button_text,
         locale: locale,
         actor: actor,
@@ -272,6 +317,113 @@ module Clickwrap
         purpose_key: statement.purpose_key,
         withdrawal_path: statement.withdrawal_path
       )
+    end
+
+    # --- Composing the one-line offer ----------------------------------------
+    #
+    # A signup screen asks for two ordinary things — agree to the Terms,
+    # acknowledge the Privacy Notice — and rendering them as two stacked
+    # checkboxes with a "Required" flag, a version label, and an "(opens in a
+    # new tab)" hint apiece is four times the interface the moment deserves.
+    # When every statement is one of those ordinary things, they compose into
+    # ONE control carrying ONE sentence with the documents linked inside it.
+    #
+    # Composing is a decision about PRESENTATION only. The evidence keeps every
+    # statement separate — its own kind, its own documents, its own answer, its
+    # own lifecycle — because "agreed to the Terms" and "acknowledged the
+    # Privacy Notice" remain different facts no matter how few boxes it took to
+    # say both.
+
+    def compose(resolved)
+      return nil unless @combined
+
+      composable = resolved.select { |statement| composable?(statement) }
+      return nil if composable.empty?
+
+      connectives = sentence_connectives
+      return nil if connectives.nil?
+
+      fragments = composable.map { |statement| sentence_fragment(statement, connectives) }
+      return nil if fragments.any?(&:nil?)
+
+      build_combined(composable, fragments, connectives)
+    end
+
+    def build_combined(composable, fragments, connectives)
+      control = composable.first
+
+      Combined.new(
+        sentence: fragments.map(&:to_text).join(connectives[:joiner]) + connectives[:terminator],
+        fragments: fragments.freeze,
+        joiner: connectives[:joiner],
+        terminator: connectives[:terminator],
+        statement_keys: composable.map(&:key).freeze,
+        control_name: control.control_name,
+        control_id: control.control_id,
+        error_id: control.error_id
+      )
+    end
+
+    # Every clause here is a way a statement can be more than the sentence can
+    # honestly say. An optional consent bundled into a required line would make
+    # it required; a choice folded into a checkbox would turn a recorded "no"
+    # into an unrecorded silence; a statement with a withdrawal route needs that
+    # route beside the control it belongs to; and copy the application wrote
+    # itself is copy it wrote for a reason.
+    def composable?(statement)
+      return false unless COMPOSABLE_KINDS.include?(statement.kind)
+      return false unless statement.required? && statement.checkbox?
+      return false if statement.withdrawal_path.present?
+      return false if statement.documents.empty?
+
+      default_worded?(policy.statement!(statement.key))
+    end
+
+    # The assertion is still the conventional key the DSL fills in, so nobody
+    # has chosen these words for this policy. A policy that did — a literal, a
+    # locale map, its own I18n key — gets its own control and its own sentence,
+    # unedited.
+    def default_worded?(declared)
+      declared.assertion.declaration == :"clickwrap.statements.#{declared.kind}.#{declared.key}"
+    end
+
+    # The words that hold a composed sentence together, in the locale being
+    # presented. A locale that has not translated them composes nothing and
+    # renders itemized instead — half a sentence in the wrong language is worse
+    # than two tidy lines in the right one.
+    def sentence_connectives
+      joiner = sentence_text("joiner")
+      documents_joiner = sentence_text("documents_joiner")
+      terminator = sentence_text("terminator")
+      return nil if joiner.nil? || documents_joiner.nil? || terminator.nil?
+
+      { joiner: joiner, documents_joiner: documents_joiner, terminator: terminator }
+    end
+
+    def sentence_fragment(statement, connectives)
+      template = sentence_text(statement.kind)
+      return nil if template.nil?
+
+      prefix, suffix = template.split(DOCUMENTS_PLACEHOLDER, 2)
+      # A translation with nowhere to put the documents would render a sentence
+      # about documents nobody can open. Itemize instead.
+      return nil if suffix.nil?
+
+      Fragment.new(
+        statement_key: statement.key,
+        kind: statement.kind,
+        prefix: prefix,
+        suffix: suffix,
+        documents: statement.documents,
+        documents_joiner: connectives[:documents_joiner]
+      )
+    end
+
+    def sentence_text(key)
+      return nil unless defined?(::I18n)
+
+      text = ::I18n.t("clickwrap.sentence.#{key}", locale: locale, default: nil)
+      text&.to_s
     end
 
     # The form field name. Answers arrive nested under one key so a host's

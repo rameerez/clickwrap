@@ -22,6 +22,17 @@ es:
       acknowledgment:
         privacy_notice: "Doy por recibida la Política de Privacidad."
 
+    # La frase de una sola línea. En español el artículo concuerda con el
+    # documento ("los Términos", "la Política"), y solo la aplicación sabe qué
+    # documento nombra, así que el artículo vive en la etiqueta del enlace y no
+    # en estas plantillas — por eso `documents_joiner` es " y " y no " y el ".
+    sentence:
+      agreement: "Acepto %{documents}"
+      acknowledgment: "He recibido %{documents}"
+      documents_joiner: " y "
+      joiner: " y "
+      terminator: "."
+
     ui:
       error_summary_heading: "Revisa esto antes de continuar"
       error_prefix: "Error:"

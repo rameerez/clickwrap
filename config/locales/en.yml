@@ -26,6 +26,27 @@ en:
       acknowledgment:
         privacy_notice: "I acknowledge the Privacy Notice."
 
+    # The composed one-line offer. When every statement in a policy is an
+    # ordinary, required, default-worded agreement or acknowledgment, they
+    # render as ONE control carrying ONE sentence, with the documents linked
+    # inside it:
+    #
+    #   I agree to the Terms of Service and I acknowledge the Privacy Policy.
+    #
+    # One fragment per kind, and the verbs stay matched to the kinds for the
+    # reason at the top of this file. `%{documents}` is where the links go;
+    # a fragment without it composes nothing and the statements render on
+    # lines of their own, which is also what happens in any locale that has
+    # not translated these four keys.
+    sentence:
+      agreement: "I agree to the %{documents}"
+      acknowledgment: "I acknowledge the %{documents}"
+      # Between two documents on ONE statement ("the Terms and the Schedules"),
+      # between two fragments, and at the end of the whole line.
+      documents_joiner: " and the "
+      joiner: " and "
+      terminator: "."
+
     ui:
       error_summary_heading: "Check these before continuing"
       error_prefix: "Error:"
