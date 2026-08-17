@@ -29,7 +29,19 @@ SimpleCov.start do
   # floor, not a target: raise them as coverage grows. A gem whose whole value
   # is evidence that stays verifiable for years cannot afford untested
   # canonicalization, lifecycle, or disposition paths.
-  minimum_coverage line: 80, branch: 60
+  #
+  # Set just under the actuals, which is the only setting that makes a floor do
+  # anything: at 80/60 against 91/72 actual, a change could delete a third of
+  # the branch coverage in this gem and still pass.
+  #
+  # The gap that remains is deliberate, and it is not slack for new untested
+  # code — it is the CI matrix. The database legs (sqlite / postgres / mysql)
+  # do not all reach the same lines: the update and delete protections are
+  # written for PostgreSQL, and the advisory-lock and concurrency paths only
+  # execute on some adapters. The floor has to hold on the LEANEST leg, so it
+  # sits below the richest one. Raise both numbers whenever every leg has
+  # cleared them for a while.
+  minimum_coverage line: 88, branch: 68
 
   # Disambiguate parallel test runs
   command_name "Job #{ENV["TEST_ENV_NUMBER"]}" if ENV["TEST_ENV_NUMBER"]
