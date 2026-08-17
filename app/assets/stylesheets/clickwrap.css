@@ -85,16 +85,17 @@
 
 .clickwrap-statement__control { display: flex; align-items: flex-start; gap: 0.6rem; }
 
-.clickwrap-statement--combined .clickwrap-statement__control { align-items: baseline; }
-.clickwrap-statement--combined .clickwrap-statement__checkbox { margin-top: 0; }
-
 .clickwrap-statement__checkbox,
 .clickwrap-statement__radio {
-  /* A press target that a thumb can hit, and a box that does not disappear
-     against a white background. */
-  width: 1.15rem;
-  height: 1.15rem;
-  margin: 0.2rem 0 0;
+  /* Sized in em so the box matches the sentence it belongs to instead of
+     towering over small text, and optically centered against the FIRST line
+     of the label: (line-height minus box) halved. Flex `baseline` cannot do
+     this — a checkbox aligns its bottom edge to the baseline and ends up
+     floating high. The rem fallback covers engines without the lh unit. */
+  width: 1em;
+  height: 1em;
+  margin: 0.2em 0 0;
+  margin-top: calc((1lh - 1em) / 2);
   flex: 0 0 auto;
   accent-color: var(--clickwrap-focus);
 }
@@ -123,13 +124,24 @@
 
 .clickwrap-documents__link,
 .clickwrap-link {
-  color: var(--clickwrap-link);
+  /* The links read AS PART of the sentence: same color as the words around
+     them, distinguished by a subtle underline — still a non-color signal, so
+     the distinction survives color-blindness and forced-colors modes. The
+     underline firms up on hover/focus as the affordance. */
+  color: inherit;
   text-decoration: underline;
-  text-underline-offset: 0.15em;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 0.18em;
 }
 
+.clickwrap-documents__link:hover,
+.clickwrap-documents__link:focus-visible,
+.clickwrap-link:hover,
+.clickwrap-link:focus-visible { text-decoration-color: currentColor; }
+
 .clickwrap-documents__link:visited,
-.clickwrap-link:visited { color: var(--clickwrap-link-visited); }
+.clickwrap-link:visited { color: inherit; }
 
 /* Versions belong on a receipt, where somebody is reading the record. Beside a
    checkbox they are noise nobody can act on. */
