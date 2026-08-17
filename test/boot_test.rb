@@ -213,6 +213,24 @@ class BootTest < ActiveSupport::TestCase
     end
   end
 
+  test "every public lifecycle and import entry point names its own keywords" do
+    # A bare `**` forward compiles fine, reads fine, and then an editor shows
+    # `**` where the argument list should be, a typo'd keyword travels one
+    # method deeper before failing, and the gem's public API is documented only
+    # in the private method behind it.
+    %i[
+      withdraw! correct_declaration! renew! change_consent_scope! revoke! supersede!
+      exempt! import_external_receipt! import_legacy!
+    ].each do |name|
+      parameters = Clickwrap.method(name).parameters
+
+      refute parameters.any? { |kind, _| kind == :keyrest },
+             "Clickwrap.#{name} forwards ** instead of naming the keywords it accepts"
+      assert parameters.any? { |kind, _| %i[key keyreq].include?(kind) },
+             "Clickwrap.#{name} accepts no named keywords at all"
+    end
+  end
+
   test "the six kinds and their actions are frozen vocabularies" do
     assert_equal 6, Clickwrap::Vocabulary::KINDS.length
     assert Clickwrap::Vocabulary::KINDS.frozen?

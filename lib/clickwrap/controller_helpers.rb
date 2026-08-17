@@ -413,15 +413,21 @@ module Clickwrap
     # as validation, and the sign-in, the welcome email, and the redirect that
     # would normally follow simply do not happen. That is the difference
     # between a refused signup and a live account nobody can explain.
-    def register_with_clickwrap!(policy_key, user: nil, prospective_actor: nil, **, &)
+    #
+    # `user:` is the record the door is about to create. It is spelled `user:`
+    # because that is what it is called in every signup controller ever
+    # written; pass your actor here whatever its class is actually named.
+    def register_with_clickwrap!(policy_key, user:, **options, &)
+      refuse_removed_prospective_actor_keyword!(options)
+
       result = Clickwrap::Registration.perform(
         policy_key,
-        prospective_actor: prospective_actor || user,
+        prospective_actor: user,
         http_request: request,
         submission: clickwrap_submission,
         tenant: clickwrap_current_tenant(policy_key),
         registration_flow_id: clickwrap_registration_flow_id(policy_key),
-        **,
+        **options,
         &
       )
 
@@ -429,12 +435,25 @@ module Clickwrap
       result
     end
 
-    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **, &)
-      register_with_clickwrap!(policy_key, user: user, prospective_actor: prospective_actor, **, &)
+    # Explicitly refused rather than quietly swallowed by the `**` forward,
+    # which would pass it straight through to Registration.perform and let a
+    # second spelling of the same argument go on working invisibly. One record
+    # is being created here; it gets one name.
+    def refuse_removed_prospective_actor_keyword!(options)
+      return unless options.key?(:prospective_actor)
+
+      raise ArgumentError,
+            "register_with_clickwrap does not take `prospective_actor:`. The record the door is " \
+            "about to create is `user:` — pass your actor there whatever its class is named."
+    end
+    private :refuse_removed_prospective_actor_keyword!
+
+    def register_with_clickwrap(policy_key, user:, **, &)
+      register_with_clickwrap!(policy_key, user: user, **, &)
     rescue *Clickwrap::Registration::REFUSALS => error
       @clickwrap_refusal = Clickwrap::Registration.absorb_refusal(
         error,
-        resource: prospective_actor || user,
+        resource: user,
         clickwrap_errors: clickwrap_errors
       )
       false

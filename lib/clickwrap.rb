@@ -277,20 +277,72 @@ module Clickwrap
     def submission_from(params, ...) = Submission.from_params(params, ...)
 
     # --- Lifecycle ------------------------------------------------------------
+    #
+    # Each of these spells out the keywords its target accepts rather than
+    # forwarding `**`. A bare forward compiles fine and reads fine, and then an
+    # editor shows `**` where the argument list should be, a typo'd keyword
+    # travels one method further before failing, and the public API of the gem
+    # is documented only in the private method behind it.
 
-    def withdraw!(purpose_key, **) = Lifecycle.withdraw!(purpose_key, **)
-    def correct_declaration!(statement_key, **) = Lifecycle.correct!(statement_key, **)
-    def renew!(statement_key, **) = Lifecycle.renew!(statement_key, **)
-    def change_consent_scope!(statement_key, **) = Lifecycle.change_consent_scope!(statement_key, **)
-    def revoke!(statement_key, **) = Lifecycle.revoke!(statement_key, **)
-    def supersede!(statement_key, **) = Lifecycle.supersede!(statement_key, **)
+    def withdraw!(purpose_key, actor:, because:, tenant: nil, subject: nil,
+                  acting_for: nil, http_request: nil)
+      Lifecycle.withdraw!(purpose_key, actor: actor, because: because, tenant: tenant,
+                                       subject: subject, acting_for: acting_for,
+                                       http_request: http_request)
+    end
+
+    # Correcting, renewing, and rescoping are new statements by the same
+    # person, so each takes the same `submission:` a first capture does: they
+    # are captured through a real presentation, not flipped administratively.
+    def correct_declaration!(statement_key, actor:, because:, subject: nil, tenant: nil,
+                             replaces: nil, acting_for: nil, http_request: nil,
+                             submission: nil, answers: nil)
+      Lifecycle.correct!(statement_key, actor: actor, because: because, subject: subject,
+                                        tenant: tenant, replaces: replaces, acting_for: acting_for,
+                                        http_request: http_request, submission: submission,
+                                        answers: answers)
+    end
+
+    def renew!(statement_key, actor:, because:, subject: nil, tenant: nil,
+               acting_for: nil, http_request: nil, submission: nil, answers: nil)
+      Lifecycle.renew!(statement_key, actor: actor, because: because, subject: subject,
+                                      tenant: tenant, acting_for: acting_for,
+                                      http_request: http_request, submission: submission,
+                                      answers: answers)
+    end
+
+    def change_consent_scope!(statement_key, actor:, because:, subject: nil, tenant: nil,
+                              acting_for: nil, http_request: nil, submission: nil, answers: nil)
+      Lifecycle.change_consent_scope!(statement_key, actor: actor, because: because,
+                                                     subject: subject, tenant: tenant,
+                                                     acting_for: acting_for,
+                                                     http_request: http_request,
+                                                     submission: submission, answers: answers)
+    end
+
+    def revoke!(statement_key, actor:, because:, subject: nil, tenant: nil,
+                acting_for: nil, http_request: nil)
+      Lifecycle.revoke!(statement_key, actor: actor, because: because, subject: subject,
+                                       tenant: tenant, acting_for: acting_for,
+                                       http_request: http_request)
+    end
+
+    def supersede!(statement_key, actor:, because: nil, subject: nil, tenant: nil,
+                   acting_for: nil, http_request: nil)
+      Lifecycle.supersede!(statement_key, actor: actor, because: because, subject: subject,
+                                          tenant: tenant, acting_for: acting_for,
+                                          http_request: http_request)
+    end
 
     # An explicitly recorded system exemption. Seeds, imports, invitations, and
     # service accounts must never "accept" by omitting a browser parameter or by
     # fabricating a human click. An exemption says plainly that no human action
     # occurred, records who created it and why, and never satisfies
     # `agreed_to?` — it answers the separate `exempted_from?` question.
-    def exempt!(policy_key, **) = Lifecycle.exempt!(policy_key, **)
+    def exempt!(policy_key, actor:, because:, subject: nil, tenant: nil)
+      Lifecycle.exempt!(policy_key, actor: actor, because: because, subject: subject,
+                                    tenant: tenant)
+    end
 
     # Captures evidence and commits a pending outbox row in one local
     # transaction, for an action that has to cross a system boundary. This is a
@@ -316,12 +368,27 @@ module Clickwrap
       ).call
     end
 
-    def import_external_receipt!(policy_key, **)
-      Import::ExternalReceipt.new(policy: policy!(policy_key), **).import!
+    def import_external_receipt!(policy_key, actor:, provider_name:, provider_event_id:,
+                                 provider_receipt: nil, verified_with: nil, verified_at: nil,
+                                 occurred_at: nil, subject: nil, tenant: nil, because: nil,
+                                 statements: nil)
+      Import::ExternalReceipt.new(
+        policy: policy!(policy_key), actor: actor, provider_name: provider_name,
+        provider_event_id: provider_event_id, provider_receipt: provider_receipt,
+        verified_with: verified_with, verified_at: verified_at, occurred_at: occurred_at,
+        subject: subject, tenant: tenant, because: because, statements: statements
+      ).import!
     end
 
-    def import_legacy!(policy_key, **)
-      Import::Legacy.new(policy: policy!(policy_key), **).import!
+    def import_legacy!(policy_key, actor:, occurred_at:, because:, known: {}, unknown: [],
+                       dry_run: false, subject: nil, tenant: nil, statements: nil,
+                       capture_channel: "imported_provider", source: nil, counts_as_current: true)
+      Import::Legacy.new(
+        policy: policy!(policy_key), actor: actor, occurred_at: occurred_at, because: because,
+        known: known, unknown: unknown, dry_run: dry_run, subject: subject, tenant: tenant,
+        statements: statements, capture_channel: capture_channel, source: source,
+        counts_as_current: counts_as_current
+      ).import!
     end
 
     # --- Verification and gating ---------------------------------------------

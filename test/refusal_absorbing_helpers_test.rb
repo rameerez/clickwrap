@@ -45,6 +45,22 @@ class RefusalAbsorbingHelpersTest < ActiveSupport::TestCase
     assert_clickwrap_current :signup, actor: user
   end
 
+  test "there is one spelling for the record the door creates" do
+    user = User.new(email: "one-spelling@example.com", name: "One Spelling")
+    controller = door_for(user)
+
+    # `prospective_actor:` used to be a second, undocumented name for the same
+    # argument, with silent precedence over `user:`. Removing it has to be
+    # LOUD: the keyword would otherwise ride the `**` forward straight into
+    # Registration.perform and go on working invisibly.
+    error = assert_raises(ArgumentError) do
+      controller.register_with_clickwrap(:signup, user: user, prospective_actor: user) { user.save! }
+    end
+
+    assert_match(/does not take `prospective_actor:`/, error.message)
+    assert_not user.persisted?
+  end
+
   test "an unticked control is absorbed in exactly the Devise adapter's language" do
     user = User.new(email: "unticked@example.com", name: "Unticked")
     controller = door_for(user, answers: { terms: "0", privacy_notice: "1" })
