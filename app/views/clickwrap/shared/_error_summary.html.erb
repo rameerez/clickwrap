@@ -8,12 +8,15 @@
   work when the page never runs a script.
 
   Each entry links to the control it is about, so the fix is one press away
-  rather than a scroll and a hunt. The message is TEXT: the styling underlines
-  it, but nothing here depends on a color being seen.
+  rather than a scroll and a hunt. One control gets one entry, whether it answers
+  one statement or a whole composed sentence: several lines pointing at the same
+  checkbox would be a list of the page's internals rather than of a person's
+  problems. The message is TEXT: the styling underlines it, but nothing here
+  depends on a color being seen.
 
-  Locals: presentation, errors, failing_statements
+  Locals: presentation, entries — [{ control_id:, message: }]
 %>
-<% if failing_statements.any? %>
+<% if entries.any? %>
   <div class="clickwrap-error-summary"
        id="<%= "clickwrap_#{presentation.policy_key}_errors" %>"
        role="alert"
@@ -24,10 +27,10 @@
     </h2>
 
     <ul class="clickwrap-error-summary__list">
-      <% failing_statements.each do |statement| %>
+      <% entries.each do |entry| %>
         <li class="clickwrap-error-summary__item">
-          <a class="clickwrap-error-summary__link" href="#<%= statement.control_id %>">
-            <%= Array(errors[statement.key]).join(" ") %>
+          <a class="clickwrap-error-summary__link" href="#<%= entry[:control_id] %>">
+            <%= entry[:message] %>
           </a>
         </li>
       <% end %>

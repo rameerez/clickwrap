@@ -89,6 +89,49 @@ module Clickwrap
       (controller if respond_to?(:controller)) || self
     end
 
+    # The composed one-line offer, as markup: the sentence the presentation
+    # signed, with each document rendered as a real link where the words for it
+    # go. This is what the single checkbox's label contains, and it is a helper
+    # rather than template soup because an ejected view should be able to
+    # restyle the line without reassembling a sentence out of translated parts.
+    #
+    #   <%= label_tag presentation.combined.control_id,
+    #         clickwrap_combined_sentence(presentation.combined) %>
+    #
+    # Nothing here interpolates markup into translated text: the presenter
+    # already split every fragment around the place its documents go, so this
+    # only joins pieces that are individually safe.
+    def clickwrap_combined_sentence(combined)
+      fragments = combined.fragments.map { |fragment| clickwrap_sentence_fragment(fragment) }
+
+      safe_join([safe_join(fragments, combined.joiner), combined.terminator])
+    end
+
+    # One statement's share of that sentence.
+    def clickwrap_sentence_fragment(fragment)
+      links = fragment.documents.map { |document| clickwrap_document_link(document) }
+
+      safe_join([fragment.prefix, safe_join(links, fragment.documents_joiner), fragment.suffix])
+    end
+
+    # One document, as the link a person presses to read it. The href is the
+    # exact path signed into the manifest and cannot be overridden here; the
+    # host's navigation hook chooses only how its client opens it. There is no
+    # "unavailable document" branch, because there is no such document: a
+    # presentation whose path could not be resolved refuses to be built at all.
+    #
+    # The "(opens in a new tab)" truth is kept and the clutter is not: it is
+    # rendered for screen readers only, and only when the link really does open
+    # a new tab — a same-window link announcing otherwise would be the page
+    # lying about itself.
+    def clickwrap_document_link(document)
+      options = clickwrap_document_link_html_options(document)
+      link = link_to(document.label, document.path, class: "clickwrap-documents__link", **options)
+      return link unless options[:target].to_s == "_blank"
+
+      safe_join([link, tag.span(t("clickwrap.ui.opens_in_new_tab"), class: "clickwrap-sr-only")], " ")
+    end
+
     # The signed presentation token, under the envelope name the capture reads.
     # This is the one hidden field a clickwrap form carries — and the one whose
     # name must never be hand-typed, because a typo here is a form that looks

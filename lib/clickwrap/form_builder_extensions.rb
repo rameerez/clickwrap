@@ -46,8 +46,21 @@ module Clickwrap
     # `submit:` takes a String, or a Hash of `text:` plus any ordinary HTML
     # options for the button. Everything else in `**html_options` decorates the
     # wrapper element, so a design system can hang its own classes on the block.
+    #
+    # What it renders, by default, is ONE line:
+    #
+    #   [ ] I agree to the Terms of Service and I acknowledge the Privacy Policy.
+    #
+    # …whenever the policy's statements are all ordinary, required,
+    # default-worded agreements and acknowledgments. Anything the sentence
+    # cannot honestly absorb keeps a control of its own below it, and a policy
+    # with nothing composable is untouched. `combined: false` asks for the
+    # itemized shape regardless — one boolean, no style registry — and it
+    # reaches the PRESENTER rather than the template, so the manifest signs the
+    # shape that was actually offered.
     def clickwrap(policy_key, submit:, actor: NOT_GIVEN, subject: nil, tenant: NOT_GIVEN,
-                  acting_for: nil, locale: nil, capture_channel: nil, errors: nil, **html_options)
+                  acting_for: nil, locale: nil, capture_channel: nil, errors: nil,
+                  combined: true, **html_options)
       clickwrap_reserve_form_presentation!(policy_key)
       text, button_options = clickwrap_split_submit(submit)
 
@@ -59,7 +72,8 @@ module Clickwrap
         tenant: tenant,
         acting_for: acting_for,
         locale: locale,
-        capture_channel: capture_channel
+        capture_channel: capture_channel,
+        combined: combined
       )
       clickwrap_render_fields(
         presentation,
@@ -102,7 +116,7 @@ module Clickwrap
     # manifest, and I will render the button myself".
     def clickwrap_fields(policy_key, submit_button_text:, actor: NOT_GIVEN, subject: nil,
                          tenant: NOT_GIVEN, acting_for: nil, locale: nil, capture_channel: nil, errors: nil,
-                         **html_options, &block)
+                         combined: true, **html_options, &block)
       clickwrap_reserve_form_presentation!(policy_key)
       presentation = clickwrap_present(
         policy_key,
@@ -112,7 +126,8 @@ module Clickwrap
         tenant: tenant,
         acting_for: acting_for,
         locale: locale,
-        capture_channel: capture_channel
+        capture_channel: capture_channel,
+        combined: combined
       )
 
       # A block that renders the action itself has already single-sourced the
@@ -176,14 +191,15 @@ module Clickwrap
     end
 
     def clickwrap_present(policy_key, submit_button_text:, actor:, subject:, tenant:, acting_for:,
-                          locale:, capture_channel:)
+                          locale:, capture_channel:, combined:)
       options = {
         actor: actor.equal?(NOT_GIVEN) ? clickwrap_actor_from_view_context : actor,
         subject: subject,
         acting_for: acting_for,
         tenant: tenant.equal?(NOT_GIVEN) ? clickwrap_tenant_from_view_context(policy_key) : tenant,
         locale: locale || clickwrap_locale_from_view_context,
-        submit_button_text: submit_button_text
+        submit_button_text: submit_button_text,
+        combined: combined
       }
       controller = @template.try(:controller)
       if controller.respond_to?(:clickwrap_document_version_path_for_presentation, true)

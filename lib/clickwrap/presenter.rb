@@ -146,6 +146,7 @@ module Clickwrap
         represented_party_will_be_created_by_protected_action:
           prospective_represented_party?,
         authority_at_presentation: authority_at_presentation,
+        combined_control: combined_control_fragment(combined),
         capture_channel: capture_channel
       )
 
@@ -417,6 +418,21 @@ module Clickwrap
         documents: statement.documents,
         documents_joiner: connectives[:documents_joiner]
       )
+    end
+
+    # What the manifest signs about a composed offer. The per-statement
+    # fragments already carry the acts, the documents, and their digests; this
+    # carries the thing only the composed shape has — the exact sentence a
+    # person read, and which statement keys the one answer they gave covers.
+    def combined_control_fragment(combined)
+      return nil if combined.nil?
+
+      {
+        "sentence" => combined.sentence,
+        "covers" => combined.statement_keys,
+        "answered_as" => combined.answered_as,
+        "control_name" => combined.control_name
+      }
     end
 
     def sentence_text(key)

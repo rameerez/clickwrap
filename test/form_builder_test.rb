@@ -16,12 +16,19 @@ class FormBuilderTest < ActionView::TestCase
 
   # --- The reference render ---------------------------------------------------
 
-  test "every control is rendered unchecked, one per statement" do
+  test "a signup renders one line: one unchecked box, one sentence, links inside it" do
     render_clickwrap(:signup, submit: "Create account")
 
-    assert_select "input[type=checkbox]", count: 2
+    assert_select "input[type=checkbox]", count: 1
     assert_select "input[type=checkbox][name='clickwrap_submission[answers][terms]']", count: 1
-    assert_select "input[type=checkbox][name='clickwrap_submission[answers][privacy_notice]']", count: 1
+    assert_select "label[for=clickwrap_signup_terms]" do |labels|
+      assert_equal "I agree to the Terms of Service and I acknowledge the Privacy Policy.",
+                   labels.first.text.gsub(/\s*\(opens in a new tab\)/, "").squish
+    end
+
+    # The links are IN the sentence, where the words for them are — not stacked
+    # under it as a list of things to go and read afterwards.
+    assert_select "label a.clickwrap-documents__link", count: 2
 
     # Not "no control has checked=true" — no `checked` ANYWHERE in the markup. A
     # pre-ticked box records the page's default rather than a person's action,
@@ -29,13 +36,87 @@ class FormBuilderTest < ActionView::TestCase
     refute_match(/\bchecked\b/, rendered)
   end
 
-  test "each control's label carries the exact assertion the receipt will record" do
+  test "the line carries no Required flag, no version label, and no visible new-tab hint" do
     render_clickwrap(:signup, submit: "Create account")
+
+    text = css_select("div.clickwrap-fields").first.text
+
+    refute_match(/Required|Optional/, text)
+    refute_match(/Version 2026-08-15/, text)
+    refute_match(/clickwrap-documents__version/, rendered)
+
+    # The truth about the new tab is kept and the clutter is not: announced to a
+    # screen reader, invisible to everyone else, and only there because these
+    # links really do open one.
+    assert_select "span.clickwrap-sr-only", text: "(opens in a new tab)", count: 2
+  end
+
+  test "the itemized shape keeps one control per statement, on request" do
+    render_clickwrap(:signup, submit: "Create account", combined: false)
+
+    assert_select "input[type=checkbox]", count: 2
+    assert_select "input[type=checkbox][name='clickwrap_submission[answers][terms]']", count: 1
+    assert_select "input[type=checkbox][name='clickwrap_submission[answers][privacy_notice]']", count: 1
 
     # "agree to the Terms" and "acknowledge the Privacy Notice" are different
     # acts, and the words beside each control are the words the event stores.
     assert_select "label[for=clickwrap_signup_terms]", text: /\AI agree to the Terms\./
     assert_select "label[for=clickwrap_signup_privacy_notice]", text: /\AI acknowledge the Privacy Notice\./
+    refute_match(/\bchecked\b/, rendered)
+
+    # And the manifest signs the shape that was offered, not the other one.
+    assert_nil Clickwrap::PresentationManifest.from_token(presentation_token).combined_control
+  end
+
+  test "a policy the line cannot absorb renders exactly as it always did" do
+    render_clickwrap(:marketing_preferences, submit: "Save preferences")
+
+    assert_select "input[type=checkbox]", count: 2
+    assert_select "div.clickwrap-statement--combined", count: 0
+    assert_select "label[for=clickwrap_marketing_preferences_product_updates]",
+                  text: /\AI agree to receive product update emails\./
+  end
+
+  test "a mixed policy renders the line, then the controls it could not absorb" do
+    Clickwrap.policy :signup_with_marketing do
+      agree_to :terms, link_label: "Terms of Service"
+      acknowledge :privacy_notice, link_label: "Privacy Policy"
+      consent_to :product_updates,
+                 document: :marketing_notice,
+                 statement: "I agree to receive product update emails.",
+                 optional: true,
+                 withdrawal_path: "/settings/privacy"
+      retain_with :ordinary_agreement_evidence
+    end
+
+    render_clickwrap(:signup_with_marketing, submit: "Create account")
+
+    assert_select "input[type=checkbox]", count: 2
+    assert_select "input[type=checkbox][required]", count: 1
+    assert_select "input[name='clickwrap_submission[answers][product_updates]'][required]", count: 0
+
+    # The optional consent keeps its own box, its own sentence, and its own
+    # withdrawal route, below the line — never folded into it.
+    assert_select "label[for=clickwrap_signup_with_marketing_product_updates]",
+                  text: /\AI agree to receive product update emails\./
+    assert_select "a.clickwrap-statement__withdrawal-link[href='/settings/privacy']", count: 1
+    assert_operator rendered.index("clickwrap-statement--combined"), :<,
+                    rendered.index("product_updates")
+  end
+
+  test "a failed combined submission shows one message under the one control" do
+    render_clickwrap(:signup, submit: "Create account",
+                              errors: { "terms" => "You need to answer this before continuing.",
+                                        "privacy_notice" => "You need to answer this before continuing." })
+
+    assert_select "input#clickwrap_signup_terms[aria-invalid=true][aria-describedby=clickwrap_signup_terms_error]"
+    assert_select "p#clickwrap_signup_terms_error", text: /You need to answer this before continuing\./
+
+    # One control, one message, one summary entry: a person cannot fix two
+    # things here, so they must not be told to.
+    assert_select "p.clickwrap-statement__error", count: 1
+    assert_select "div.clickwrap-error-summary[role=alert] a", count: 1
+    assert_select "a[href='#clickwrap_signup_terms']"
   end
 
   test "a document link comes before the submit button, names the document, and opens safely" do
@@ -114,13 +195,14 @@ class FormBuilderTest < ActionView::TestCase
     end
   end
 
-  test "a required statement's control is marked required" do
+  test "a required control is marked required" do
     render_clickwrap(:signup, submit: "Create account")
 
-    # `required` is progressive enhancement only. The server decides either way,
-    # so a browser that ignores it and a script that posts by hand meet the same
-    # check at capture.
-    assert_select "input[type=checkbox][required]", count: 2
+    # `required` is progressive enhancement only, and the word "Required" is
+    # gone from the page: the server decides either way, so a browser that
+    # ignores the attribute and a script that posts by hand meet the same check
+    # at capture.
+    assert_select "input[type=checkbox][required]", count: 1
   end
 
   test "an optional consent's control is not marked required" do
@@ -130,7 +212,6 @@ class FormBuilderTest < ActionView::TestCase
     # page itself, and leaving it unselected has to keep creating no grant.
     assert_select "input[type=checkbox]", count: 2
     assert_select "input[type=checkbox][required]", count: 0
-    assert_select "span.clickwrap-statement__flag", text: "Optional", count: 2
   end
 
   test "the call to action recorded in the manifest is the text on the button" do
@@ -258,7 +339,7 @@ class FormBuilderTest < ActionView::TestCase
   test "clickwrap_fields renders the controls and the token but leaves the action to the host" do
     render_clickwrap_fields(:signup, submit_button_text: "Create account")
 
-    assert_select "input[type=checkbox]", count: 2
+    assert_select "input[type=checkbox]", count: 1
     assert_select "input[type=hidden][name='clickwrap_submission[presentation_token]']", count: 1
     assert_select "input[type=submit]", count: 0
 

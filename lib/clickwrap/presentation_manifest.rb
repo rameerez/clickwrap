@@ -40,12 +40,12 @@ module Clickwrap
                 represented_party_type: nil, authority_rule: nil,
                 represented_party_creation_flow_id: nil,
                 represented_party_will_be_created_by_protected_action: false,
-                authority_at_presentation: nil,
+                authority_at_presentation: nil, combined_control: nil,
                 capture_channel: "web_browser", issued_at: nil, expires_at: nil, nonce: nil)
         issued_at ||= Clickwrap.now
         expires_at ||= issued_at + Clickwrap.config.presentation_valid_for
 
-        new(
+        attributes = {
           "schema" => Clickwrap::CANONICAL_SCHEMA_VERSION,
           "policy" => { "key" => policy.key, "revision" => revision_digest },
           "statements" => statements,
@@ -72,7 +72,14 @@ module Clickwrap
           "gem_version" => Clickwrap::VERSION,
           "application_version" => Clickwrap.config.resolved_application_version,
           "template_version" => Clickwrap.config.resolved_template_version
-        )
+        }
+
+        # Only present when the offer really was one control, so a manifest
+        # from an itemized presentation is byte-identical to the ones this gem
+        # has always written.
+        attributes["combined_control"] = combined_control if combined_control
+
+        new(attributes)
       end
 
       # Reads a token back into a manifest. Every failure here is the same kind
@@ -149,6 +156,21 @@ module Clickwrap
     def statement(key)
       statements.find { |statement| statement["key"] == key.to_s }
     end
+
+    # The one control this offer rendered, and the statements it answered.
+    #
+    # This is where the substitution defense lives for a composed presentation.
+    # The per-statement assertions below say what each act was; this says what
+    # the person actually READ — one sentence, composed from those acts, with
+    # the document links inside it — and which keys the single answer covers.
+    # Nil whenever the offer was itemized.
+    def combined_control = attributes["combined_control"]
+    def combined_sentence = combined_control&.fetch("sentence", nil)
+    def combined_statement_keys = Array(combined_control&.fetch("covers", nil))
+
+    # The statement key the single control is submitted under. Every covered
+    # key takes its answer from this one, server-side.
+    def combined_answered_as = combined_control&.fetch("answered_as", nil)
 
     def expired?(at = Clickwrap.now) = expires_at.nil? || expires_at <= at
 

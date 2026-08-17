@@ -113,11 +113,15 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "a required statement left unanswered is refused" do
+    # :manual_bank_transfer, because it itemizes — two attestations, each with
+    # its own control and its own answer. :signup composes into one control, and
+    # what a half-answer means there is the subject of combined_statement_test.
     error = assert_raises(Clickwrap::AnswerInvalid) do
-      submit_clickwrap(:signup, actor: @user, answers: { terms: "1" })
+      submit_clickwrap(:manual_bank_transfer, actor: @user, capture_channel: :operator,
+                                              answers: { beneficiary_matches_verified_identity: "1" })
     end
 
-    assert_equal "privacy_notice", error.statement_key
+    assert_equal "bank_accepted_transfer", error.statement_key
     assert_equal :missing_answer, error.reason
   end
 

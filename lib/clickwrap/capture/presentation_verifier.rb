@@ -44,6 +44,7 @@ module Clickwrap
         revision = load_revision!(manifest, require_current_policy: !for_replay)
         statement_snapshots = frozen_statement_snapshots(revision)
         verify_manifest_matches_revision!(manifest, statement_snapshots)
+        verify_combined_control!(manifest, statement_snapshots)
         answers = collect_answers(manifest)
         validate_answers!(manifest, answers, statement_snapshots)
 
@@ -382,6 +383,31 @@ module Clickwrap
         )
       end
 
+      # One answer is about to become several, so the shape that licenses that
+      # is checked against the frozen revision rather than trusted because it
+      # arrived signed. Every covered statement must exist, must be REQUIRED,
+      # and must be a plain checkbox: fanning a ticked box out onto an optional
+      # consent would manufacture a grant nobody gave, and onto a choice would
+      # invent a decision nobody made.
+      def verify_combined_control!(manifest, statement_snapshots)
+        covered = manifest.combined_statement_keys
+        return if covered.empty?
+
+        answered_as = manifest.combined_answered_as
+        composable = covered.all? do |key|
+          snapshot = statement_snapshots[key]
+          snapshot && snapshot["required"] && snapshot["choices"].nil?
+        end
+        return if composable && covered.include?(answered_as)
+
+        raise PresentationInvalid.new(
+          "This presentation offers one control for #{covered.join(", ")}, which the frozen " \
+          "policy revision does not allow a single answer to cover. Re-render it instead of " \
+          "recording several acts from one box.",
+          result: Verification::Result.failure(:presentation_invalid, policy_key: policy.key)
+        )
+      end
+
       def manifest_structure(statement)
         {
           "key" => statement["key"],
@@ -415,9 +441,32 @@ module Clickwrap
       def collect_answers(manifest)
         return @explicit_answers.to_h.transform_keys(&:to_s) unless @explicit_answers.nil?
 
-        manifest.statements.to_h do |statement|
+        answers = manifest.statements.to_h do |statement|
           [statement["key"], submission.answer_for(statement["key"])]
         end
+
+        fan_out_combined_answer(manifest, answers)
+      end
+
+      # One control, many statements. The offer the SERVER signed says which
+      # statement keys that single control answered, so the one submitted value
+      # becomes every covered statement's answer here — including when it is
+      # absent or unticked, which is how one empty box refuses every act the
+      # sentence named.
+      #
+      # This is a server-side fan-out and never a merge: a browser that also
+      # sends an answer for a covered statement (an ejected view still rendering
+      # the itemized shape, or somebody hand-posting a half-consent) is
+      # overwritten rather than believed. The development linter reports a page
+      # that rendered those extra controls; nothing about it changes what gets
+      # recorded.
+      def fan_out_combined_answer(manifest, answers)
+        covered = manifest.combined_statement_keys
+        return answers if covered.empty?
+
+        given = submission.answer_for(manifest.combined_answered_as)
+        covered.each { |key| answers[key] = given }
+        answers
       end
 
       def validate_answers!(manifest, answers, statement_snapshots)

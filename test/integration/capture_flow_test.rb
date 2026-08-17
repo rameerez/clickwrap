@@ -36,7 +36,13 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     # A render is not evidence. The offer is signed into a short-lived token and
     # the GET writes no row at all.
     assert_select "input[type=hidden][name='clickwrap_submission[presentation_token]']", count: 1
-    assert_select "input[type=checkbox]", count: 2
+    # One line, one box: :signup is two ordinary statements, so the screen offers
+    # the composed sentence rather than a stack of controls.
+    assert_select "input[type=checkbox]", count: 1
+    assert_select "label[for=clickwrap_signup_terms]" do |labels|
+      assert_equal "I agree to the Terms of Service and I acknowledge the Privacy Policy.",
+                   labels.first.text.gsub(/\s*\(opens in a new tab\)/, "").squish
+    end
     refute_match(/\bchecked\b/, response.body)
     assert_no_clickwrap_event :signup, actor: @user
   end
@@ -103,9 +109,11 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     login_as @user
     get "/legal/policies/signup"
 
+    # The helper answers the controls the page actually rendered, which on a
+    # composed line is one — and the server fans that one answer out to every
+    # statement the signed offer says it covered.
     params = clickwrap_submission_params_from(response.body, answers: { terms: false })
-    assert_equal "0", params.dig("clickwrap_submission", "answers", "terms")
-    assert_equal "1", params.dig("clickwrap_submission", "answers", "privacy_notice")
+    assert_equal({ "terms" => "0" }, params.dig("clickwrap_submission", "answers"))
 
     error = assert_raises(ArgumentError) { clickwrap_submission_params_from("<html></html>") }
     assert_match(/no clickwrap presentation token/, error.message)
@@ -165,14 +173,17 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get "/legal/policies/signup"
 
     post "/legal/policies/signup", params: {
-      clickwrap_submission: { presentation_token: presentation_token, answers: { terms: "1" } }
+      clickwrap_submission: { presentation_token: presentation_token, answers: {} }
     }
 
     assert_response 422
     # The failed submission re-renders under the address the browser is already
     # on, with the summary a person looking for what went wrong will find first.
+    # One control, one entry: several lines pointing at the same box would be a
+    # list of the page's internals rather than of a person's problems.
     assert_select "div.clickwrap-error-summary[role=alert]"
-    assert_select "a[href='#clickwrap_signup_privacy_notice']"
+    assert_select "a.clickwrap-error-summary__link", count: 1
+    assert_select "a[href='#clickwrap_signup_terms']"
 
     # And a partial event that later reads as assent is exactly what must not
     # exist here.

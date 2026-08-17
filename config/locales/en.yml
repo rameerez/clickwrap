@@ -50,9 +50,14 @@ en:
     ui:
       error_summary_heading: "Check these before continuing"
       error_prefix: "Error:"
-      required: "Required"
-      optional: "Optional"
+      # Announced, never drawn. A sighted person can see the icon their browser
+      # gives a new tab; a screen-reader user cannot, and neither of them needs
+      # the words printed beside every link. Rendered only when the link really
+      # does open a new tab, because a same-window link claiming otherwise would
+      # be the page lying about itself.
       opens_in_new_tab: "(opens in a new tab)"
+      # Receipts only. A version label beside a checkbox is a fact nobody can
+      # act on; a version label on the record is the whole point of the record.
       document_version: "Version %{version}"
       withdrawal_link: "Withdraw %{purpose} at any time"
 

@@ -36,8 +36,6 @@ es:
     ui:
       error_summary_heading: "Revisa esto antes de continuar"
       error_prefix: "Error:"
-      required: "Obligatorio"
-      optional: "Opcional"
       opens_in_new_tab: "(se abre en una pestaña nueva)"
       document_version: "Versión %{version}"
       withdrawal_link: "Retira %{purpose} cuando quieras"

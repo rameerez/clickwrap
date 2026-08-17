@@ -1,28 +1,38 @@
 <%#
-  One statement: one control, one label carrying the exact first-person sentence
-  the receipt will record, the documents it is about, and its own error.
+  One statement on a line of its own: one control, one label carrying the exact
+  first-person sentence the receipt will record, the documents it is about, and
+  its own error.
+
+  This is what a statement gets when the composed line could not honestly absorb
+  it — an optional consent, a recorded yes/no, copy the application wrote itself,
+  a purpose someone can withdraw — and what an entire policy gets when nothing in
+  it composes.
 
   Rules this file exists to keep:
 
-    * one control per statement — two acts never share a checkbox, because
+    * one control per statement — two acts never share a checkbox here, because
       "agreed to the Terms" and "acknowledged the Privacy Notice" are different
-      facts with different lifecycles;
+      facts with different lifecycles. (The composed line in _fields.html.erb is
+      one control for several statements, and it is allowed to be because the
+      server signs which statements it covered and answers all of them from the
+      one box. Two controls answering one statement each is the shape that
+      cannot be reconstructed later.);
     * the control is REAL and starts EMPTY. There is no `checked` anywhere in
       this file and there never will be: a pre-ticked box records the page's
       default rather than a person's action;
     * the label contains the assertion and is tied to the control, so pressing
       the words works and assistive technology announces them together;
-    * document links come BEFORE the action, carry the document's own name (not
-      "click here"), and open in a new tab so a half-filled form is not lost;
+    * document links come BEFORE the action and carry the document's own name
+      (not "click here");
     * `required` is progressive enhancement only. THE SERVER DECIDES. A browser
       that ignores it, a client that never sends the field, and a script that
-      posts by hand all meet the same server-side check at capture.
+      posts by hand all meet the same server-side check at capture — which is
+      also why nothing here prints the word "Required" beside a control.
 
   Locals: statement, error
 %>
 <%
   error = local_assigns[:error].presence
-  error_text = Array(error).join(" ")
   described_by = error ? statement.error_id : nil
   statement_classes = ["clickwrap-statement", "clickwrap-statement--#{statement.kind}"]
   statement_classes << "clickwrap-statement--invalid" if error
@@ -37,11 +47,7 @@
       fieldset_options[:"aria-describedby"] = described_by if described_by
     %>
     <%= tag.fieldset(**fieldset_options) do %>
-      <legend class="clickwrap-statement__legend">
-        <%= statement.assertion %>
-        <%= tag.span(t("clickwrap.ui.required"), class: "clickwrap-statement__flag") if statement.required? %>
-        <%= tag.span(t("clickwrap.ui.optional"), class: "clickwrap-statement__flag") if statement.optional? %>
-      </legend>
+      <legend class="clickwrap-statement__legend"><%= statement.assertion %></legend>
 
       <% statement.choices.each_key do |choice| %>
         <%
@@ -67,40 +73,14 @@
     %>
     <div class="clickwrap-statement__control">
       <%= check_box_tag statement.control_name, "1", false, control_options %>
-      <%= label_tag statement.control_id, class: "clickwrap-statement__label" do %>
-        <%= statement.assertion %>
-        <%= tag.span(t("clickwrap.ui.required"), class: "clickwrap-statement__flag") if statement.required? %>
-        <%= tag.span(t("clickwrap.ui.optional"), class: "clickwrap-statement__flag") if statement.optional? %>
-      <% end %>
+      <%= label_tag statement.control_id, statement.assertion, class: "clickwrap-statement__label" %>
     </div>
   <% end %>
 
   <% if statement.documents.any? %>
     <ul class="clickwrap-documents">
       <% statement.documents.each do |document| %>
-        <li class="clickwrap-documents__item">
-          <% if document.path.present? %>
-            <% link_options = clickwrap_document_link_html_options(document) %>
-            <%= link_to document.label, document.path,
-                  class: "clickwrap-documents__link",
-                  **link_options %>
-            <%# The hint tells the truth about what the host's navigation hook
-                actually does — a same-window link labelled "opens in a new
-                tab" would be the page lying about itself. %>
-            <% if link_options[:target].to_s == "_blank" %>
-              <span class="clickwrap-documents__hint">
-                <%= t("clickwrap.ui.opens_in_new_tab") %>
-              </span>
-            <% end %>
-          <% else %>
-            <span class="clickwrap-documents__link clickwrap-documents__link--unavailable">
-              <%= document.label %>
-            </span>
-          <% end %>
-          <span class="clickwrap-documents__version">
-            <%= t("clickwrap.ui.document_version", version: document.version_label) %>
-          </span>
-        </li>
+        <li class="clickwrap-documents__item"><%= clickwrap_document_link(document) %></li>
       <% end %>
     </ul>
   <% end %>
@@ -110,7 +90,7 @@
         here: the meaning is in the words, not in the color they are printed in. %>
     <p class="clickwrap-statement__error" id="<%= statement.error_id %>">
       <span class="clickwrap-statement__error-prefix"><%= t("clickwrap.ui.error_prefix") %></span>
-      <%= error_text %>
+      <%= Array(error).join(" ") %>
     </p>
   <% end %>
 

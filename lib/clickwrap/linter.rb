@@ -121,7 +121,10 @@ module Clickwrap
         findings.concat(submit_ordering_findings(text))
         findings.concat(submit_button_text_findings(text, presentation)) if presentation
         findings.concat(preselected_control_findings(text))
-        findings.concat(rendered_document_link_findings(text, presentation)) if presentation
+        if presentation
+          findings.concat(rendered_document_link_findings(text, presentation))
+          findings.concat(combined_control_findings(text, presentation))
+        end
         findings
       end
 
@@ -132,6 +135,7 @@ module Clickwrap
       def review_rendered_fields(html, presentation:)
         findings = preselected_control_findings(html.to_s)
         findings.concat(rendered_document_link_findings(html.to_s, presentation))
+        findings.concat(combined_control_findings(html.to_s, presentation))
         findings.concat(review_presentation(presentation))
         warn_about(findings, source: "policy #{presentation.policy_key}")
         findings
@@ -252,6 +256,9 @@ module Clickwrap
 
       # --- Rendered-HTML checks -----------------------------------------------
 
+      # Also unchanged by the composed line: whether the block is one control or
+      # five, the question is whether a person can reach the action without
+      # passing it, and the first answer field is still where the block starts.
       def submit_ordering_findings(html)
         first_control = html.index(ANSWER_FIELD_PATTERN) || html.index(TOKEN_FIELD_PATTERN)
         return [] if first_control.nil?
@@ -269,6 +276,10 @@ module Clickwrap
         )]
       end
 
+      # Unchanged by the composed line, and deliberately so: the composed
+      # control is submitted under a real statement's name, so a `checked` on
+      # one box covering three acts is caught by exactly the same scan that
+      # catches a `checked` on a box covering one.
       def preselected_control_findings(html)
         findings = []
         position = 0
@@ -288,6 +299,36 @@ module Clickwrap
         end
 
         findings
+      end
+
+      # The composed line's own hazard, and the reason it needs a rule of its
+      # own: this presentation signed ONE control covering several statements,
+      # and the page rendered controls for the covered ones as well. Usually an
+      # ejected view that predates the composed default.
+      #
+      # It is not a security hole — the server fans the one signed control's
+      # answer out to every statement it covers and overwrites whatever else
+      # arrived — but it is a page offering choices that do not exist. Somebody
+      # unticks one box, submits, and gets a refusal about a statement they
+      # thought they had answered separately.
+      def combined_control_findings(html, presentation)
+        combined = presentation.try(:combined)
+        return [] if combined.nil?
+
+        extra = html.scan(ANSWER_FIELD_PATTERN).flatten.uniq &
+                (combined.statement_keys - [combined.answered_as])
+        return [] if extra.empty?
+
+        [Finding.new(
+          code: :combined_statement_rendered_as_its_own_control,
+          explanation: "This presentation offers one control for " \
+                       "#{combined.statement_keys.join(", ")}, but the page also renders separate " \
+                       "controls for #{extra.join(", ")}. The server answers every covered " \
+                       "statement from the one signed control, so those extra boxes offer a " \
+                       "choice nobody has — render the composed sentence, or present with " \
+                       "`combined: false` and mean it.",
+          context: { policy: presentation.policy_key, covered: combined.statement_keys, extra: extra }
+        )]
       end
 
       def rendered_document_link_findings(html, presentation)

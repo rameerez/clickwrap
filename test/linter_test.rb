@@ -114,6 +114,39 @@ class LinterTest < ActionView::TestCase
     assert_equal "Register", finding.context[:actual]
   end
 
+  test "it flags a page that renders separate controls for a composed line's statements" do
+    # The shape an ejected view lands in after this default arrives: the offer
+    # is one signed control covering both acts, and the page is still asking
+    # about them one at a time. Not a hole — the server answers every covered
+    # statement from the one control it signed — but a page offering a choice
+    # that does not exist.
+    presentation = present_clickwrap(:signup, actor: @user)
+    html = <<~HTML
+      <input type="checkbox" name="clickwrap_submission[answers][terms]">
+      <input type="checkbox" name="clickwrap_submission[answers][privacy_notice]">
+      <a href="#{presentation.statement("terms").documents.first.path}">Terms of Service</a>
+      <a href="#{presentation.statement("privacy_notice").documents.first.path}">Privacy Policy</a>
+    HTML
+
+    findings = Clickwrap::Linter.review_rendered_html(html, presentation: presentation)
+    finding = findings.find { |candidate| candidate.code == :combined_statement_rendered_as_its_own_control }
+
+    assert finding, "expected the composed-shape finding, got #{findings.map(&:code)}"
+    assert_equal ["privacy_notice"], finding.context[:extra]
+    assert_match(/offer a choice nobody has/, finding.explanation)
+  end
+
+  test "it stays quiet when only the composed control is rendered" do
+    presentation = present_clickwrap(:signup, actor: @user)
+    html = <<~HTML
+      <input type="checkbox" name="clickwrap_submission[answers][terms]">
+      <a href="#{presentation.statement("terms").documents.first.path}">Terms of Service</a>
+      <a href="#{presentation.statement("privacy_notice").documents.first.path}">Privacy Policy</a>
+    HTML
+
+    assert_empty Clickwrap::Linter.review_rendered_html(html, presentation: presentation)
+  end
+
   test "it flags a submit control that appears before the clickwrap block" do
     findings = Clickwrap::Linter.review_rendered_html(<<~HTML)
       <button type="submit">Create account</button>

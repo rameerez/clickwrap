@@ -132,6 +132,127 @@ class CombinedStatementTest < ActiveSupport::TestCase
     assert_equal presentation.statements, presentation.itemized_statements
   end
 
+  # --- What the offer signs about itself ------------------------------------------
+
+  test "the manifest signs the sentence, the keys one answer covers, and the link paths" do
+    manifest = Clickwrap.present(:signup, actor: @user).manifest
+
+    # The substitution defense has to hold over the sentence a person actually
+    # saw, not over two assertions they were never shown separately.
+    assert_equal "I agree to the Terms of Service and I acknowledge the Privacy Policy.",
+                 manifest.combined_sentence
+    assert_equal %w[terms privacy_notice], manifest.combined_statement_keys
+    assert_equal "terms", manifest.combined_answered_as
+    assert_equal "clickwrap_submission[answers][terms]", manifest.combined_control["control_name"]
+
+    # And the documents inside that sentence are the ones it signs per statement,
+    # at the paths it rendered.
+    signed_paths = manifest.statements.flat_map do |statement|
+      statement["documents"].map { |document| document["path"] }
+    end
+    assert_equal ["/terms-of-service", "/privacy-policy"], signed_paths
+  end
+
+  test "an itemized manifest is byte-identical to the ones this gem has always written" do
+    itemized = Clickwrap.present(:signup, actor: @user, combined: false).manifest
+
+    assert_nil itemized.combined_control
+    refute_includes itemized.to_h.keys, "combined_control"
+    assert_empty itemized.combined_statement_keys
+  end
+
+  # --- What one answer records ------------------------------------------------------
+
+  test "one ticked control records both acts, each with its own kind and documents" do
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1" })
+
+    assert_equal %w[terms privacy_notice], receipt.statements.map(&:statement_key)
+    assert_equal %w[agreement acknowledgment], receipt.statements.map(&:kind)
+    assert_equal %w[agreed acknowledged], receipt.statements.map(&:action)
+    assert(receipt.statements.all?(&:answered))
+    assert_equal ["I agree to the Terms.", "I acknowledge the Privacy Notice."],
+                 receipt.statements.map(&:assertion_text)
+
+    assert @user.clickwraps.agreed_to?(:terms)
+    assert @user.clickwraps.acknowledged?(:privacy_notice)
+  end
+
+  test "an unticked control refuses every act the sentence named" do
+    presentation = present_clickwrap(:signup, actor: @user)
+
+    error = assert_raises(Clickwrap::AnswerInvalid) do
+      Clickwrap.capture!(:signup, actor: @user,
+                                  submission: submission_for(presentation, { "terms" => "0" }))
+    end
+
+    assert_equal :missing_answer, error.reason
+    assert_no_clickwrap_event :signup, actor: @user
+    refute @user.clickwraps.acknowledged?(:privacy_notice)
+  end
+
+  test "an absent control refuses every act the sentence named" do
+    presentation = present_clickwrap(:signup, actor: @user)
+
+    assert_raises(Clickwrap::AnswerInvalid) do
+      Clickwrap.capture!(:signup, actor: @user, submission: submission_for(presentation, {}))
+    end
+
+    assert_no_clickwrap_event :signup, actor: @user
+  end
+
+  test "a hand-posted half-consent is overwritten by the one control the server signed" do
+    # The line said both. A submission that ticks the control and then says "but
+    # not the privacy notice" is answering a question this page never asked, and
+    # the server answers every covered statement from the one box regardless.
+    receipt = submit_clickwrap(:signup, actor: @user,
+                                        answers: { terms: "1", privacy_notice: "0" })
+
+    assert_equal %w[agreed acknowledged], receipt.statements.map(&:action)
+    assert(receipt.statements.all?(&:answered))
+
+    # And the reverse: answering only a covered statement leaves the one real
+    # control unanswered, which refuses everything.
+    other = create_user
+    presentation = present_clickwrap(:signup, actor: other)
+
+    assert_raises(Clickwrap::AnswerInvalid) do
+      Clickwrap.capture!(:signup, actor: other,
+                                  submission: submission_for(presentation, { "privacy_notice" => "1" }))
+    end
+    assert_no_clickwrap_event :signup, actor: other
+  end
+
+  test "a single answer may not cover a statement the frozen revision left optional" do
+    # Belt and braces over a signed value: the manifest is the server's own, but
+    # what licenses one answer becoming several is the frozen revision, so that
+    # is what gets asked.
+    presentation = present_clickwrap(:signup, actor: @user)
+    forged = forged_manifest(presentation) do |attributes|
+      attributes["combined_control"]["covers"] = %w[terms privacy_notice unknown_statement]
+    end
+
+    error = assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.capture!(:signup, actor: @user,
+                                  submission: Clickwrap::Submission.new(presentation_token: forged,
+                                                                        answers: { "terms" => "1" }))
+    end
+
+    assert_match(/does not allow a single answer to cover/, error.message)
+  end
+
+  test "the control a combined manifest names must be one of the statements it covers" do
+    presentation = present_clickwrap(:signup, actor: @user)
+    forged = forged_manifest(presentation) do |attributes|
+      attributes["combined_control"]["answered_as"] = "somebody_elses_control"
+    end
+
+    assert_raises(Clickwrap::PresentationInvalid) do
+      Clickwrap.capture!(:signup, actor: @user,
+                                  submission: Clickwrap::Submission.new(presentation_token: forged,
+                                                                        answers: { "terms" => "1" }))
+    end
+  end
+
   # --- Turning it off ------------------------------------------------------------
 
   test "combined: false presents the itemized shape for a policy that would compose" do
@@ -188,5 +309,15 @@ class CombinedStatementTest < ActiveSupport::TestCase
     assert_nil Clickwrap.present(:signup, actor: @user).combined
   ensure
     I18n.backend.reload!
+  end
+
+  private
+
+  # Re-signs a presentation's manifest after editing it, so a test can ask what
+  # the verifier does with a combined shape the presenter would never build.
+  def forged_manifest(presentation)
+    attributes = Marshal.load(Marshal.dump(presentation.manifest.to_h))
+    yield attributes
+    Clickwrap::PresentationManifest.new(attributes).to_token
   end
 end
