@@ -236,6 +236,92 @@ class LifecycleTest < ActiveSupport::TestCase
     assert_equal "terms", strict.statement_key
   end
 
+  # --- The same question, asked from the other end -----------------------------
+  #
+  # `Clickwrap.verify(event_id, …)` promises to be `Clickwrap.verify(:policy, …)`
+  # asked about one recorded act. Both keywords that make that question strict
+  # used to be accepted and then dropped on this branch, which is worse than
+  # rejecting them: a host asking "is this old evidence still good?" got an
+  # unqualified yes. The four tests below pin both keywords, in both outcomes.
+
+  test "an event id honors require_current_revision when the act was made under another one" do
+    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+
+    assert Clickwrap.verify(@user.clickwraps.events.last.id, require_current_revision: true).success?,
+           "evidence made under the current wording verifies from either end"
+
+    # A legacy import is the honest, non-simulated case: its revision snapshot
+    # describes a mapping rather than a presentation, so it can never equal the
+    # compiled policy's revision. Asking "is this old evidence still good under
+    # today's wording" about it must answer no.
+    imported = Clickwrap.import_legacy!(
+      :signup,
+      actor: create_user,
+      occurred_at: 2.years.ago,
+      source: "users.accepted_terms_at",
+      because: "Imported historical signup evidence"
+    )
+
+    assert Clickwrap.verify(imported.event_id).success?,
+           "revision currency is opt-in from this end too, never a surprise default"
+
+    strict = Clickwrap.verify(imported.event_id, require_current_revision: true)
+
+    refute_predicate strict, :success?
+    assert_equal :stale_policy_revision, strict.error
+    assert_equal imported.event_id, strict.event_id
+  end
+
+  test "an event id re-derives the subject fingerprint when a subject is passed" do
+    withdrawal = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
+    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                 answers: withdrawal_answers)
+    event_id = @user.clickwraps.events.last.id
+
+    assert Clickwrap.verify(event_id, subject: withdrawal).success?
+
+    # The subject is the same RECORD, so subject_key still matches — only the
+    # fingerprint can tell that what the declaration covered has changed.
+    withdrawal.update!(covered_ride_ids: "1,2,3,4")
+
+    result = Clickwrap.verify(event_id, subject: withdrawal)
+
+    refute_predicate result, :success?
+    assert_equal :subject_fingerprint_mismatch, result.error
+    assert_equal event_id, result.event_id
+  end
+
+  test "an event id verified with no subject still answers the question it was asked" do
+    withdrawal = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
+    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                 answers: withdrawal_answers)
+    event_id = @user.clickwraps.events.last.id
+
+    withdrawal.update!(covered_ride_ids: "1,2,3,4")
+
+    # Nobody named a subject, so nothing about a subject was claimed. Silently
+    # checking against the live record would answer a question that was not
+    # asked; silently skipping it when one IS named is the bug above.
+    assert Clickwrap.verify(event_id).success?
+  end
+
+  test "an event whose policy is no longer declared says so instead of passing" do
+    withdrawal = create_withdrawal(user: @user)
+    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                 answers: withdrawal_answers)
+    event_id = @user.clickwraps.events.last.id
+
+    # "We can no longer check this" and "this is fine" must never be spelled
+    # the same way.
+    Clickwrap.stubs(:policies).returns(Clickwrap::Registry.new(:policy))
+
+    strict = Clickwrap.verify(event_id, require_current_revision: true)
+    assert_equal :unknown_policy, strict.error
+
+    bound = Clickwrap.verify(event_id, subject: withdrawal)
+    assert_equal :unknown_policy, bound.error
+  end
+
   test "verification results answer every stable error as a predicate" do
     result = Clickwrap.verify(:signup, actor: @user)
 

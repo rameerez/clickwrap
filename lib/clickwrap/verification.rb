@@ -122,13 +122,24 @@ module Clickwrap
       # event. Both are the same question asked from different ends: the first
       # is "is there current evidence", the second is "is this evidence still
       # good for this exact operation".
+      #
+      # "The same question" is a promise, so both ends answer every part of it.
+      # `subject:` re-derives the subject fingerprint from the live record, and
+      # `require_current_revision: true` re-asks whether the act was made under
+      # the wording that is current now — on an event id exactly as on a policy
+      # key. That is the whole reason a host never has to reach into
+      # Clickwrap::PolicyRevision or Clickwrap::SubjectFingerprint to ask
+      # "is this old evidence still good?":
+      #
+      #   Clickwrap.verify(event_id, subject: order_batch, require_current_revision: true)
       def verify(policy_or_event, actor: nil, subject: nil, tenant: nil, acting_for: UNSPECIFIED,
                  policy: nil, at: nil, require_current_revision: false)
         at ||= Clickwrap.now
 
         if policy_or_event.is_a?(String) && Identifier.valid?(policy_or_event)
           verify_event(policy_or_event, policy: policy, subject: subject,
-                                        acting_for: acting_for, at: at)
+                                        acting_for: acting_for, at: at,
+                                        require_current_revision: require_current_revision)
         else
           acting_for = nil if acting_for.equal?(UNSPECIFIED)
           verify_policy(policy_or_event, actor: actor, subject: subject, tenant: tenant,
@@ -329,7 +340,7 @@ module Clickwrap
         root
       end
 
-      def verify_event(event_id, policy:, subject:, acting_for:, at:)
+      def verify_event(event_id, policy:, subject:, acting_for:, at:, require_current_revision: false)
         event = Event.find_by(id: event_id)
 
         return Result.failure(:no_evidence, event_id: event_id) unless event
@@ -384,6 +395,14 @@ module Clickwrap
           return Result.failure(:wrong_subject, policy_key: event.policy_key, event_id: event.id)
         end
 
+        fingerprint_failure = check_event_subject_fingerprint(event, subject)
+        return fingerprint_failure if fingerprint_failure
+
+        if require_current_revision
+          stale = check_event_policy_revision(event)
+          return stale if stale
+        end
+
         if !acting_for.equal?(UNSPECIFIED) &&
            event.represented_party_reference.to_s != Reference.represented_party(acting_for).to_s
           return Result.failure(:represented_party_mismatch,
@@ -395,6 +414,46 @@ module Clickwrap
           event_id: event.id,
           details: { "request_evidence_binding" => event.request_evidence_binding_status.to_s }
         )
+      end
+
+      # The same subject binding `verify_policy` applies, applied to one
+      # recorded event. Matching `subject_key` only proves the evidence is
+      # about the same RECORD; the fingerprint is what proves it is still about
+      # the same record in the same state, which is the whole point of a policy
+      # that fingerprints its subject.
+      #
+      # Recomputing needs the compiled policy, so a policy that is no longer
+      # declared is reported as `:unknown_policy` rather than passed. "We can
+      # no longer check this" is not the same answer as "this is fine", and on
+      # this question they must never be spelled the same way.
+      def check_event_subject_fingerprint(event, subject)
+        return nil if subject.nil? || event.subject_fingerprint.blank?
+
+        policy = Clickwrap.policies[event.policy_key]
+
+        return Result.failure(:unknown_policy, policy_key: event.policy_key, event_id: event.id) unless policy
+
+        expected = SubjectFingerprint.for(policy, subject)
+
+        return nil if expected && Digest.secure_compare?(expected, event.subject_fingerprint.to_s)
+
+        Result.failure(:subject_fingerprint_mismatch, policy_key: event.policy_key, event_id: event.id)
+      end
+
+      # "Was this act made under the wording that is current NOW?", asked of one
+      # event. Deliberately compared by digest against the compiled policy
+      # rather than through `PolicyRevision.freeze_for`, because verifying is a
+      # read: asking whether old evidence is still good must not write a new
+      # revision row as a side effect.
+      def check_event_policy_revision(event)
+        policy = Clickwrap.policies[event.policy_key]
+
+        return Result.failure(:unknown_policy, policy_key: event.policy_key, event_id: event.id) unless policy
+
+        recorded = event.policy_revision&.revision_digest
+        return nil if recorded.present? && Digest.secure_compare?(recorded, policy.revision.to_s)
+
+        Result.failure(:stale_policy_revision, policy_key: event.policy_key, event_id: event.id)
       end
 
       def load_states(policy, actor_reference, tenant, subject, acting_for)

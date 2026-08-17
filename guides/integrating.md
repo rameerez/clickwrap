@@ -435,6 +435,20 @@ exact operation":
   declaration.stale_policy_revision?          # legal reworded it → re-ask
   declaration.recorded_after?(preparation)    # order enforced, not assumed
   ```
+
+  The same call takes an event id when the question is about one specific
+  recorded act rather than "does this actor currently satisfy the policy":
+
+  ```ruby
+  Clickwrap.verify(event_id, subject: order_batch, require_current_revision: true)
+  ```
+
+  Both keywords do the same work on that branch — the fingerprint is
+  re-derived from the record as it is now, and the act's recorded revision is
+  compared against the wording compiled today — so a host never reaches into
+  `Clickwrap::PolicyRevision` or `Clickwrap::SubjectFingerprint` to ask
+  whether stored evidence is still good. A policy that is no longer declared
+  answers `:unknown_policy` rather than passing.
 - **Non-browser callers fail closed.** Pass `submission: nil` from a job or
   console and capture refuses — which is correct: nothing can mint a
   presentation but a real render. Give operators their own explicit rail.

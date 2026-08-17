@@ -21,6 +21,22 @@ against its own claims. Everything below is a defect they evidenced.
   subclass reachable. "The installer detects your authentication stack and
   generates an explicit adapter" now says what it does: it detects, and prints
   the line for you to add.
+- **`Clickwrap.verify(event_id, …)` silently dropped its strictness keywords.**
+  The event-id branch accepted `require_current_revision:` and then never
+  received it, so a host asking "is this old evidence still good?" about one
+  recorded act got an unqualified yes — worse than an error, because it looked
+  like an answer. Both branches now answer the whole question: the event id
+  compares the act's recorded policy revision against the wording compiled
+  today, and re-derives the subject fingerprint from the live record when
+  `subject:` is passed. A policy that is no longer declared answers
+  `:unknown_policy` rather than passing, because "we can no longer check this"
+  must never be spelled the same way as "this is fine". `Clickwrap.verify(event_id,
+  subject:, require_current_revision: true)` is therefore the complete public
+  form of that question, and nothing needs to reach into
+  `Clickwrap::PolicyRevision` or `Clickwrap::SubjectFingerprint` to ask it.
+  Verifying an event id also no longer writes: the revision comparison is by
+  digest, so a read-only question stops creating a revision row as a side
+  effect.
 - **An unmounted engine used to sign 404 document links into evidence.** The
   document link goes into the presentation manifest, into the digest, and into
   the record of what was offered; built from an unmounted engine's routes it

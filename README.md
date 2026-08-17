@@ -469,6 +469,14 @@ declaration.recorded_after?(preparation)   # ordering enforced, not assumed
 
 `require_current_revision: true` fails evidence recorded under a superseded policy revision, so "we changed the wording, everyone re-accepts" is one keyword instead of a hand-rolled revision comparison.
 
+The same call takes an event id, which is how you re-ask about one specific recorded act years later:
+
+```ruby
+Clickwrap.verify(event_id, subject: order_batch, require_current_revision: true)
+```
+
+Both keywords mean exactly what they mean above: `subject:` re-derives the fingerprint from the record as it is *now*, and `require_current_revision:` compares the act's recorded revision against the wording compiled today. That is the complete "is this old evidence still good?" question, so nothing needs to reach into `Clickwrap::PolicyRevision` or `Clickwrap::SubjectFingerprint` to ask it. If the policy is no longer declared at all, the result says `:unknown_policy` — "we can no longer check this" never gets spelled the same way as "this is fine".
+
 Controller gates redirect users to a ready-made remediation screen and bring them back when they're done:
 
 ```ruby
