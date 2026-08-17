@@ -29,6 +29,60 @@ class CaptureTest < ActiveSupport::TestCase
     assert_equal "acknowledged", privacy.action
   end
 
+  # --- Which records can act ----------------------------------------------------
+
+  test "capture refuses an actor that is not the class config.actor_class_name names" do
+    # The installer spends sixty lines and a warning on this setting because "a
+    # wrong guess attributes evidence to the wrong kind of record for years".
+    # That was only true if something checked, and nothing did: the setting fed
+    # one error string and `Configuration#actor_class` had no production caller
+    # at all.
+    organization = create_organization
+
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      capture_clickwrap(:signup, actor: organization, answers: { terms: "1", privacy_notice: "1" })
+    end
+
+    assert_match(/Organization/, error.message)
+    assert_match(/config\.actor_class_name/, error.message)
+    # An organization is a party accepted FOR, and saying so is the difference
+    # between a refusal and a useful refusal.
+    assert_match(/acting_for:/, error.message)
+    assert_no_clickwrap_event :signup, actor: organization
+  end
+
+  test "capture accepts the configured class, and the kinds that are their own kind" do
+    Clickwrap.config.actor_class_name = "Organization"
+    organization = create_organization
+
+    assert capture_clickwrap(:signup, actor: organization,
+                                      answers: { terms: "1", privacy_notice: "1" }).event.persisted?
+
+    # A system actor, an anonymous actor, and a literal reference to an actor
+    # in another system are not the host's actor class and never claimed to be.
+    # Each says what it is in the receipt, so none of them is a wrong guess.
+    [
+      Clickwrap::SystemActor.new("database_seed"),
+      Clickwrap::AnonymousActor.new("checkout_9f2c"),
+      "external/actor-123"
+    ].each do |actor|
+      assert capture_clickwrap(:signup, actor: actor,
+                                        answers: { terms: "1", privacy_notice: "1" }).event.persisted?,
+             "#{actor.class.name} is its own kind of actor and must not be checked against the class"
+    end
+  end
+
+  test "an actor class name that does not resolve says so instead of failing obscurely" do
+    Clickwrap.config.actor_class_name = "NoSuchActorModel"
+
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    end
+
+    assert_match(/NoSuchActorModel/, error.message)
+    assert_match(/does not name a loadable class/, error.message)
+  end
+
   test "capture stores the resolved assertion text, not an I18n key" do
     receipt = capture_clickwrap(:driver_declaration, actor: @user, subject: create_withdrawal,
                                                      answers: { non_professional_driver: "1" })

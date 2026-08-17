@@ -163,6 +163,7 @@ module Clickwrap
     # rows while waiting for someone else's DNS.
     def perform(protected_action:, &block)
       @protected_action = protected_action
+      validate_actor_class!
       @joined_existing_transaction = ::ActiveRecord::Base.connection.transaction_open?
       replay_candidate = find_replay_candidate
       policy.validate_tenant!(tenant) unless replay_candidate
@@ -514,6 +515,49 @@ module Clickwrap
       return unless event.statements.any?(&:one_time?)
 
       Lifecycle.consume_authorization!(event: event, because: "Consumed by the protected action")
+    end
+
+    # `config.actor_class_name` decides which record the installer wires up and
+    # which class every "who is acting" error message names. From here it also
+    # decides which records may actually appear in evidence AS the actor —
+    # without this check the setting was a label, and a wrong one attributed
+    # evidence to the wrong kind of record silently, for as long as the
+    # evidence is kept. That is the exact consequence the installer warns
+    # about, so it had better be true.
+    #
+    # Deliberately narrow. A system actor and an anonymous actor are their own
+    # kinds and say so in the receipt; a literal String or Symbol reference is
+    # an actor from another system this application owns no class for; and nil
+    # is "nobody yet", which the registration path binds later.
+    def validate_actor_class!
+      expected = expected_actor_class
+      return if expected.nil?
+
+      [actor, @prospective_actor].compact.each do |candidate|
+        next if candidate.is_a?(SystemActor) || candidate.is_a?(AnonymousActor)
+        next if candidate.is_a?(String) || candidate.is_a?(Symbol)
+        next if candidate.is_a?(expected)
+
+        raise ConfigurationError,
+              "Clickwrap was asked to record #{candidate.class.name} as the actor, but " \
+              "`config.actor_class_name` says the records that can act are " \
+              "#{Clickwrap.config.actor_class_name}. One of the two is wrong, and evidence " \
+              "attributed to the wrong kind of record stays wrong for as long as it is kept. " \
+              "Either pass a #{Clickwrap.config.actor_class_name}, or set " \
+              "`config.actor_class_name` in config/initializers/clickwrap.rb to the class that " \
+              "really acts. (An organization or other party accepted FOR belongs in " \
+              "`acting_for:`, not `actor:`.)"
+      end
+    end
+
+    def expected_actor_class
+      Clickwrap.config.actor_class
+    rescue NameError => error
+      raise ConfigurationError,
+            "`config.actor_class_name` is set to " \
+            "#{Clickwrap.config.actor_class_name.inspect}, which does not name a loadable " \
+            "class (#{error.message}). Clickwrap checks every recorded actor against it, so it " \
+            "has to resolve."
     end
 
     def mark_presentation_accepted!(manifest)

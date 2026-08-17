@@ -21,6 +21,29 @@ against its own claims. Everything below is a defect they evidenced.
   subclass reachable. "The installer detects your authentication stack and
   generates an explicit adapter" now says what it does: it detects, and prints
   the line for you to add.
+- **`config.actor_class_name` now decides something.** The installer spends
+  sixty lines, a `--actor-class` option, and a seven-line warning on this
+  setting because "a wrong guess attributes evidence to the wrong kind of
+  record for years" — which was not true, because nothing checked. The setting
+  fed one error string, and `Configuration#actor_class` had no production
+  caller at all. Capture now asserts the recorded actor is an instance of it,
+  with an error that names the setting and points an organization at
+  `acting_for:` where it belongs. System actors, anonymous actors, and literal
+  references to actors in other systems are their own kinds, say so in the
+  receipt, and are not checked against the class.
+- **The receipt list authorized after paging.** Taking a page of rows and
+  filtering them afterwards rendered "you have no receipts" whenever the
+  viewer's newest page happened to be rows the host would not show them, while
+  readable ones sat past the limit. Authorization now happens first, in bounded
+  batches, and the actor is eager-loaded — a full page is three queries instead
+  of fifty-two.
+- **A presentation resolved its documents one statement at a time**, including
+  the same document twice when two statements named it, even though documents
+  are immutable and published and the answer cannot differ. Two queries now
+  resolve every document a policy references.
+- **`Clickwrap.reset!` left the presentation-manifest verifier memoized**, so a
+  verifier built under the previous configuration survived the reset. The test
+  suite had been resetting it by hand, which is why nothing caught it.
 - **`Clickwrap.verify(event_id, …)` silently dropped its strictness keywords.**
   The event-id branch accepted `require_current_revision:` and then never
   received it, so a host asking "is this old evidence still good?" about one
