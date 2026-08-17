@@ -500,7 +500,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   test "IP geolocation requires explicit uncertainty and a resolver class" do
     common = [
       "--skip-questions",
-      "--record-ip-geolocation-latitude-and-longitude-by-default",
+      "--record-ip-geolocation-fields=latitude_and_longitude",
       "--reason-for-recording-ip-geolocation-by-default=Investigate the network context of disputed submissions.",
       "--delete-recorded-ip-geolocation-after-days=30"
     ]
@@ -510,8 +510,11 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_no_file "config/initializers/clickwrap.rb"
 
     proxy_digest = Clickwrap::Digest.digest("reviewed proxy configuration")
-    run_generator common + [
-      "--record-ip-geolocation-accuracy-radius-in-kilometers-by-default",
+    run_generator [
+      "--skip-questions",
+      "--record-ip-geolocation-fields=latitude_and_longitude,accuracy_radius_in_kilometers",
+      "--reason-for-recording-ip-geolocation-by-default=Investigate the network context of disputed submissions.",
+      "--delete-recorded-ip-geolocation-after-days=30",
       "--trusted-proxy-configuration-digest=#{proxy_digest}",
       "--ip-geolocation-resolver-class-name=Clickwrap::IpGeolocation::TrackdownResolver"
     ]
@@ -524,6 +527,44 @@ class InstallGeneratorTest < Rails::Generators::TestCase
         initializer
       )
       assert_match(/config\.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver\.new/, initializer)
+    end
+  end
+
+  test "one geolocation flag replaces nine, and an unknown field stops the generator" do
+    # Twenty-odd lines of `class_option` for one list, plus a table translating
+    # plural flag names back into singular configuration names. The runtime
+    # keeps a setter per field — that is the posture a host reads and reviews;
+    # this is only the command line.
+    stderr = capture(:stderr) do
+      run_generator %w[--skip-questions --record-ip-geolocation-fields=citty,country]
+    end
+
+    assert_match(/does not know "citty"/, stderr)
+    assert_match(/accuracy_radius_in_kilometers/, stderr, "the refusal lists what IS accepted")
+    assert_match(/Nothing was written/, stderr)
+    assert_no_file "config/initializers/clickwrap.rb"
+  end
+
+  test "the geolocation flag takes either shell convention and enables only what it names" do
+    ["--record-ip-geolocation-fields=country,continent",
+     %w[--record-ip-geolocation-fields country continent]].each do |flag|
+      prepare_destination
+
+      run_generator [
+        "--skip-questions", *Array(flag),
+        "--reason-for-recording-ip-geolocation-by-default=Corroborate anomalous access.",
+        "--delete-recorded-ip-geolocation-after-days=30",
+        "--ip-geolocation-resolver-class-name=Clickwrap::IpGeolocation::TrackdownResolver"
+      ]
+
+      assert_file "config/initializers/clickwrap.rb" do |initializer|
+        assert_match(/config\.record_ip_geolocation_country_by_default = true/, initializer)
+        assert_match(/config\.record_ip_geolocation_continent_by_default = true/, initializer)
+
+        # Naming two fields is not a way to enable a third.
+        assert_match(/config\.record_ip_geolocation_city_by_default = false/, initializer)
+        assert_match(/config\.record_ip_address_by_default = false/, initializer)
+      end
     end
   end
 

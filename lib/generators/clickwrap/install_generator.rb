@@ -59,20 +59,12 @@ module Clickwrap
           rendered_by_the_application: false }
       ].freeze
 
-      # The command-line flags name IP-geolocation fields in the plural, the way
-      # a person says them out loud ("record cities"); the configuration names
-      # one field ("city"). This maps one to the other so both stay readable.
-      IP_GEOLOCATION_FIELD_FOR_OPTION = {
-        "country" => "country",
-        "regions" => "region",
-        "cities" => "city",
-        "postal_codes" => "postal_code",
-        "latitude_and_longitude" => "latitude_and_longitude",
-        "timezones" => "timezone",
-        "continents" => "continent",
-        "metro_codes" => "metro_code",
-        "accuracy_radius_in_kilometers" => "accuracy_radius_in_kilometers"
-      }.freeze
+      # The names the configuration uses, which are also the names this
+      # generator's one geolocation flag accepts. There used to be nine separate
+      # `class_option`s here, spelled in the plural, plus a table translating
+      # them back into the singular configuration names — twenty-odd lines of
+      # generator surface for one list.
+      IP_GEOLOCATION_FIELDS = Clickwrap::Vocabulary::IP_GEOLOCATION_DATA_FIELDS
 
       # --- Request evidence: one explicit flag per field ------------------------
       #
@@ -85,24 +77,17 @@ module Clickwrap
                    type: :boolean, desc: "Record the request IP address for every policy"
       class_option :record_browser_user_agents_by_default,
                    type: :boolean, desc: "Record the browser User-Agent for every policy"
-      class_option :record_ip_geolocation_country_by_default,
-                   type: :boolean, desc: "Record the estimated country for every policy"
-      class_option :record_ip_geolocation_regions_by_default,
-                   type: :boolean, desc: "Record the estimated region for every policy"
-      class_option :record_ip_geolocation_cities_by_default,
-                   type: :boolean, desc: "Record the estimated city for every policy"
-      class_option :record_ip_geolocation_postal_codes_by_default,
-                   type: :boolean, desc: "Record the estimated postal code for every policy"
-      class_option :record_ip_geolocation_latitude_and_longitude_by_default,
-                   type: :boolean, desc: "Record estimated coordinates for every policy"
-      class_option :record_ip_geolocation_timezones_by_default,
-                   type: :boolean, desc: "Record the estimated timezone for every policy"
-      class_option :record_ip_geolocation_continents_by_default,
-                   type: :boolean, desc: "Record the estimated continent for every policy"
-      class_option :record_ip_geolocation_metro_codes_by_default,
-                   type: :boolean, desc: "Record the estimated metro code for every policy"
-      class_option :record_ip_geolocation_accuracy_radius_in_kilometers_by_default,
-                   type: :boolean, desc: "Record the estimated accuracy radius for every policy"
+      # One flag, one explicit allowlist. Naming a field here still does not
+      # enable a category as a side effect: each named field needs the same
+      # purpose, deletion rule, and resolver every other route to it needs, and
+      # a name that is not on the list stops the generator before it writes a
+      # file. The runtime keeps one setter per field — that is the posture a
+      # host reads and reviews; this is only the command line.
+      class_option :record_ip_geolocation_fields,
+                   type: :array,
+                   desc: "IP-geolocation fields to record by default, from: " \
+                         "#{IP_GEOLOCATION_FIELDS.join(", ")}. Every one is an estimate for the " \
+                         "IP address, never a person's physical location."
 
       class_option :delete_recorded_ip_addresses_after_days,
                    type: :numeric, desc: "Delete recorded IP addresses after N days"
@@ -843,10 +828,10 @@ module Clickwrap
       end
 
       def request_evidence_option_keys
-        @request_evidence_option_keys ||= [
-          :record_ip_addresses_by_default,
-          :record_browser_user_agents_by_default,
-          *IP_GEOLOCATION_FIELD_FOR_OPTION.keys.map { |name| :"record_ip_geolocation_#{name}_by_default" }
+        @request_evidence_option_keys ||= %i[
+          record_ip_addresses_by_default
+          record_browser_user_agents_by_default
+          record_ip_geolocation_fields
         ]
       end
 
@@ -1017,8 +1002,41 @@ module Clickwrap
       end
 
       def record_ip_geolocation_field?(field)
-        option_name = IP_GEOLOCATION_FIELD_FOR_OPTION.key(field)
-        resolve_record_choice(:"record_ip_geolocation_#{option_name}_by_default", field)
+        requested = requested_ip_geolocation_fields
+        return requested.include?(field.to_s) if requested
+        return false if privacy_minimized_recipe?
+
+        answers.fetch(field, false) == true
+      end
+
+      # The allowlist from `--record-ip-geolocation-fields`, or nil when the
+      # operator did not use the flag at all. Accepts either shell convention —
+      # `--record-ip-geolocation-fields city country` and
+      # `--record-ip-geolocation-fields=city,country` — because getting that
+      # wrong would silently record a field named "city,country", which is to
+      # say none.
+      #
+      # A misspelled field stops the generator before it writes anything. The
+      # alternative is an install that quietly records less than the operator
+      # asked for, discovered years later by the person who needed the evidence.
+      def requested_ip_geolocation_fields
+        return @requested_ip_geolocation_fields if defined?(@requested_ip_geolocation_fields)
+
+        raw = options[:record_ip_geolocation_fields]
+        return @requested_ip_geolocation_fields = nil if raw.nil?
+
+        fields = Array(raw).flat_map { |value| value.to_s.split(",") }
+                           .map { |value| value.strip.downcase }.reject(&:empty?).uniq
+        unknown = fields - IP_GEOLOCATION_FIELDS.map(&:to_s)
+
+        unless unknown.empty?
+          raise Thor::Error,
+                "--record-ip-geolocation-fields does not know " \
+                "#{unknown.map(&:inspect).join(", ")}. The fields Clickwrap can record are: " \
+                "#{IP_GEOLOCATION_FIELDS.join(", ")}. Nothing was written."
+        end
+
+        @requested_ip_geolocation_fields = fields
       end
 
       def resolve_record_choice(option_key, answer_key)
@@ -1049,9 +1067,7 @@ module Clickwrap
       end
 
       def ip_geolocation_options_supplied?
-        request_evidence_option_keys
-          .grep(/record_ip_geolocation/)
-          .any? { |key| !options[key].nil? }
+        !requested_ip_geolocation_fields.nil?
       end
 
       def delete_recorded_ip_addresses_after_days
@@ -1101,6 +1117,10 @@ module Clickwrap
       # host developer's point of view: either it writes a bootable initializer
       # containing their decisions, or it writes nothing.
       def validate_request_evidence_choices!
+        # First, because a misspelled field name has to stop the run before any
+        # of the checks below reason about a list that is missing an entry.
+        requested_ip_geolocation_fields
+
         validate_enabled_category!(
           "IP addresses",
           enabled: record_ip_addresses?,
