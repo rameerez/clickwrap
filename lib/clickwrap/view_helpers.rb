@@ -70,7 +70,10 @@ module Clickwrap
       return nil unless native_links
       return nil unless respond_to?(:hotwire_native_app?) && hotwire_native_app?
 
-      case native_links[:open_in]
+      # Asked with the CONTROLLER, not the view: the href was resolved from the
+      # controller when the presentation was signed, and the two halves of one
+      # document link must not be able to answer differently.
+      case Clickwrap.config.hotwire_native_document_link_mode(clickwrap_native_link_context)
       when :external_browser
         # `data-turbo-false` keeps the tap out of the Turbo/Hotwire Native
         # navigation stack so the absolutized href reaches the system browser.
@@ -80,6 +83,10 @@ module Clickwrap
         # decides how the document presents (typically a modal sheet).
         {}
       end
+    end
+
+    def clickwrap_native_link_context
+      (controller if respond_to?(:controller)) || self
     end
 
     # The signed presentation token, under the envelope name the capture reads.

@@ -373,8 +373,23 @@ module Clickwrap
     #
     # When set, this answers native renders entirely; your
     # `document_link_html_options_with` hook continues to answer everything
-    # else. An app whose native screens need different answers in different
-    # places skips this and keeps the per-request hook.
+    # else.
+    #
+    # `open_in:` also takes a callable, for an app whose native screens need
+    # different answers in different places — the auth sheet that must escape
+    # the WebView, the signed-in funnel that routes a document sheet itself:
+    #
+    #   config.hotwire_native_document_links = {
+    #     open_in: ->(controller) { controller.signing_up? ? :external_browser : :same_screen },
+    #     canonical_host: "https://www.example.com"
+    #   }
+    #
+    # It is asked twice per document link — once when the href is signed into
+    # the presentation, once when the link's attributes are rendered — and is
+    # handed the same controller both times, so it must answer from the
+    # request rather than from anything that changes between those moments.
+    # A callable `open_in:` needs `canonical_host:`, because nothing at boot
+    # can rule out its answering `:external_browser`.
     def hotwire_native_document_links=(value)
       if value.nil?
         @hotwire_native_document_links = nil
@@ -389,11 +404,11 @@ module Clickwrap
 
       options = value.symbolize_keys
       open_in = options[:open_in]
-      unless HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.include?(open_in)
+      unless HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.include?(open_in) || open_in.respond_to?(:call)
         raise ConfigurationError,
               "hotwire_native_document_links needs `open_in:` as one of " \
-              "#{HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.map(&:inspect).join(" or ")}, " \
-              "got #{open_in.inspect}."
+              "#{HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.map(&:inspect).join(" or ")}, or a callable " \
+              "answering one of them per request — got #{open_in.inspect}."
       end
 
       unknown = options.keys - %i[open_in canonical_host]
@@ -405,13 +420,17 @@ module Clickwrap
       end
 
       canonical_host = options[:canonical_host]
-      if open_in == :external_browser
+      if open_in == :external_browser || open_in.respond_to?(:call)
         if canonical_host.nil?
           raise ConfigurationError,
-                "hotwire_native_document_links with open_in: :external_browser needs a " \
+                "hotwire_native_document_links with open_in: " \
+                "#{open_in.respond_to?(:call) ? "a callable" : ":external_browser"} needs a " \
                 "`canonical_host:` — the absolute https host the external browser opens, for " \
                 "example \"https://www.example.com\". A relative link would land back inside " \
-                "the WebView this setting exists to escape."
+                "the WebView this setting exists to escape#{if open_in.respond_to?(:call)
+                                                              ", and nothing at boot can rule " \
+                                                                "out a callable answering :external_browser"
+                                                            end}."
         end
         validate_hotwire_native_canonical_host!(canonical_host) unless canonical_host.respond_to?(:call)
       elsif canonical_host
@@ -422,6 +441,26 @@ module Clickwrap
       end
 
       @hotwire_native_document_links = { open_in: open_in, canonical_host: canonical_host }.freeze
+    end
+
+    # The mode this render should use, resolved at use time so a callable can
+    # answer per request or per screen. `context` is the controller handling
+    # the request; both the href and the link attributes are resolved from the
+    # same one, so the two halves of a document link cannot disagree.
+    def hotwire_native_document_link_mode(context = nil)
+      configured = hotwire_native_document_links&.fetch(:open_in, nil)
+      return configured unless configured.respond_to?(:call)
+
+      resolved = (configured.arity.zero? ? configured.call : configured.call(context))&.to_sym
+
+      unless HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.include?(resolved)
+        raise ConfigurationError,
+              "hotwire_native_document_links `open_in:` answered #{resolved.inspect}. A callable " \
+              "there must answer #{HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.map(&:inspect).join(" or ")} " \
+              "on every request — there is no third way for a document link to open."
+      end
+
+      resolved
     end
 
     # The canonical host, resolved and validated at use time so a host that is

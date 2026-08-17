@@ -379,8 +379,8 @@ module Clickwrap
       path = clickwrap_engine_routes.document_version_path(version.id)
 
       native_links = Clickwrap.config.hotwire_native_document_links
-      if native_links && native_links[:open_in] == :external_browser &&
-         clickwrap_hotwire_native_request?
+      if native_links && clickwrap_hotwire_native_request? &&
+         Clickwrap.config.hotwire_native_document_link_mode(self) == :external_browser
         "#{Clickwrap.config.hotwire_native_canonical_host}#{path}"
       else
         path

@@ -203,6 +203,20 @@ still there when the person comes back. `:same_screen` keeps a plain same-host
 link for your own native path configuration to route (a document sheet inside a
 signed-in funnel, say).
 
+One app often needs both — the auth sheet must escape, the signed-in funnel
+routes its own sheet — so `open_in:` also takes a callable:
+
+```ruby
+config.hotwire_native_document_links = {
+  open_in: ->(controller) { controller.signing_up? ? :external_browser : :same_screen },
+  canonical_host: "https://www.example.com"
+}
+```
+
+It is asked once when the href is signed and once when the link is rendered,
+with the same controller both times, so the two halves of a link cannot
+disagree.
+
 Another client needs different attributes, or different ones per screen? Keep the
 gem's canonical partial and set `config.document_link_html_options_with`. It can
 add `data: { turbo: false }`, `target`, or `rel`; it cannot replace the immutable
