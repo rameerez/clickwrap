@@ -62,6 +62,19 @@ Clickwrap.document :handbook,
   from: Rails.root.join("app/content/legal/handbook.pdf")
 ```
 
+#### Reading that front matter yourself: `Clickwrap::FrontMatter`
+
+Your own pages usually need the same two answers, and it is the same block, so use the same reader rather than writing a third one:
+
+```ruby
+Clickwrap::FrontMatter.version_label_in(File.read(path))  # => "2026-08-15", or nil
+Clickwrap::FrontMatter.strip(File.read(path))             # the body, without the block
+```
+
+It reads a leading `---` block closed by `---` or `...`, takes simple top-level `key: value` lines only, and answers with `clickwrap_version:` when present, `last_updated:` otherwise — a same-day correction that still changes bytes needs a fresh label while the date readers see stays put. Two details are exactly where hand-rolled readers diverge, so they are worth naming: a quoted value has its quotes removed, and an unquoted trailing YAML comment is not part of the value, so `last_updated: 2026-11-01  # was 2026-08-15` is the label `2026-11-01`, precisely as YAML reads it.
+
+`strip` removes the block from the *rendered* representation only. The source digest still covers the exact file bytes, front matter included, because that is what the file was.
+
 Then say how long the evidence lives and what the server offers:
 
 ```ruby
@@ -490,6 +503,8 @@ declaration.stale_policy_revision?         # legal reworded it → re-ask
 declaration.subject_fingerprint_mismatch?  # what it covers changed since capture
 declaration.recorded_after?(preparation)   # ordering enforced, not assumed
 ```
+
+`recorded_after?` answers from a database-assigned recording sequence, so it stays true across actors, application processes, and same-microsecond writes — ULID lexical order is deliberately not used as chronology. Read its `false` carefully: it means "not after", **or** that one of the two has no sequence at all, which is the case for evidence recorded before the ordering migration and for a missing event. An upgrade cannot invent honest order for rows written before it, so `false` is the answer it gives rather than a guess. Branch on it as a guard (`return unless declaration.recorded_after?(preparation)`), never as proof of the opposite.
 
 `require_current_revision: true` fails evidence recorded under a superseded policy revision, so "we changed the wording, everyone re-accepts" is one keyword instead of a hand-rolled revision comparison.
 

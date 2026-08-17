@@ -74,6 +74,22 @@ Then, before anything else works:
    time). New text = new label; reusing a label for different bytes is refused
    at publish, and a file with neither key and no `version:` fails the boot
    with the fix in the sentence.
+
+   Your own pages usually need the same two answers from the same block, so
+   read it with the same reader instead of writing a third one:
+
+   ```ruby
+   Clickwrap::FrontMatter.version_label_in(File.read(path))  # "2026-08-15", or nil
+   Clickwrap::FrontMatter.strip(File.read(path))             # the body, block removed
+   ```
+
+   It takes a leading `---` block closed by `---` or `...`, reads simple
+   top-level `key: value` lines only, unquotes a quoted value, and drops an
+   unquoted trailing YAML comment — the two places every hand-rolled reader
+   eventually disagrees with this one, and then a page and its receipt name
+   different versions of the same file. `strip` affects the RENDERED
+   representation only; the source digest still covers the exact bytes, front
+   matter included, because that is what the file was.
 3. **Declare a retention class and use it.** `retain_with` is mandatory on
    every policy, on purpose — mark the period `TODO(counsel)` if you must,
    but pick one. If the legacy system kept evidence forever, any finite
@@ -477,6 +493,15 @@ exact operation":
   declaration.stale_policy_revision?          # legal reworded it → re-ask
   declaration.recorded_after?(preparation)    # order enforced, not assumed
   ```
+
+  `recorded_after?` reads a database-assigned recording sequence, so it holds
+  across actors, processes, and same-microsecond writes — ULID lexical order is
+  deliberately not chronology. Its `false` carries two meanings: "not after",
+  and "the order is not knowable", which is what evidence recorded before the
+  ordering migration and a missing event both answer. An upgrade cannot invent
+  honest order for rows written before it. Use it as a guard
+  (`return unless declaration.recorded_after?(preparation)`); never read a
+  `false` as proof that the reverse is true.
 
   The same call takes an event id when the question is about one specific
   recorded act rather than "does this actor currently satisfy the policy":
