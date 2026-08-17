@@ -51,7 +51,7 @@ reports an explicit state object.
 | `reference` | The stable reference produced by `config.identify_actor_with`: a model's `clickwrap_actor_reference`, otherwise GlobalID when available, otherwise `ClassName/id`. The recorded string survives the row being deleted |
 | `attribution.method` | One of `authenticated_session`, `account_registration`, `operator_session`, `api_credential`, `anonymous_identifier`, `system_process`, `imported_provider`, `unknown`. None of these is an identity claim; each says which application-supplied context was recorded |
 | `attribution.authenticated` | True only when the method was `authenticated_session` |
-| `authentication_method` | The host's own description from `config.describe_authentication_with` |
+| `authentication_method` | The host's own description from `config.describe_authentication_with`. Its default claims `{ method: :authenticated_session }` only when the controller's configured current-actor method returns someone, and `{}` otherwise — a signup form and a controller with no authentication at all both record nothing rather than a claim nobody checked |
 | `snapshot` | Only the actor fields the host named in `config.snapshot_actor_with`. Clickwrap never serializes a whole model into evidence |
 | `acting_for` | Present only for delegated action: the represented party's type and reference, the authority source, the authority role, and when authority was verified — as four separate facts. Clickwrap does not decide whether that authority was sufficient |
 | `tenant` | The tenant key, when the capture had one |

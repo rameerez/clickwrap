@@ -65,6 +65,32 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_file "app/content/legal/privacy.md", /PLACEHOLDER/
   end
 
+  test "the placeholders name their own version in front matter, and the declarations carry none" do
+    run_generator %w[--skip-questions]
+
+    # The version label belongs in the file that holds the words. A label kept
+    # in a second place is a label that drifts, and a drifted label means the
+    # bytes people accepted and the version the receipt names stop agreeing.
+    {
+      "app/content/legal/terms.md" => "Terms of Service",
+      "app/content/legal/privacy.md" => "Privacy Notice"
+    }.each do |path, title|
+      assert_file path do |placeholder|
+        assert_match(/\A---\n/, placeholder, "#{path} must open with the front-matter block")
+        assert_match(/^title: #{title}$/, placeholder)
+        assert_match(/^last_updated: #{Date.today.iso8601}$/, placeholder)
+        assert_equal Date.today.iso8601, Clickwrap::FrontMatter.version_label_in(placeholder),
+                     "#{path} must resolve the version label Clickwrap will read at boot"
+      end
+    end
+
+    assert_file "config/clickwrap.rb" do |config|
+      assert_no_version_declarations config
+      assert_match(/front matter/, config,
+                   "the generated file has to explain where the version label now lives")
+    end
+  end
+
   test "a run with no terminal skips the questions and says so, instead of jumbling prompts" do
     # Piped installs are how CI, provisioning scripts, and AI agents run this
     # generator. Streaming interactive prompts into a pipe would interleave
@@ -90,9 +116,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     # Sitepress convention) must not get a SECOND set of legal files: what
     # people accept has to be the same bytes the public legal routes render,
     # and two copies is how they silently stop being the same document.
-    FileUtils.mkdir_p(File.join(destination_root, "app/content/pages/legal"))
-    File.write(File.join(destination_root, "app/content/pages/legal/terms.html.md"), "# Existing terms\n")
-    File.write(File.join(destination_root, "app/content/pages/legal/privacy.html.md"), "# Existing privacy\n")
+    write_sitepress_legal_pages
 
     output = run_generator %w[--skip-questions]
 
@@ -104,10 +128,48 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     assert_file "config/clickwrap.rb" do |config|
       assert_match(%r{from: Rails\.root\.join\("app/content/pages/legal/terms\.html\.md"\)}, config)
       assert_match(%r{from: Rails\.root\.join\("app/content/pages/legal/privacy\.html\.md"\)}, config)
+
+      # Both pages carry `last_updated:`, so each names its own version and the
+      # declaration says nothing about labels. One file, one label, nothing to
+      # drift apart the next time somebody edits the Terms in a hurry.
+      assert_no_version_declarations config
     end
 
     assert_no_file "app/content/legal/terms.md"
     assert_no_file "app/content/legal/privacy.md"
+  end
+
+  test "a detected page with no version key keeps an explicit label and says where it belongs" do
+    # A versionless declaration over a page whose front matter names no version
+    # is a boot failure on the host's very next deploy. The generated file has
+    # to boot, so the label is written here — and the one line that says where
+    # it really belongs is written with it.
+    write_sitepress_legal_pages(privacy_names_its_own_version: false)
+
+    output = run_generator %w[--skip-questions]
+
+    assert_file "config/clickwrap.rb" do |config|
+      terms, privacy = document_declarations_in(config)
+
+      refute_match(/version:/, terms, "terms.html.md names its own version and needs no label here")
+      assert_match(/^\s+version: "#{Date.today.iso8601}",$/, privacy)
+      assert_match(/Move this label into the page's own/, config)
+      assert_match(/`last_updated:` front matter and delete the line/, config)
+    end
+
+    assert_match(/privacy\.html\.md/, output)
+    assert_match(/no `clickwrap_version:` or `last_updated:` front-matter key/, output)
+    assert_match(/Move that label into the page's own front matter/, output)
+  end
+
+  test "the front-matter warning names only the page that actually lacks a version key" do
+    write_sitepress_legal_pages(privacy_names_its_own_version: false)
+
+    output = run_generator %w[--skip-questions]
+
+    # Naming both pages would send a developer looking for a problem that is not
+    # in terms.html.md, which already names its own version.
+    assert_equal "app/content/pages/legal/privacy.html.md", output[/⚠️ +(app\S+)/, 1]
   end
 
   test "one existing legal page is not treated as a convention — placeholders still cover both" do
@@ -188,6 +250,92 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       assert_match(/config\.ip_geolocation_resolver = nil/, initializer)
       assert_match(/config\.review_default_request_evidence_configuration_on = nil/, initializer)
     end
+  end
+
+  test "an app that renders its own legal pages through markdown-rails publishes through it too" do
+    # Both halves have to be true: the application renders these exact pages,
+    # and it bundles the renderer they go through. Then the snapshot people
+    # accept and the page they read come out of one pipeline instead of two
+    # that somebody has to keep in agreement by hand.
+    write_sitepress_legal_pages
+    write_gemfile_lock_bundling("markdown-rails")
+
+    run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/^\s*config\.document_renderer = :markdown_rails$/, initializer)
+      assert_match(/byte-identical to the page they/, initializer)
+    end
+  end
+
+  test "markdown-rails in the bundle alone does not choose a renderer for pages the app does not serve" do
+    # The placeholders this installer writes are not pages the application
+    # renders, so there is nothing to be byte-identical WITH.
+    write_gemfile_lock_bundling("markdown-rails")
+
+    run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb", /^\s*config\.document_renderer = nil$/
+  end
+
+  test "detected pages without markdown-rails keep the faithful default and name the built-in options" do
+    write_sitepress_legal_pages
+    write_gemfile_lock_bundling("kramdown")
+
+    run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/^\s*config\.document_renderer = nil$/, initializer)
+      assert_match(/`:markdown` renders HTML/, initializer)
+      assert_match(/`:markdown_rails` renders through your/, initializer)
+    end
+  end
+
+  test "the initializer publishes on db:prepare and says what that removes" do
+    output = run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/^\s*config\.publish_documents_after_database_preparation = true$/, initializer)
+      assert_match(/rides `db:prepare`/, initializer)
+      assert_match(%r{`bin/rails clickwrap:publish`}, initializer)
+    end
+
+    # The manual step is still printed, because the first publish happens
+    # locally long before anything is deployed.
+    assert_match(%r{bin/rails clickwrap:publish}, output)
+    assert_match(/publishing rides `db:prepare`/, output)
+  end
+
+  test "the installer never generates an authentication description that claims a session nobody had" do
+    run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      # A signup form has no signed-in actor, and a generated lambda that
+      # unconditionally reported `:authenticated_session` would put that claim
+      # into every signup receipt. The built-in default answers correctly on its
+      # own, so the generated file documents it rather than overriding it.
+      refute_match(/^\s*config\.describe_authentication_with\s*=/, initializer)
+      assert_match(/^\s*#\s*config\.describe_authentication_with = lambda do \|_controller\|$/, initializer)
+      assert_match(/only when it gets one/, initializer)
+    end
+  end
+
+  test "the initializer offers the Hotwire Native seam without turning it on" do
+    run_generator %w[--skip-questions]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      refute_match(/^\s*config\.hotwire_native_document_links\s*=/, initializer)
+      assert_match(/^\s*#\s*config\.hotwire_native_document_links = \{$/, initializer)
+      assert_match(/pops the sheet/, initializer)
+      assert_match(/open_in: :external_browser/, initializer)
+    end
+  end
+
+  test "the review checklist asks for the stylesheet the rendered blocks need" do
+    output = run_generator %w[--skip-questions]
+
+    assert_match(/stylesheet_link_tag "clickwrap"/, output)
+    assert_match(/scoped under/, output)
   end
 
   test "the privacy-minimized recipe writes explicit off settings and leaves no runtime switch behind" do
@@ -407,6 +555,57 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   end
 
   private
+
+  # The Sitepress content directory a real application already serves its legal
+  # pages from. `last_updated:` is the front-matter key such a page usually
+  # carries already, and it is the one Clickwrap reads the version label from.
+  # A page can be written without it to exercise the application that has front
+  # matter but has never versioned anything.
+  def write_sitepress_legal_pages(terms_names_its_own_version: true, privacy_names_its_own_version: true)
+    directory = File.join(destination_root, "app/content/pages/legal")
+    FileUtils.mkdir_p(directory)
+
+    File.write(File.join(directory, "terms.html.md"),
+               legal_page("Terms of Service", names_its_own_version: terms_names_its_own_version))
+    File.write(File.join(directory, "privacy.html.md"),
+               legal_page("Privacy Notice", names_its_own_version: privacy_names_its_own_version))
+  end
+
+  def legal_page(title, names_its_own_version:)
+    front_matter = ["---", "title: #{title}"]
+    front_matter << "last_updated: 2026-04-01" if names_its_own_version
+    front_matter << "---"
+
+    "#{front_matter.join("\n")}\n\n# #{title}\n\nThe text this application already serves.\n"
+  end
+
+  # Bundler's own lockfile shape, because the resolved bundle is what the
+  # installer reads — a Gemfile line can name a gem this application never
+  # resolves.
+  def write_gemfile_lock_bundling(*gem_names)
+    lockfile = ["GEM", "  remote: https://rubygems.org/", "  specs:"]
+    gem_names.each { |name| lockfile << "    #{name} (1.0.0)" }
+    lockfile.push("", "PLATFORMS", "  ruby", "", "DEPENDENCIES")
+    gem_names.each { |name| lockfile << "  #{name}" }
+
+    File.write(File.join(destination_root, "Gemfile.lock"), "#{lockfile.join("\n")}\n")
+  end
+
+  # A real `version:` argument, never the commented example that documents the
+  # override for sources which cannot carry front matter.
+  def assert_no_version_declarations(config)
+    refute_match(/^\s+version:/, config,
+                 "a document whose own file names its version must be declared without a `version:` line")
+  end
+
+  # The generated declarations, one string each, so an assertion can be about
+  # exactly one of them.
+  def document_declarations_in(config)
+    declarations = config.scan(/^Clickwrap\.document :\w+,\n(?:^[ \t]+.+\n)+/)
+    assert_equal 2, declarations.length, "expected the Terms and the Privacy Notice to be declared"
+
+    declarations
+  end
 
   def column_names_in(path)
     source = File.read(path)

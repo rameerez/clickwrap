@@ -89,12 +89,14 @@ class DocumentGeneratorTest < Rails::Generators::TestCase
     FileUtils.rm_rf(destination_root)
   end
 
-  test "generating a document appends a declaration and creates the file its bytes come from" do
-    run_generator %w[terms --document-version=2026-08-15]
+  test "generating a document declares it version-less and the file names its own version" do
+    run_generator %w[terms]
 
     assert_file "config/clickwrap.rb" do |declarations|
       assert_match(/Clickwrap\.document :terms,/, declarations)
-      assert_match(/version: "2026-08-15",/, declarations)
+      refute_match(/version:/, declarations,
+                   "the file's front matter names the version — a second copy of the label " \
+                   "in the declaration is exactly the pair that drifts")
       assert_match(%r{from: Rails\.root\.join\("app/content/legal/terms\.md"\)}, declarations)
     end
 
@@ -104,28 +106,46 @@ class DocumentGeneratorTest < Rails::Generators::TestCase
     assert_file "app/content/legal/terms.md" do |content|
       assert_match(/PLACEHOLDER/, content)
       assert_match(/clickwrap:publish/, content)
+      assert_equal Date.today.iso8601, Clickwrap::FrontMatter.version_label_in(content),
+                   "the placeholder must resolve the version label Clickwrap reads at boot"
     end
   end
 
-  test "declaring a new version appends it and leaves the previous declaration exactly where it was" do
-    run_generator %w[terms --document-version=2026-01-01]
-    run_generator %w[terms --document-version=2026-08-15]
+  test "an explicit --document-version lands in the file's front matter, not the declaration" do
+    run_generator %w[terms --document-version=v2.1]
+
+    assert_file "app/content/legal/terms.md" do |content|
+      assert_equal "v2.1", Clickwrap::FrontMatter.version_label_in(content),
+                   "clickwrap_version: must outrank last_updated: so a hand-chosen label " \
+                   "and a human-facing date coexist"
+      assert_match(/^last_updated: #{Date.today.iso8601}$/, content)
+    end
 
     assert_file "config/clickwrap.rb" do |declarations|
-      # The old declaration still describes the bytes everyone who has already
-      # agreed was bound into the accepted offer. Nothing about their evidence changes because
-      # a new version was written.
-      assert_match(/version: "2026-01-01",/, declarations)
-      assert_match(/version: "2026-08-15",/, declarations)
-      assert_equal 2, declarations.scan("Clickwrap.document :terms,").length
+      refute_match(/version:/, declarations)
     end
+  end
+
+  test "a second run for the same document declares nothing and explains the one-file flow" do
+    run_generator %w[terms]
+    output = run_generator %w[terms]
+
+    assert_file "config/clickwrap.rb" do |declarations|
+      # One declaration per key: a "new version" is a front-matter bump in the
+      # file, and a second version-less declaration of the same key would be
+      # refused at boot as a duplicate anyway.
+      assert_equal 1, declarations.scan("Clickwrap.document :terms,").length
+    end
+    assert_match(/front-matter bump/, output)
   end
 
   test "a locale-specific version gets its own content file and its own declaration" do
-    run_generator %w[terms --document-version=2026-08-15 --locale=es]
+    run_generator %w[terms --locale=es]
 
     assert_file "config/clickwrap.rb", /locale: :es,/
-    assert_file "app/content/legal/terms.es.md"
+    assert_file "app/content/legal/terms.es.md" do |content|
+      assert_equal Date.today.iso8601, Clickwrap::FrontMatter.version_label_in(content)
+    end
   end
 end
 

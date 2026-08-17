@@ -293,6 +293,14 @@ module Clickwrap
     # creates no grant, and a helper that quietly granted an optional consent
     # would hide exactly the bug that distinction exists to catch.
     #
+    # Same name, different convention from the CONTROLLER helper: this is a
+    # test factory verb (like `create_user`), and a factory that cannot
+    # deliver raises — in a test, a failed capture is a failed test.
+    # `Clickwrap::ControllerHelpers#capture_clickwrap` follows `save`/`save!`
+    # instead and absorbs refusals, because in a controller a refused
+    # submission is a person to answer, not a bug. The two never share an
+    # object: this module lives on test cases, that one on controllers.
+    #
     # @return [Clickwrap::Receipt]
     def capture_clickwrap(policy_key, actor:, answers: {}, subject: nil, tenant: nil, locale: nil,
                           capture_channel: :web_browser, http_request: nil, acting_for: nil)

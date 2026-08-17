@@ -27,28 +27,61 @@
 # bytes once, digests them, and freezes a database snapshot. From then on the
 # snapshot is the evidence and the file is only where it came from.
 #
-# `version:` is a LABEL YOU OWN, not a timestamp Clickwrap maintains. Change the
-# file and you must publish a new version label; reusing a label for different
-# bytes is refused rather than quietly accepted. Today's date is a conventional
-# starting label — replace it with whatever your review process actually uses.
+# Every version has a LABEL YOU OWN, and the file that holds the words is where
+# that label belongs. A page with leading YAML front matter names its own
+# version, so there is no `version:` line here and no second copy of the label
+# to drift:
+#
+#   ---
+#   title: Terms of Service
+#   last_updated: <%= Date.today.iso8601 %>
+#   ---
+#
+# `last_updated:` is the usual key, because a page that tells readers when it
+# last changed already has one. `clickwrap_version:` wins when both are present,
+# which is how a same-day correction gets a fresh label while the date readers
+# see stays put. So changing a legal text is one edit in one file, then
+# `bin/rails clickwrap:publish` — and reusing a label over changed bytes is
+# refused rather than quietly accepted, which is what keeps the label and the
+# bytes describing the same document. A file with neither key and no explicit
+# `version:` fails the boot with a sentence; Clickwrap never invents a label.
+#
+# `version:` here stays the way to label a source that cannot carry front matter
+# — a PDF, an HTML fragment, or a `resolver:` whose bytes are only read at
+# publish time:
+#
+#   Clickwrap.document :handbook,
+#     version: "<%= Date.today.iso8601 %>",
+#     from: Rails.root.join("app/content/legal/handbook.pdf")
 #
 # Whether a change is material enough to require re-acceptance is your decision.
 # Clickwrap enforces the rule it is given; it does not decide materiality.
 
+<%- unless terms_document_names_its_own_version? -%>
+# <%= File.basename(terms_document_path) %> carries no version key yet. Move this label into the page's own
+# `last_updated:` front matter and delete the line, so the text names its version.
+<%- end -%>
 Clickwrap.document :terms,
+<%- unless terms_document_names_its_own_version? -%>
   version: "<%= Date.today.iso8601 %>",
+<%- end -%>
   from: Rails.root.join("<%= terms_document_path %>")
 
+<%- unless privacy_document_names_its_own_version? -%>
+# <%= File.basename(privacy_document_path) %> carries no version key yet. Move this label into the page's own
+# `last_updated:` front matter and delete the line, so the text names its version.
+<%- end -%>
 Clickwrap.document :privacy_notice,
+<%- unless privacy_document_names_its_own_version? -%>
   version: "<%= Date.today.iso8601 %>",
+<%- end -%>
   from: Rails.root.join("<%= privacy_document_path %>")
 
 # Several locales are several versions of the same logical document. Each is
-# published and digested separately, and the receipt records which one the
-# accepted server offer bound:
+# published and digested separately, each names its own version in its own front
+# matter, and the receipt records which one the accepted server offer bound:
 #
 # Clickwrap.document :terms,
-#   version: "<%= Date.today.iso8601 %>",
 #   locale: :es,
 #   effective_at: Time.utc(<%= Date.today.year %>, <%= Date.today.month %>, <%= Date.today.day %>),
 #   from: Rails.root.join("app/content/legal/terms.es.md")
@@ -138,7 +171,6 @@ end
 # right basis for what you are doing — that one is yours.
 #
 # Clickwrap.document :marketing_notice,
-#   version: "<%= Date.today.iso8601 %>",
 #   from: Rails.root.join("app/content/legal/marketing.md")
 #
 # Clickwrap.policy :marketing_preferences do

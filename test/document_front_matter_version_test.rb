@@ -35,6 +35,21 @@ class DocumentFrontMatterVersionTest < ActiveSupport::TestCase
     end
   end
 
+  test "a trailing YAML comment is not part of the label" do
+    # `last_updated: 2026-11-01  # was 2026-08-15` is exactly what a careful
+    # editor writes when bumping a version — the note must not become part of
+    # the label. Inside quotes, a hash is just a character.
+    with_legal_file("---\nlast_updated: 2026-11-01  # was 2026-08-15\n---\n\nBody.\n") do |path|
+      assert_equal "2026-11-01",
+                   Clickwrap::DocumentDefinition.new(key: :commented, from: path).version_label
+    end
+
+    with_legal_file("---\nlast_updated: \"v1 #internal\"\n---\n\nBody.\n") do |path|
+      assert_equal "v1 #internal",
+                   Clickwrap::DocumentDefinition.new(key: :hash_in_quotes, from: path).version_label
+    end
+  end
+
   test "an explicit version: always wins over the front matter" do
     with_legal_file("---\nlast_updated: 2026-01-01\n---\n\nBody.\n") do |path|
       definition = Clickwrap::DocumentDefinition.new(key: :explicit, version: "v9", from: path)

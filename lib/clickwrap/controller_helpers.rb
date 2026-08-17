@@ -284,6 +284,11 @@ module Clickwrap
     # lifecycle conflicts (ReplayRejected, OneTimeAuthorizationConflict):
     # "this was already done" needs a domain answer — usually "treat it as
     # done" — that no generic rescue can supply honestly.
+    #
+    # (The TEST helper of the same name, Clickwrap::TestHelpers#capture_clickwrap,
+    # deliberately follows the opposite convention: it is a factory verb that
+    # raises, because in a test a failed capture is a failed test. The two
+    # modules never share an object.)
     def capture_clickwrap(policy_key, **)
       capture_clickwrap!(policy_key, **)
     rescue Clickwrap::CaptureRefused => error

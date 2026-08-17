@@ -46,9 +46,17 @@ module Clickwrap
       # serve. Both documents must exist for a convention to count; order
       # matters, so a Sitepress-style content directory wins over files a
       # previous install of this generator wrote.
+      #
+      # `rendered_by_the_application` separates the two cases: the Sitepress
+      # directory holds pages the application itself renders and serves, which
+      # is what makes rendering Clickwrap's snapshot through the application's
+      # own Markdown pipeline the right default. The second convention is a
+      # previous install's placeholder files, which nothing else renders.
       EXISTING_LEGAL_CONVENTIONS = [
-        { dir: "app/content/pages/legal", terms: "terms.html.md", privacy: "privacy.html.md" },
-        { dir: "app/content/legal", terms: "terms.md", privacy: "privacy.md" }
+        { dir: "app/content/pages/legal", terms: "terms.html.md", privacy: "privacy.html.md",
+          rendered_by_the_application: true },
+        { dir: "app/content/legal", terms: "terms.md", privacy: "privacy.md",
+          rendered_by_the_application: false }
       ].freeze
 
       # The command-line flags name IP-geolocation fields in the plural, the way
@@ -213,8 +221,8 @@ module Clickwrap
           return
         end
 
-        copy_legal_placeholder "terms.md", "app/content/legal/terms.md"
-        copy_legal_placeholder "privacy.md", "app/content/legal/privacy.md"
+        write_legal_placeholder "terms.md.erb", "app/content/legal/terms.md"
+        write_legal_placeholder "privacy.md.erb", "app/content/legal/privacy.md"
       end
 
       def mount_engine
@@ -270,16 +278,26 @@ module Clickwrap
           say "     read and accept):"
           say "       #{terms_document_path}"
           say "       #{privacy_document_path}"
-          say "       Review each `version:` in config/clickwrap.rb against them."
+          if documents_needing_an_explicit_version.empty?
+            say "       Each page names its own version in its front matter, so config/clickwrap.rb"
+            say "       declares both without a `version:` line."
+          else
+            say "       A page that names its own version in its front matter is declared in"
+            say "       config/clickwrap.rb without a `version:` line."
+            say_documents_needing_an_explicit_version
+          end
         else
           say "  #{step += 1}. Replace the placeholder legal text with your own reviewed documents:"
           say "       #{terms_document_path}"
           say "       #{privacy_document_path}"
-          say "       then set each `version:` in config/clickwrap.rb."
+          say "       Keep the `last_updated:` front matter at the top of each file accurate:"
+          say "       that line is the version label, so a text change is one edit in one file."
         end
 
         say "  #{step += 1}. Publish immutable snapshots:"
         say "       bin/rails clickwrap:publish"
+        say "       Deploys do this for you — publishing rides `db:prepare`, so a snapshot"
+        say "       exists before the server takes traffic."
 
         say "  #{step += 1}. Render the policy and its bound submit action:"
         say "       <%= form.clickwrap :signup, submit: \"Create account\" %>"
@@ -314,6 +332,23 @@ module Clickwrap
         "[#{ActiveRecord::VERSION::STRING.to_f}]"
       end
 
+      # Said only when a detected page could not name its own version. What was
+      # generated boots — it carries an explicit label — but the label now lives
+      # somewhere other than the text it describes, and that is exactly the pair
+      # that drifts apart the next time someone edits the page in a hurry.
+      def say_documents_needing_an_explicit_version
+        paths = documents_needing_an_explicit_version
+        return if paths.empty?
+
+        say "       ⚠️  #{paths.join(" and ")}", :yellow
+        say "       #{paths.one? ? "has" : "have"} no `clickwrap_version:` or `last_updated:` " \
+            "front-matter key, so", :yellow
+        say "       config/clickwrap.rb carries an explicit `version: \"#{Date.today.iso8601}\"` " \
+            "for #{paths.one? ? "it" : "them"}.", :yellow
+        say "       Move that label into the page's own front matter and delete the line, so", :yellow
+        say "       the text names its version and there is only one copy of the label.", :yellow
+      end
+
       # --- The review checklist -------------------------------------------------
 
       # Deliberately a list of things a human still has to do. The installer
@@ -339,6 +374,10 @@ module Clickwrap
         say "  ☐ The whole page — placement, wording, contrast, the call to action, and"
         say "    accessibility of the screen your controls appear on. Clickwrap renders the"
         say "    controls; the page around them is yours."
+        say "  ☐ Styles — add <%= stylesheet_link_tag \"clickwrap\" %> to the layouts that render"
+        say "    clickwrap blocks (the engine's own screens emit their styles themselves)."
+        say "    Every rule is scoped under .clickwrap, so it cannot repaint the rest of your"
+        say "    page. Rather own the CSS? `rails generate clickwrap:views` ejects the templates."
         say "  ☐ Tests — a real signup, a refused submit, and a forced evidence-write failure"
         say "    that proves the account is not created without its evidence."
         say "\nClickwrap records evidence mechanics and keeps them verifiable. The words, the"
@@ -493,6 +532,81 @@ module Clickwrap
       def privacy_document_path
         convention = detected_legal_documents
         convention ? File.join(convention[:dir], convention[:privacy]) : "app/content/legal/privacy.md"
+      end
+
+      # A document declared without `version:` reads its label from the file's
+      # own leading front matter, which is where a version label belongs: in the
+      # file that IS the legal text, with nothing to drift against. The
+      # placeholders this installer writes carry one.
+      #
+      # An application's existing legal pages may not, and a versionless
+      # declaration over a page with no version key fails the next boot. So the
+      # generated declaration for THAT document carries an explicit label, plus
+      # the one line telling a developer where it really belongs.
+      def terms_document_names_its_own_version?
+        document_names_its_own_version?(terms_document_path)
+      end
+
+      def privacy_document_names_its_own_version?
+        document_names_its_own_version?(privacy_document_path)
+      end
+
+      def documents_needing_an_explicit_version
+        {
+          terms_document_path => terms_document_names_its_own_version?,
+          privacy_document_path => privacy_document_names_its_own_version?
+        }.reject { |_path, names_its_own| names_its_own }.keys
+      end
+
+      def document_names_its_own_version?(path)
+        # The placeholders this installer writes open with front matter, so a
+        # fresh install always has its version labels in the files themselves.
+        return true unless detected_legal_documents
+
+        @document_names_its_own_version ||= {}
+        return @document_names_its_own_version[path] if @document_names_its_own_version.key?(path)
+
+        @document_names_its_own_version[path] = front_matter_version_label_in(path).present?
+      end
+
+      # An unreadable file answers the same way a file with no version key
+      # does. Writing the explicit label is the recoverable mistake; leaving a
+      # declaration that cannot resolve a version is a boot failure.
+      def front_matter_version_label_in(path)
+        Clickwrap::FrontMatter.version_label_in(
+          File.read(File.expand_path(path, destination_root))
+        )
+      rescue StandardError
+        nil
+      end
+
+      # The lockfile rather than the Gemfile, because the lockfile is the bundle
+      # this application actually resolved. It is evidence that the gem is
+      # there, not proof that the legal pages render through it — which is why
+      # the generated setting also requires the application to be serving those
+      # exact pages, and why the worst case is a boot error naming the missing
+      # gem rather than a document published through the wrong pipeline.
+      def host_bundles_markdown_rails?
+        return @host_bundles_markdown_rails if defined?(@host_bundles_markdown_rails)
+
+        @host_bundles_markdown_rails =
+          begin
+            lockfile = File.expand_path("Gemfile.lock", destination_root)
+            File.exist?(lockfile) && File.read(lockfile).match?(/^\s+markdown-rails[\s(]/)
+          rescue StandardError
+            false
+          end
+      end
+
+      # Both halves have to be true for this to be the right default: the
+      # application renders its own legal pages through markdown-rails, and
+      # those same pages are the documents Clickwrap will publish. Then the
+      # snapshot people accept and the page they read come out of one renderer
+      # instead of two that have to be kept in agreement by hand.
+      def renders_documents_through_markdown_rails?
+        return false unless detected_legal_documents&.fetch(:rendered_by_the_application, false)
+
+        host_bundles_markdown_rails?
       end
 
       def routes_file?
@@ -955,13 +1069,18 @@ module Clickwrap
 
       # --- Files ----------------------------------------------------------------
 
-      def copy_legal_placeholder(source, destination)
+      # A template rather than a copy, because the placeholder opens with front
+      # matter whose `last_updated:` is the document's version label, and the
+      # only honest value for it is the day the file was written. That is also
+      # why the generated declaration in config/clickwrap.rb needs no `version:`
+      # at all: the file carrying the words names its own version.
+      def write_legal_placeholder(source, destination)
         if host_file?(destination)
           say_status :skip, "#{destination} (you already have a file there)", :yellow
           return
         end
 
-        copy_file source, destination
+        template source, destination
       end
     end
   end

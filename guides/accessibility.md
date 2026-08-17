@@ -91,6 +91,11 @@ than "click here", and open in a new tab with `rel="noopener"` plus a visible "o
 tab" hint so a half-filled form is not lost. A link that only appears after the call to action
 has been pressed is not a link to anything.
 
+Hosts that change how links open — `config.document_link_html_options_with`, or
+`config.hotwire_native_document_links` for a native app — change the hint with them: it is
+rendered only when the link really does open a new tab, so a `:same_screen` native link
+announces nothing it does not do.
+
 Each link is followed by its version label, so the reader can see which version the server offer
 names.
 

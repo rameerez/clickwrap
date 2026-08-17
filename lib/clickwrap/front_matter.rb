@@ -50,10 +50,16 @@ module Clickwrap
       return nil if value.nil?
 
       unquoted = value.strip
-      if (unquoted.start_with?('"') && unquoted.end_with?('"')) ||
-         (unquoted.start_with?("'") && unquoted.end_with?("'"))
-        unquoted = unquoted[1..-2].to_s
-      end
+      unquoted = if (unquoted.start_with?('"') && unquoted.end_with?('"')) ||
+                    (unquoted.start_with?("'") && unquoted.end_with?("'"))
+                   unquoted[1..-2].to_s
+                 else
+                   # A trailing YAML comment is not part of the value —
+                   # `last_updated: 2026-11-01  # was 2026-08-15` names the label
+                   # "2026-11-01", exactly as YAML reads it. Inside quotes, a hash is
+                   # just a character.
+                   unquoted.sub(/\s+#.*\z/, "")
+                 end
       unquoted.empty? ? nil : unquoted
     end
     private_class_method :unquote

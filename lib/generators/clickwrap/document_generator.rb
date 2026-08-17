@@ -4,25 +4,31 @@ require "rails/generators/base"
 
 module Clickwrap
   module Generators
-    # `rails generate clickwrap:document terms` — declares one immutable document
-    # version and creates the file its bytes will come from.
+    # `rails generate clickwrap:document terms` — declares one document and
+    # creates the file its bytes will come from, with the file's own front
+    # matter naming its version.
     #
     # Declaring is not publishing. This generator adds a declaration and a
     # placeholder file; `bin/rails clickwrap:publish` is what reads the bytes,
-    # digests them, and freezes the snapshot that receipts point at from then on.
+    # digests them, and freezes the snapshot that receipts point at from then
+    # on (deploys do this automatically after `db:prepare`).
     #
-    # A new version of an existing document is the normal case, and it is why
-    # this generator APPENDS rather than edits: the previous declaration keeps
-    # describing the bytes bound into earlier accepted server offers, and
-    # nothing about that evidence changes because you wrote a new version.
+    # Changing a document later is NOT another run of this generator: the file
+    # that holds the words also names its version, so a new version is one
+    # edit in one file — change the text, bump `last_updated:` (or add
+    # `clickwrap_version:` for a same-day correction), publish. The
+    # declaration never changes, published bytes are never edited in place,
+    # and every receipt goes on pointing at the exact version its accepted
+    # server offer bound.
     class DocumentGenerator < Rails::Generators::Base
       source_root File.expand_path("templates", __dir__)
-      desc "Declare a clickwrap document version and create its content file"
+      desc "Declare a clickwrap document and create its content file"
 
       argument :name, type: :string, banner: "DOCUMENT_NAME"
 
       class_option :document_version, type: :string,
-                                      desc: "The version label (defaults to today's date)"
+                                      desc: "An explicit version label, written into the file's " \
+                                            "front matter (defaults to today's date as last_updated)"
       class_option :locale, type: :string,
                             desc: "Declare this version for one locale (en, es…)"
 
@@ -39,7 +45,9 @@ module Clickwrap
         create_policy_file_if_missing
 
         if declaration_present?
-          say_status :skip, "#{policy_file} (:#{document_key} #{version_label} is already declared)", :yellow
+          say_status :skip, "#{policy_file} (:#{document_key} is already declared — a new " \
+                            "version is a front-matter bump in #{content_path}, not a new " \
+                            "declaration)", :yellow
           return
         end
 
@@ -47,15 +55,17 @@ module Clickwrap
       end
 
       def display_next_steps
-        say "\n☑️  Document :#{document_key} #{version_label} declared.", :green
+        say "\n☑️  Document :#{document_key} declared.", :green
         say "\nTo finish:"
-        say "  1. Put the real text in #{content_path}."
+        say "  1. Put the real text in #{content_path}, keeping the front matter at the top."
         say "     Clickwrap never writes legal text — the words are yours."
         say "  2. Run 'bin/rails clickwrap:publish' to freeze an immutable snapshot."
+        say "     Deploys do this for you — publishing rides `db:prepare`."
         say "  3. Reference it from a policy in #{policy_file}."
-        say "\nPublishing is idempotent, and reusing a version label for different bytes is"
-        say "refused rather than accepted. When the text changes, declare a NEW version:"
-        say "old receipts go on pointing at the bytes their accepted server offers bound.\n"
+        say "\nThe file names its own version: its `last_updated:` front matter is the label,"
+        say "so changing the text later is one edit in one file — new words, bumped label,"
+        say "publish. Reusing a label for different bytes is refused rather than accepted,"
+        say "and old receipts go on pointing at the bytes their accepted server offers bound.\n"
       end
 
       private
@@ -64,8 +74,8 @@ module Clickwrap
         name.to_s.underscore.tr("-", "_").tr("/", "_")
       end
 
-      def version_label
-        options[:document_version].presence || Date.today.iso8601
+      def explicit_version_label
+        options[:document_version].presence
       end
 
       def locale
@@ -83,14 +93,19 @@ module Clickwrap
       end
 
       def declaration
-        lines = ["\nClickwrap.document :#{document_key},", "  version: #{version_label.inspect},"]
+        lines = ["\nClickwrap.document :#{document_key},"]
         lines << "  locale: :#{locale}," if locale
         lines << "  from: Rails.root.join(#{content_path.inspect})\n"
         lines.join("\n")
       end
 
+      # One declaration per document key (and per locale): the version lives in
+      # the file, so a "new version" never adds a declaration — and a second
+      # version-less declaration of the same key would be refused at boot as a
+      # duplicate anyway.
       def declaration_present?
-        File.read(File.expand_path(policy_file, destination_root)).include?(declaration.strip)
+        File.read(File.expand_path(policy_file, destination_root))
+            .include?("Clickwrap.document :#{document_key},#{"\n  locale: :#{locale}," if locale}")
       rescue StandardError
         false
       end
@@ -110,8 +125,22 @@ module Clickwrap
         File.exist?(File.expand_path(path, destination_root))
       end
 
+      # The front matter is the version label. `last_updated:` is the usual
+      # key; an explicit --document-version lands as `clickwrap_version:`,
+      # which outranks it, so a hand-chosen label and a human-facing date can
+      # coexist without fighting.
+      def placeholder_front_matter
+        lines = ["---", "title: #{document_key.humanize}"]
+        lines << "clickwrap_version: #{explicit_version_label}" if explicit_version_label
+        lines << "last_updated: #{Date.today.iso8601}"
+        lines << "---"
+        "#{lines.join("\n")}\n\n"
+      end
+
       def placeholder_content
         <<~MARKDOWN
+          #{placeholder_front_matter.rstrip}
+
           # PLACEHOLDER — replace this with your own reviewed text
 
           **This is not a #{document_key.humanize.downcase}.** The `clickwrap` gem created this
@@ -125,7 +154,9 @@ module Clickwrap
           a receipt written today can reproduce the document version its accepted server
           offer bound years from now.
 
-          When the text changes, declare a new version rather than editing a published one.
+          The front matter above is the version label: when the text changes, bump
+          `last_updated:` (or add `clickwrap_version:` for a same-day correction) and
+          publish again, rather than editing a published version in place.
         MARKDOWN
       end
     end

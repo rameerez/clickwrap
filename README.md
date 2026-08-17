@@ -33,18 +33,38 @@ No JavaScript package. No Redis. No background jobs. No external accounts or per
 
 ## 👨‍💻 Example
 
-Define your documents and a policy in plain Ruby:
+Define your documents and a policy in plain Ruby. Each document points at the file that *is* your legal text — and that file names its own version, in the front matter it probably already has. The top of `app/content/legal/terms.md`:
+
+```markdown
+---
+title: Terms of Service
+last_updated: 2026-08-15
+---
+
+# Terms of Service
+```
 
 ```ruby
+# clickwrap-doc-test: syntax-only — terms.md and privacy.md are files in your app
 # config/clickwrap.rb
 Clickwrap.document :terms,
-  version: "2026-08-15",
   from: Rails.root.join("app/content/legal/terms.md")
 
 Clickwrap.document :privacy_notice,
-  version: "2026-08-15",
   from: Rails.root.join("app/content/legal/privacy.md")
+```
 
+Changing your Terms is then one edit in one file: new words, new `last_updated:`, publish. There is no second copy of the version label anywhere to drift — and a file carrying neither `clickwrap_version:` nor `last_updated:` fails the boot with a sentence instead of getting a label Clickwrap invented. Sources that can't carry front matter still name their label the explicit way:
+
+```ruby
+Clickwrap.document :handbook,
+  version: "2026-08-15",
+  from: Rails.root.join("app/content/legal/handbook.pdf")
+```
+
+Then say how long the evidence lives and what the server offers:
+
+```ruby
 Clickwrap.retention :ordinary_agreement_evidence do
   retain_core_event_for 6.years
 end
@@ -105,7 +125,7 @@ bin/rails generate clickwrap:install
 bin/rails db:migrate
 ```
 
-The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. It never invents legal text and never silently guesses your actor model.
+The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
 
 Point the generated policy at the documents your app already owns (see the example above), add `has_clickwraps` to your user model, drop `form.clickwrap` into your signup form, then publish immutable snapshots of your documents:
 
@@ -113,18 +133,50 @@ Point the generated policy at the documents your app already owns (see the examp
 bin/rails clickwrap:publish
 ```
 
+That's the only time you run that by hand: publishing rides `db:prepare`, so a deploy that runs
+it also freezes the snapshots for whatever you declared, before the server takes traffic
+(`config.publish_documents_after_database_preparation = false` if you'd rather own the step).
+
 That's it! Your app now records which exact document versions the server offered, which explicit
 answers it accepted, the bound presentation wording, and when—atomically with account creation.
 Let's see how it works.
+
+Legal pages in Markdown? `config.document_renderer = :markdown` renders through whichever
+Markdown library you already bundle, and `:markdown_rails` renders through your application's
+*own* registered markdown-rails renderer — the exact pipeline your public `/legal` pages go
+through, so the snapshot people accept comes out byte-for-byte identical to the rendered text
+those pages serve, by construction rather than by careful copying.
 
 Wiring the gem into an existing production app — or handing the job to an AI agent? The
 [integrating guide](guides/integrating.md) is the step-by-step playbook from a full
 production migration, in the exact order that avoids every mistake we made.
 
-Hotwire Native or another client needs special document-link attributes? Keep
-the gem's canonical partial and set `config.document_link_html_options_with`.
-It can add `data: { turbo: false }`, `target`, or `rel`; it cannot replace the
-immutable `href` that Clickwrap signs into the presentation.
+Hotwire Native? One setting answers both halves of the native question — the href
+*and* the link attributes:
+
+```ruby
+Clickwrap.configure do |config|
+  config.hotwire_native_document_links = {
+    open_in: :external_browser,
+    canonical_host: "https://www.example.com"
+  }
+end
+```
+
+Here's why that matters: on a native authentication sheet, a same-host document
+link is routed by the app itself, which pops the sheet and takes the half-filled
+signup form with it. `:external_browser` absolutizes the signed document path
+against your canonical host and opens it outside the WebView, so the form is
+still there when the person comes back. `:same_screen` keeps a plain same-host
+link for your own native path configuration to route (a document sheet inside a
+signed-in funnel, say).
+
+Another client needs different attributes, or different ones per screen? Keep the
+gem's canonical partial and set `config.document_link_html_options_with`. It can
+add `data: { turbo: false }`, `target`, or `rel`; it cannot replace the immutable
+`href` that Clickwrap signs into the presentation. When the native setting above
+is set it answers native renders entirely, and this hook goes on answering every
+other render.
 
 ## How it works
 
@@ -274,7 +326,27 @@ rescue Clickwrap::CaptureRefused => refusal
 end
 ```
 
-Infrastructure failures stay outside that family and stay loud: an evidence write that fails refuses the protected action instead of being swallowed.
+Or drop the bang and let it read like `save`. `capture_clickwrap_and` and
+`capture_clickwrap` absorb exactly that family, return `false`, put the
+per-statement message beside the control it belongs to, and leave the whole
+refusal on `clickwrap_refusal`:
+
+```ruby
+def create
+  receipt = capture_clickwrap_and(:withdrawal_authorization, subject: withdrawal) do |pending_receipt|
+    withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
+  end
+
+  unless receipt
+    flash.now[:alert] = clickwrap_refusal.user_facing_message
+    return render :new, status: :unprocessable_entity
+  end
+
+  redirect_to withdrawal
+end
+```
+
+Nothing else is absorbed, by either form. Infrastructure failures stay outside that family and stay loud: an evidence write that fails refuses the protected action instead of being swallowed. So do lifecycle conflicts — a conflicting replay (`Clickwrap::ReplayRejected`) or an already-consumed one-time authorization (`Clickwrap::OneTimeAuthorizationConflict`) still raises, because "this was already done" needs a domain answer that no generic rescue can supply honestly.
 
 That atomicity has one exact boundary: Clickwrap's event and the protected domain
 write must use the same database connection. If a host model uses another Rails
@@ -556,13 +628,22 @@ end
 ```
 
 ```ruby
-# Rails authentication generator
-register_with_clickwrap :signup, user: @user do
-  @user.save!
+# Rails authentication generator, or any hand-rolled signup door
+def create
+  @user = User.new(user_params)
+
+  unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    return render :new, status: :unprocessable_entity
+  end
+
+  start_new_session_for @user
+  redirect_to after_authentication_url
 end
 ```
 
 Both make account activation and its evidence commit together, with a prospective-actor flow that's honest about the fact that no authenticated user exists yet at render time.
+
+The door helpers come in a pair, exactly like `save` and `save!`. The non-bang form absorbs a *refused* signup — a stale presentation, an unticked box, a validation the account failed — into the same human sentences the Devise adapter paints (inline beside the control, once on the record's `:base`) and returns `false`, ready for that 422 re-render. `register_with_clickwrap!` raises instead, for flows that handle the exceptions themselves. An infrastructure failure escapes *both* forms: a broken database is not a refusal to dress up as validation, so the sign-in, the welcome email, and the redirect that would normally follow simply do not happen. That's the difference between a refused signup and a live account nobody can explain.
 
 During a legacy migration, keep a required dual-write inside that same
 transaction without replacing Devise's controller action:
@@ -624,14 +705,23 @@ Two situations come up in almost every real app. Here's exactly how to handle bo
 
 You know how Apple Developer releases new terms every few months and walls off the entire dashboard until you accept them? Same pattern here: legal ships a new version of your Terms, and nobody uses your app again until they've agreed to it. Accepting the new version supersedes the old one — and you keep a receipt for every version each user ever agreed to, so you always know exactly who agreed to exactly what, and when.
 
-Bump the document version when the new text ships:
+Bump the document version when the new text ships — in the file itself, beside
+the words that changed. The top of `app/content/legal/terms.md`:
+
+```markdown
+---
+title: Terms of Service
+last_updated: 2026-11-01
+---
+```
+
+It was `2026-08-15`; new words mean a new label. (A trailing `# comment` on
+that line is read as YAML reads it — not part of the label.)
+
+And require the current version in the policy:
 
 ```ruby
 # config/clickwrap.rb
-Clickwrap.document :terms,
-  version: "2026-11-01",   # was "2026-08-15" — new text means a new version
-  from: Rails.root.join("app/content/legal/terms.md")
-
 Clickwrap.policy :current_terms do
   agree_to :terms, require_current_version: true
 
@@ -703,8 +793,10 @@ end
 def create
   @user = User.new(user_attributes_from(session[:pending_oauth]))
 
-  register_with_clickwrap :signup, user: @user do
-    @user.save!   # account + acceptance commit together, or neither happens
+  # Account + acceptance commit together, or neither happens. A refused
+  # submission re-renders the finish screen with the reason beside the control.
+  unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    return render :new, status: :unprocessable_entity
   end
 
   session.delete(:pending_oauth)
@@ -924,7 +1016,7 @@ Class names are strings resolved lazily for autoloading, and ambiguity fails at 
 
 ```bash
 bin/rails clickwrap:doctor              # objective health report, never prints "compliant"
-bin/rails clickwrap:publish             # freeze document snapshots (idempotent)
+bin/rails clickwrap:publish             # freeze document snapshots (idempotent; also rides db:prepare)
 bin/rails clickwrap:verify              # verify event digests
 bin/rails clickwrap:retention:plan      # preview disposition
 bin/rails clickwrap:privacy:inventory   # every configured personal-data field, purpose, and rule

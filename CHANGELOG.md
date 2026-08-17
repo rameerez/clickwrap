@@ -6,6 +6,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the dream-API pass (driven by installing the gem into a second real application)
+
+Two real installations wrote about a hundred lines of nearly identical glue
+around this gem. That is the strongest possible evidence that the code belongs
+in the gem, so each ceremony became behavior, working backwards from the API we
+wished we had written.
+
+- **`version:` is optional when the source names its own.** A document declared
+  `from:` a file — or with inline `content:` — whose leading YAML front matter
+  carries `clickwrap_version:` or `last_updated:` resolves its version label
+  from there, so the file that *is* the legal text also names its version and
+  there is no second copy of the label anywhere to drift. `clickwrap_version:`
+  outranks `last_updated:` on purpose: a same-day correction that still changes
+  bytes needs a fresh label while the date readers see stays put. Both host
+  applications had written the same front-matter reader module to do this
+  themselves; that module stops existing. The old failure mode was a label
+  living in `config/clickwrap.rb` and words living in a file, changed in
+  separate edits — which either publishes as "same label, different bytes"
+  (refused at publish, correctly, but a step later than it needed to be) or
+  quietly leaves the label describing text nobody is serving any more. A source
+  with no front-matter key and no `version:` is now a boot failure with the fix
+  in the sentence, and a `resolver:` source (whose bytes are only read at
+  publish time) says exactly why it cannot name its own. Clickwrap never invents a
+  label, because a policy that requires a current version cannot be satisfied
+  by a guess.
+- **`save`/`save!` pairing for doors and captures.** `register_with_clickwrap`
+  (non-bang) absorbs a refused registration — a stale presentation, an unticked
+  control, a validation the account failed — into the exact human sentences the
+  Devise adapter paints, through one shared `Clickwrap::Registration.absorb_refusal`:
+  inline via `clickwrap_errors` beside the control it belongs to, once on the
+  record's `:base`, then `false`, ready for `render :new, status: :unprocessable_entity`.
+  `capture_clickwrap` and `capture_clickwrap_and` do the same for
+  `Clickwrap::CaptureRefused`, leaving the refusal on `clickwrap_refusal` with
+  its `user_facing_message`. The old failure mode was every hand-rolled door
+  writing its own rescue, each one slightly different, and one of them
+  eventually rescuing too much. Infrastructure failures still escape every
+  form — `Clickwrap::EventWriteFailed` is not a validation error to dress up —
+  and lifecycle conflicts (`ReplayRejected`, `OneTimeAuthorizationConflict`)
+  still raise, because "this was already done" needs a domain answer that no
+  generic rescue can supply honestly.
+- **`config.document_renderer = :markdown_rails` renders through the
+  application's own renderer.** Content-file Rails apps already serve their
+  public legal pages through a registered markdown-rails handler; when the same
+  files are Clickwrap documents, what people accept and what the page serves
+  must be the same bytes — same renderer, same options, no second sanitization
+  pass changing entities behind the digest. Wiring that by hand meant a lambda,
+  an engine name, gem versions, and a parity test copied between applications;
+  this setting says it once, records honest provenance (the renderer class the
+  application registered, plus the markdown-rails and Markdown-engine gem
+  versions), and resolves the handler lazily at first render so initializer
+  order cannot capture the stock default renderer instead of the application's.
+  Its bound is stated rather than hidden: the renderer is called without a view
+  context, exactly how a frozen snapshot must render, so Markdown that calls
+  Rails view helpers fails loudly at publish and needs the explicit lambda form.
+- **Publishing rides `db:prepare`.** The deploy step everyone forgets no longer
+  exists: an enhanced `db:prepare` publishes declared documents, so by the time
+  the server takes traffic every declared version has an immutable snapshot.
+  The old failure mode was the worst kind of quiet — presentations refuse
+  unpublished documents (the safe failure), so a forgotten `clickwrap:publish`
+  became "nobody can sign up" some hours after a deploy that looked green. It
+  is idempotent, silent when no documents are declared, and a sentence rather
+  than a crash when the tables are not migrated yet; a real refusal fails the
+  deploy out loud, which beats signups failing quietly later. Opt out with
+  `config.publish_documents_after_database_preparation = false`.
+- **`config.hotwire_native_document_links` answers the native question once.**
+  One declarative seam does both halves coherently — the signed href
+  (absolutized against a validated `https` canonical host, which may be a
+  callable) and the navigation attributes (`target="_blank"`,
+  `rel="noopener"`, `data-turbo="false"` for `:external_browser`; a plain link
+  for `:same_screen`). It exists for one specific failure: on a native
+  authentication sheet, a same-host document link is routed by the app itself,
+  which pops the sheet and takes the half-filled signup form with it. Getting
+  the href right in one place and the attributes right in another is exactly
+  the kind of split that drifts. When set it answers native renders entirely;
+  `config.document_link_html_options_with` goes on answering everything else,
+  so an app needing different answers per screen keeps the per-request lambda.
+- **The default `describe_authentication_with` no longer over-claims.** It now
+  reports `{ method: :authenticated_session }` only when the controller's
+  configured current-actor method actually returns someone, and `{}` otherwise.
+  A signup form is not an authenticated session, and describing every request
+  as authenticated merely because it passed through `ApplicationController` put
+  a claim in the receipt that nobody had checked. It is deliberately gentler
+  than the capture path's actor resolution: describing authentication is
+  context, not identity, so a controller with no such method is `{}`, never an
+  error.
+
 ### Added — installer improvements (driven by installing the gem into a template application)
 
 - **Non-interactive runs skip the questions instead of jumbling them.** When

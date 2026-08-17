@@ -37,20 +37,50 @@ Then, before anything else works:
    detects them, points `from:` at those exact files, and writes no
    placeholders — the text people accept and the text your `/legal` routes
    serve must be one file, so they cannot drift. If your legal text lives
-   anywhere else, edit the two `from:` lines yourself. Set
-   `config.document_renderer = :markdown` and the gem renders through
-   whichever Markdown library you already bundle, front matter stripped.
-2. **Pick version labels you already own.** If the app has a
-   `TERMS_CURRENT_VERSION` constant or a `last_updated` front-matter field,
-   use that exact value and keep them in lockstep until legacy columns
-   retire. New text = new label; reusing a label for different bytes is
-   refused at publish.
+   anywhere else, edit the two `from:` lines yourself. Then pick the renderer
+   that matches those pages: `config.document_renderer = :markdown` renders
+   through whichever Markdown library you already bundle (front matter
+   stripped), and `:markdown_rails` renders through your application's *own*
+   registered markdown-rails renderer — the exact pipeline those pages already
+   go through, which is what makes the accepted snapshot byte-for-byte the
+   rendered text those pages serve instead of merely similar to it.
+2. **Let each file name its own version.** A page with leading YAML front
+   matter carrying `clickwrap_version:` or `last_updated:` names its own
+   label, so there is no `version:` line in `config/clickwrap.rb` and no second
+   copy to drift:
+
+   ```markdown
+   ---
+   title: Terms of Service
+   last_updated: 2026-08-15
+   ---
+   ```
+
+   `clickwrap_version:` wins when both are present — that is how a same-day
+   correction gets a fresh label while the date readers see stays put.
+   Trailing `# comments` on the version line are read as YAML reads them:
+   not part of the label. If the app has a `TERMS_CURRENT_VERSION`
+   constant, move its exact value into the file's front matter and keep the
+   constant in lockstep until it retires.
+   Pass `version:` explicitly only for a source that cannot carry front matter
+   (a PDF, an HTML fragment, a `resolver:` whose bytes are read at publish
+   time). New text = new label; reusing a label for different bytes is refused
+   at publish, and a file with neither key and no `version:` fails the boot
+   with the fix in the sentence.
 3. **Declare a retention class and use it.** `retain_with` is mandatory on
    every policy, on purpose — mark the period `TODO(counsel)` if you must,
    but pick one. If the legacy system kept evidence forever, any finite
    period is a tightening; say so in the comment.
 4. `bin/rails clickwrap:publish`, then `bin/rails clickwrap:doctor`. The
-   doctor's output is your integration checklist from here on.
+   doctor's output is your integration checklist from here on. That is the
+   only time you publish by hand: publishing rides `db:prepare`, so a deploy
+   that runs it also freezes the snapshots for what it declared, before the
+   server takes traffic. It is idempotent, silent when nothing is
+   declared, and a sentence rather than a crash when the tables are not
+   migrated yet — but a real refusal (a reused label over changed bytes)
+   fails the deploy out loud, which is what you want: the alternative is
+   signups failing quietly some hours later. Opt out with
+   `config.publish_documents_after_database_preparation = false`.
 
 If a client needs special navigation attributes, keep the canonical partial
 and configure the one narrow seam instead of ejecting it:
@@ -64,6 +94,26 @@ end
 This callback may choose how the client opens the immutable URL. It cannot
 return `href:`: the exact href is rendered from, and signed into, the same
 presentation manifest.
+
+Shipping a Hotwire Native app? Declare the answer once instead, and get both
+halves — the href and the attributes — from the same setting:
+
+```ruby
+config.hotwire_native_document_links = {
+  open_in: :external_browser,
+  canonical_host: "https://www.example.com"
+}
+```
+
+We learned this on a native authentication sheet: a same-host document link is
+routed by the app itself, which pops the sheet and takes the half-filled signup
+form with it. `:external_browser` absolutizes the signed path against your
+canonical host (which may be a callable, and must be `https`) and opens it
+outside the WebView, so the form survives the round trip. `:same_screen` keeps
+a plain same-host link for your own native path configuration to route. When
+this is set it answers native renders entirely and the callback above keeps
+answering everything else — so an app that needs different answers on different
+screens sets nothing here and stays with the lambda.
 
 Boot errors you may meet, all working as intended:
 
@@ -154,6 +204,29 @@ customized `create` (bot checks, native handoffs, invitation prefills,
 attribution) keeps working untouched. Account and evidence commit together;
 refusals (stale token, missing box) re-render the form with localized
 sentences, inline beside the control.
+
+A hand-rolled door — Rails' authentication generator, an OAuth finish screen,
+your own registration service — gets the same behavior from the non-bang
+helper, which absorbs those same refusals into those same sentences and
+returns false:
+
+```ruby
+def create
+  @user = User.new(user_params)
+
+  unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    return render :new, status: :unprocessable_entity
+  end
+
+  start_new_session_for @user
+  redirect_to after_authentication_url
+end
+```
+
+`register_with_clickwrap!` is the raising half of the pair, for a flow that
+handles the exceptions itself. Neither form absorbs an infrastructure failure:
+a `Clickwrap::EventWriteFailed` escapes both, so the sign-in and the welcome
+email that would follow never happen. Do not add a rescue that changes that.
 
 **Migrating from a legacy checkbox?** Keep every required legacy evidence write
 *inside* the new transaction during the transition:
@@ -254,9 +327,33 @@ rescue Clickwrap::CaptureRefused => refusal
 end
 ```
 
+Drop the bang and you get the same thing without writing the rescue.
+`capture_clickwrap` and `capture_clickwrap_and` absorb exactly that family,
+return `false`, put the per-statement message beside the control, and leave the
+refusal on `clickwrap_refusal`:
+
+```ruby
+def create
+  receipt = capture_clickwrap_and(:withdrawal_authorization, subject: withdrawal) do
+    withdrawal.submit!
+  end
+
+  unless receipt
+    flash.now[:alert] = clickwrap_refusal.user_facing_message
+    return render :new, status: :unprocessable_entity
+  end
+
+  redirect_to withdrawal
+end
+```
+
 Everything outside the family (an evidence write failure above all) stays
-loud on purpose. Never rescue `Clickwrap::Error` wholesale: the fail-closed
-guarantee is that infrastructure problems refuse the protected action.
+loud on purpose, from the non-bang forms too. So do lifecycle conflicts:
+`Clickwrap::ReplayRejected` and `Clickwrap::OneTimeAuthorizationConflict`
+still raise, because "already done" needs a domain answer — usually "treat it
+as done" — that a generic rescue cannot give. Never rescue `Clickwrap::Error`
+wholesale: the fail-closed guarantee is that infrastructure problems refuse
+the protected action.
 
 ## 6. Link domain rows to their evidence
 

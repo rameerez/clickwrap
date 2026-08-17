@@ -78,11 +78,20 @@ Clickwrap.configure do |config|
   # fields someone chose rather than every column that existed that day.
   config.snapshot_actor_with = ->(_actor) { {} }
 
-  # Recorded as context, never as an identity claim. It says which
-  # application-supplied authentication state was in force, and nothing more.
-  config.describe_authentication_with = lambda do |controller|
-    { method: :authenticated_session, authenticated_at: controller.session[:authenticated_at] }
-  end
+  # Authentication is recorded as context, never as an identity claim: it says
+  # which application-supplied authentication state was in force, and nothing
+  # more. The built-in default asks the controller for the current actor and
+  # records `{ method: :authenticated_session }` only when it gets one, so a
+  # signup form — where nobody is signed in yet — describes nothing rather than
+  # claiming a session that did not exist. Override it when your application
+  # knows more about how someone signed in:
+  #
+  #   config.describe_authentication_with = lambda do |_controller|
+  #     session = Current.session
+  #     next {} unless session
+  #
+  #     { method: session.authentication_method, authenticated_at: session.created_at }
+  #   end
 
   # --- Documents and policies -------------------------------------------------
 
@@ -92,11 +101,26 @@ Clickwrap.configure do |config|
   # a URL alone is never a document version.
   config.store_document_contents_in = :database
 
+<%- if renders_documents_through_markdown_rails? -%>
+  # Your legal pages are Markdown files this application already renders through
+  # markdown-rails, so Clickwrap renders them through that same registered
+  # renderer: the snapshot people accept is byte-identical to the page they
+  # read, and sanitizing stays in the pipeline those pages already trust rather
+  # than a second pass behind the digest.
+  config.document_renderer = :markdown_rails
+<%- else -%>
+  # How document bytes become the representation people are offered. `nil` keeps
+  # the faithful escaped-text default; `:markdown` renders HTML through whichever
+  # Markdown library you already bundle; `:markdown_rails` renders through your
+  # application's own registered markdown-rails renderer, which is what keeps a
+  # snapshot byte-identical to the public page of the same file.
+  #
   # A custom renderer must return the exact bytes it offered, because Clickwrap
   # stores their digest next to the source digest. That is what keeps "this
   # Markdown file existed" and "this rendered representation was offered" as two
   # separate claims instead of one borrowed from the other.
   config.document_renderer = nil
+<%- end -%>
 
   # Loads document bodies from somewhere other than a file or inline content.
   config.document_resolver = nil
@@ -117,10 +141,34 @@ Clickwrap.configure do |config|
   config.document_link_html_options_with =
     ->(_document) { { target: "_blank", rel: "noopener" } }
 
+  # Hotwire Native gets a declarative answer instead of a lambda when one answer
+  # is right everywhere. Inside a native authentication sheet, a same-host
+  # document link is routed by the app itself, which pops the sheet and takes the
+  # half-filled form with it; opening the document in the external browser leaves
+  # the form where the person left it. When this is set it answers native renders
+  # entirely, and the per-request hook above goes on answering every other render:
+  #
+  #   config.hotwire_native_document_links = {
+  #     open_in: :external_browser,
+  #     canonical_host: "https://www.example.com"
+  #   }
+  #
+  # `open_in: :same_screen` keeps ordinary same-host links for your native path
+  # configuration to route — a document sheet inside a signed-in funnel, say.
+
   # Where your documents, policies, and retention classes are declared. They are
   # ordinary Ruby so they are reviewable in a pull request and deploy with the
   # code that depends on them.
   config.policy_paths = [ "config/clickwrap.rb", "config/clickwrap/*.rb" ]
+
+  # Publishing rides `db:prepare`, so the deploy step everyone forgets stops
+  # existing: by the time the server takes traffic, every document version
+  # declared in those files has an immutable snapshot. It is idempotent — an
+  # already-published version is left untouched — and a refusal, such as a reused
+  # version label over changed bytes, fails the deploy out loud instead of
+  # letting signups fail quietly some hours later. Set this to false to keep
+  # publishing a deliberate `bin/rails clickwrap:publish` step of your own.
+  config.publish_documents_after_database_preparation = true
 
   # A required legal statement with no translation is not presentable. Failing
   # is the safe behavior: the alternative is showing a raw I18n key, a blank
