@@ -58,6 +58,7 @@ module Clickwrap
       findings = []
       findings.concat(policy_findings)
       findings.concat(document_findings)
+      findings.concat(engine_mount_findings)
       findings.concat(gate_findings)
       findings.concat(request_evidence_findings)
       findings.concat(review_date_findings)
@@ -131,6 +132,25 @@ module Clickwrap
 
       problem("the stored bytes for document #{definition} no longer match the digest recorded " \
               "when it was published, so evidence citing it cannot be reproduced")
+    end
+
+    # The mount is not only about gates. Every presentation links each document
+    # at its immutable engine route, and that link is signed into the manifest
+    # and kept as the exact document the person was offered. Unmounted, there
+    # is no such route: presenting refuses rather than signing a dead link, so
+    # a compiled policy on an unmounted application is a broken signup screen,
+    # not a stylistic choice.
+    def engine_mount_findings
+      return [] if Clickwrap.policies.empty?
+      return [ok("Clickwrap::Engine is mounted, so every document link a presentation signs resolves")] \
+        if engine_mounted?
+
+      [problem("Clickwrap::Engine is not mounted, so presenting any of the " \
+               "#{Clickwrap.policies.size} compiled #{pluralize(Clickwrap.policies.size, "policy",
+                                                                "policies")} refuses rather than " \
+               "sign a document link that resolves to nothing. Mount it with " \
+               "`mount Clickwrap::Engine => \"/agreements\"`, or bind your own document route into " \
+               "every presentation with `document_version_path_with:`.")]
     end
 
     # A `requires_clickwrap` gate refuses to compile without somewhere to send

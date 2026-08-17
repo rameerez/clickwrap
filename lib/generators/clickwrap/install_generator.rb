@@ -229,7 +229,7 @@ module Clickwrap
         return if options[:skip_routes]
         return say_missing_routes_file unless routes_file?
         return say_already_mounted if engine_already_mounted?
-        return say_mount_instructions unless interactive?
+        return mount_engine_without_asking unless interactive?
 
         return unless ask_question(<<~QUESTION)
           Mount the Clickwrap engine at "/agreements" in config/routes.rb?
@@ -688,10 +688,26 @@ module Clickwrap
         @mounted_engine = true
       end
 
-      def say_mount_instructions
-        say "\n   Routes were left untouched (nothing was asked). Add this line when you want"
-        say "   the standalone capture, receipt, withdrawal, and document-history screens:"
-        say "       mount Clickwrap::Engine => \"/agreements\""
+      # Every other question this generator declines to ask non-interactively
+      # resolves to "collect nothing", because for personal data the quiet
+      # answer is the safe one. This question is the exception, and it is worth
+      # saying why out loud.
+      #
+      # Unmounted, the engine has no document route. Clickwrap refuses to sign a
+      # document link that resolves to nothing, so an unmounted install cannot
+      # present a policy at all — the failure is not "a screen is missing", it
+      # is "signup raises". Taking the [y/N] default here was politeness that
+      # produced a broken application, so a non-interactive run mounts and says
+      # so, and `--skip-routes` is the one flag that declines.
+      def mount_engine_without_asking
+        route "mount Clickwrap::Engine => \"/agreements\""
+        @mounted_engine = true
+
+        say "\n   Mounted Clickwrap::Engine at \"/agreements\" in config/routes.rb (nothing was asked)."
+        say "   Unmounted, there is no document route, and Clickwrap refuses to sign a document"
+        say "   link that resolves to nothing — so an unmounted install cannot present a policy"
+        say "   at all. Re-run with --skip-routes to decline, or delete the line if you route the"
+        say "   documents yourself and bind that route with `document_version_path_with:`."
       end
 
       def interactive?

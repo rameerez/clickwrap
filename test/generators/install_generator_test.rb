@@ -320,6 +320,32 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     end
   end
 
+  test "a non-interactive run mounts the engine instead of politely leaving it out" do
+    # Every other question this generator declines to ask non-interactively
+    # resolves to "collect nothing", which is the safe answer for personal
+    # data. This one is the exception: unmounted, there is no document route,
+    # presenting refuses rather than sign a link that resolves to nothing, and
+    # the install is simply broken. Taking the [y/N] default here was politeness
+    # that shipped a broken application.
+    write_host_routes_file
+
+    output = $stdin.stub(:tty?, false) { run_generator }
+
+    assert_file "config/routes.rb", %r{mount Clickwrap::Engine => "/agreements"}
+    assert_match(/Mounted Clickwrap::Engine/, output)
+    assert_match(/--skip-routes/, output)
+  end
+
+  test "--skip-routes is the one flag that declines the mount" do
+    write_host_routes_file
+
+    $stdin.stub(:tty?, false) { run_generator %w[--skip-routes] }
+
+    assert_file "config/routes.rb" do |routes|
+      refute_match(/mount Clickwrap::Engine/, routes)
+    end
+  end
+
   test "the post-install message names the door line, with the host's own Devise file and class" do
     # The one omission nothing can warn about at runtime. A host that follows
     # this message verbatim and never adds the door line gets a rendering
@@ -582,6 +608,14 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   end
 
   private
+
+  # The generator only touches routes when the host actually has a routes file,
+  # and `prepare_destination` gives every run an empty directory.
+  def write_host_routes_file
+    FileUtils.mkdir_p(File.join(destination_root, "config"))
+    File.write(File.join(destination_root, "config/routes.rb"),
+               "Rails.application.routes.draw do\n  root to: \"home#show\"\nend\n")
+  end
 
   # The Sitepress content directory a real application already serves its legal
   # pages from. `last_updated:` is the front-matter key such a page usually

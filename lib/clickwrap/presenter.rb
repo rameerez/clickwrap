@@ -320,7 +320,7 @@ module Clickwrap
         if @document_version_path_with
           @document_version_path_with.call(version)
         elsif defined?(Clickwrap::Engine)
-          Clickwrap::Engine.routes.url_helpers.document_version_path(version.id)
+          engine_document_version_path(version)
         end
 
       return path.to_s if path.present?
@@ -335,6 +335,18 @@ module Clickwrap
       raise ConfigurationError,
             "Clickwrap could not build the immutable URL for document version #{version.id}: " \
             "#{error.class}: #{error.message}"
+    end
+
+    # The engine's own URL helpers carry no mount prefix, so on an application
+    # that never mounted the engine they answer with a path that resolves to
+    # nothing. That answer would be *signed*: it goes into the manifest, into
+    # the digest, and into the evidence as the exact document the person was
+    # offered. A signed dead link is the worst failure this gem has — it looks
+    # like evidence and cites a 404 — so it is refused at build time instead.
+    def engine_document_version_path(version)
+      ControllerHelpers.assert_engine_can_resolve_document_links!(version)
+
+      Clickwrap::Engine.routes.url_helpers.document_version_path(version.id)
     end
 
     def manifest_fragment(statement)

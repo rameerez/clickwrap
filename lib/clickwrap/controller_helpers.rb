@@ -196,6 +196,34 @@ module Clickwrap
         @verified_gates ||= Set.new
       end
 
+      # The one refusal this gem cannot afford to soften. Both paths that build
+      # a document link — the presenter's own fallback and a controller with no
+      # `clickwrap` mounted-helper proxy — end at the engine's prefix-less URL
+      # helpers, which answer with a path that resolves to nothing on an
+      # application that never mounted the engine.
+      #
+      # That path does not merely render badly. It is signed into the
+      # presentation manifest, digested, and recorded as the exact document the
+      # person was offered, so the evidence would cite a 404 for as long as it
+      # is kept. Nothing downstream can detect that later: the digest is over
+      # the wrong link, and it is perfectly valid.
+      def assert_engine_can_resolve_document_links!(version = nil)
+        return if engine_is_mounted?
+
+        subject = version ? "document version #{version.id}" : "this document"
+
+        raise ConfigurationError,
+              "Clickwrap will not sign a document link that resolves to nothing. The link for " \
+              "#{subject} can only be built from Clickwrap::Engine's own routes, and this " \
+              "application does not mount the engine — so the URL would 404, and it would be " \
+              "signed into the presentation manifest and kept as the exact document that was " \
+              "offered. Mount the engine:\n\n  " \
+              "mount Clickwrap::Engine => \"/agreements\"\n\n" \
+              "or route the documents yourself and bind that route into every presentation:\n\n  " \
+              "form.clickwrap :signup, document_version_path_with: " \
+              "->(version) { legal_document_path(version.id) }"
+      end
+
       def validate_gate_resolver!(name, resolver)
         return if resolver.nil? || resolver.is_a?(Symbol) || resolver.respond_to?(:call)
 
@@ -346,6 +374,8 @@ module Clickwrap
     # signed into the presentation manifest, so the evidence never claims a
     # different target from the link.
     def clickwrap_document_version_path_for_presentation(version)
+      ControllerHelpers.assert_engine_can_resolve_document_links!(version) unless respond_to?(:clickwrap)
+
       path = clickwrap_engine_routes.document_version_path(version.id)
 
       native_links = Clickwrap.config.hotwire_native_document_links

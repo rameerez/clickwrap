@@ -6,6 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — the two-audit adversarial review
+
+Two independent audits read the gem as an unfamiliar developer would: one
+followed the installer and the README literally, the other read the code
+against its own claims. Everything below is a defect they evidenced.
+
+- **The installer and the README never taught the auth door.** A Devise app
+  that followed the post-install message verbatim created accounts with no
+  evidence at all, silently — the gem is never called on that path, so nothing
+  could warn about it. The post-install message and the README quickstart now
+  both carry the door step, with the exact line, the host's own file path and
+  class name, and the `devise_for ..., controllers:` route that makes the
+  subclass reachable. "The installer detects your authentication stack and
+  generates an explicit adapter" now says what it does: it detects, and prints
+  the line for you to add.
+- **An unmounted engine used to sign 404 document links into evidence.** The
+  document link goes into the presentation manifest, into the digest, and into
+  the record of what was offered; built from an unmounted engine's routes it
+  resolves to nothing, and nothing downstream can detect that afterwards
+  because the digest is over the wrong link. Presenting now refuses at build
+  time with the mount line in the sentence, `bin/rails clickwrap:doctor`
+  reports the missing mount as a problem whenever any policy is compiled (it
+  used to speak only about `requires_clickwrap` gates), and a non-interactive
+  install mounts the engine and says so instead of silently taking the `[y/N]`
+  default — `--skip-routes` is the one flag that declines.
+
 ### Added — the dream-API pass (driven by installing the gem into a second real application)
 
 Two real installations wrote about a hundred lines of nearly identical glue
