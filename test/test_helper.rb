@@ -117,6 +117,31 @@ module ActiveSupport
                          covered_ride_ids: covered_ride_ids)
     end
 
+    # Counts the queries a block asks Active Record for.
+    #
+    # Query-cache hits are COUNTED on purpose. An N+1 whose rows all resolve to
+    # the same record is served from the cache inside one request and would
+    # otherwise measure as free here, while costing a real round trip each in
+    # production the moment the rows differ. Schema reflection and transaction
+    # control are not queries a reader would recognize, so they are left out.
+    # `matching:` narrows the count to queries whose SQL matches, which is how
+    # a test pins the cost of one concern without also pinning every unrelated
+    # query that happens to share the request.
+    def count_queries(matching: nil)
+      queries = 0
+      subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |*, payload|
+        next if %w[SCHEMA TRANSACTION].include?(payload[:name])
+        next if matching && !payload[:sql].to_s.match?(matching)
+
+        queries += 1
+      end
+
+      yield
+      queries
+    ensure
+      ActiveSupport::Notifications.unsubscribe(subscriber)
+    end
+
     # Publishing is idempotent, so calling it in every setup costs one digest
     # comparison per document and keeps each test independent of ordering.
     def publish_clickwrap_documents!

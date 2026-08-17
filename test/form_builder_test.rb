@@ -332,6 +332,38 @@ class FormBuilderTest < ActionView::TestCase
     assert_match(/one Clickwrap policy.*separate form/i, error.message)
   end
 
+  # --- What a render costs ------------------------------------------------------
+
+  DOCUMENT_QUERIES = /clickwrap_documents|clickwrap_document_versions/
+
+  test "a render resolves every document in two queries, whatever the policy asks for" do
+    # Documents are immutable and published, so within one presentation build
+    # the answer for a key cannot change — and two statements naming the same
+    # document must get the same answer anyway. The render used to look each
+    # pair up separately: one query (sometimes two) for the document, one for
+    # its current version, repeated per statement-document pair, and not even
+    # memoized for a repeated key.
+    #
+    # Two queries: every document this policy references, then every version
+    # those documents could offer.
+    signup = count_queries(matching: DOCUMENT_QUERIES) do
+      render_clickwrap(:signup, submit: "Create account")
+    end
+
+    assert_equal 2, signup
+
+    # :withdrawal_authorization names three statements, and all three point at
+    # the SAME document. The old shape paid for it three times over.
+    withdrawal = create_withdrawal(user: @user)
+    repeated = count_queries(matching: DOCUMENT_QUERIES) do
+      render_clickwrap(:withdrawal_authorization, submit: "Authorize", subject: withdrawal)
+    end
+
+    assert_equal signup, repeated,
+                 "a repeated document key must not cost a repeated lookup " \
+                 "(#{signup} for two distinct documents, #{repeated} for one named three times)"
+  end
+
   private
 
   # Rendered through an inline template rather than by calling the helper

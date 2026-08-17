@@ -308,11 +308,55 @@ module Clickwrap
       end
     end
 
+    # Documents are immutable and published: within one presentation build, the
+    # answer for a key cannot change, and two statements naming the same
+    # document must get the same answer anyway. So every key this policy
+    # references is resolved once, in two queries, rather than one lookup (or
+    # two) plus a version query per statement-document pair.
     def current_document_version(document_key)
-      document = ::Clickwrap::Document.for_tenant(tenant_key).find_by(document_key: document_key)
-      document ||= ::Clickwrap::Document.find_by(document_key: document_key, tenant_key: nil)
+      current_document_versions[document_key.to_s]
+    end
 
-      document&.current_version(locale: locale)
+    def current_document_versions
+      @current_document_versions ||= begin
+        documents = documents_for_this_policy
+        versions = newest_effective_versions_by_document_id(documents.values.map(&:id))
+
+        documents.transform_values { |document| versions[document.id] }
+      end
+    end
+
+    # The tenant's own document wins over the shared one, exactly as the
+    # per-key lookup did. When there is no tenant the two scopes are the same
+    # query, so only one is issued.
+    def documents_for_this_policy
+      keys = policy.statements.flat_map(&:document_keys).uniq
+      return {} if keys.empty?
+
+      shared = ::Clickwrap::Document.where(document_key: keys, tenant_key: nil).index_by(&:document_key)
+      return shared if tenant_key.blank?
+
+      shared.merge(::Clickwrap::Document.for_tenant(tenant_key)
+                                        .where(document_key: keys).index_by(&:document_key))
+    end
+
+    # One query for every version this presentation could offer, ordered the
+    # same way Document#current_version orders one document's versions, so the
+    # first row per document is the one that method would have returned.
+    def newest_effective_versions_by_document_id(document_ids)
+      return {} if document_ids.empty?
+
+      at = Clickwrap.now
+
+      ::Clickwrap::DocumentVersion
+        .published
+        .effective_at_or_before(at)
+        .not_retired_at(at)
+        .for_locale(locale)
+        .where(document_id: document_ids)
+        .order(effective_at: :desc, published_at: :desc, created_at: :desc)
+        .group_by(&:document_id)
+        .transform_values(&:first)
     end
 
     def document_path(version)

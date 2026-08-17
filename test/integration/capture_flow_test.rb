@@ -727,24 +727,6 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
 
   private
 
-  # Counts the queries a block asks Active Record for. Query-cache hits are
-  # COUNTED on purpose: an N+1 whose rows all resolve to the same actor is
-  # served from the cache and would otherwise measure as free here while
-  # costing a real round trip each in production, where the cache is per
-  # request. Schema reflection and transaction control are not queries a reader
-  # would recognize, so they are left out.
-  def count_queries
-    queries = 0
-    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_name, _start, _finish, _id, payload|
-      queries += 1 unless %w[SCHEMA TRANSACTION].include?(payload[:name])
-    end
-
-    yield
-    queries
-  ensure
-    ActiveSupport::Notifications.unsubscribe(subscriber)
-  end
-
   def presentation_token
     css_select("input[name='clickwrap_submission[presentation_token]']").first["value"]
   end
