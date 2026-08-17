@@ -75,6 +75,24 @@ module Clickwrap
     Gate = Data.define(:policy_key, :remediation_path, :subject_with,
                        :acting_for_with, :gate)
 
+    # Gates register themselves from controller class bodies, and Rails is free
+    # to autoload — and, in development, reload — controllers from more than one
+    # thread. Two of them writing a bare Hash at the same time is the kind of
+    # corruption that shows up once, in somebody else's production, as a gate
+    # that quietly stopped being registered. Registry and Identifier already
+    # take a lock for exactly this; so does this.
+    #
+    # Writes take the lock and reads do not: reads happen on every gated
+    # request, and a snapshot taken a microsecond before a reload is a snapshot
+    # of a valid state either way.
+    REGISTRY_MUTEX = Mutex.new
+
+    # Created here rather than lazily, so there is no `||=` on a read path for
+    # two threads to race: both would build a collection and one would silently
+    # lose whatever it had already put in.
+    @registered_gates = {}
+    @verified_gates = Set.new
+
     class << self
       # The current actor, through the host's configured controller method.
       # Shared by the host-facing helper and the engine's own controllers so
@@ -108,23 +126,26 @@ module Clickwrap
       # entry rather than accumulating duplicates.
       def register_gate(policy_key, remediation_path:, gate:, subject_with: nil,
                         acting_for_with: nil)
-        registered_gates[[gate, policy_key.to_s]] = Gate.new(
+        entry = Gate.new(
           policy_key: policy_key.to_s,
           remediation_path: remediation_path,
           subject_with: subject_with,
           acting_for_with: acting_for_with,
           gate: gate
         )
+
+        REGISTRY_MUTEX.synchronize { registered_gates[[gate, policy_key.to_s]] = entry }
+        entry
       end
 
-      def registered_gates
-        @registered_gates ||= {}
-      end
+      attr_reader :registered_gates
 
       # Run from the engine's `after_initialize`, when the host's routes are
-      # drawn and the answer is actually knowable.
+      # drawn and the answer is actually knowable. Iterates a snapshot, so a
+      # controller autoloading on another thread mid-sweep cannot make this
+      # raise about the collection instead of about a gate.
       def verify_registered_gates!
-        registered_gates.each_value do |entry|
+        REGISTRY_MUTEX.synchronize { registered_gates.values }.each do |entry|
           verify_remediation_is_possible!(
             entry.policy_key,
             remediation_path: entry.remediation_path,
@@ -162,7 +183,7 @@ module Clickwrap
         return true if verified_gates.include?(policy_key.to_s)
 
         if engine_is_mounted?
-          verified_gates << policy_key.to_s
+          REGISTRY_MUTEX.synchronize { verified_gates << policy_key.to_s }
           return true
         end
 
@@ -192,9 +213,9 @@ module Clickwrap
         false
       end
 
-      def verified_gates
-        @verified_gates ||= Set.new
-      end
+      # Memoized successes only, so the worst a lost race can cost is one extra
+      # route scan — but the collection itself is still written under the lock.
+      attr_reader :verified_gates
 
       # The one refusal this gem cannot afford to soften. Both paths that build
       # a document link — the presenter's own fallback and a controller with no

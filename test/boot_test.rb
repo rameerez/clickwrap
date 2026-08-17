@@ -231,6 +231,33 @@ class BootTest < ActiveSupport::TestCase
     end
   end
 
+  test "the gate registry keeps every gate when controllers register from several threads" do
+    # Gates register from controller class bodies, and Rails autoloads — and in
+    # development reloads — controllers from more than one thread. A bare Hash
+    # written concurrently loses entries, and a lost entry is a gate that
+    # quietly stopped being checked. Registry and Identifier already take a
+    # lock; this registry does now too.
+    before = Clickwrap::ControllerHelpers.registered_gates.keys
+    gates = 50.times.map { |index| "ThreadedGateProbe#{index}.requires_clickwrap" }
+
+    gates.map do |gate|
+      Thread.new do
+        Clickwrap::ControllerHelpers.register_gate(
+          :current_terms, remediation_path: "/support/agreements", gate: gate
+        )
+      end
+    end.each(&:join)
+
+    added = Clickwrap::ControllerHelpers.registered_gates.keys - before
+    assert_equal gates.length, added.length
+
+    # And the sweep still completes: it snapshots under the same lock and
+    # verifies outside it, so nothing re-enters a non-reentrant mutex.
+    assert_nothing_raised { Clickwrap::ControllerHelpers.verify_registered_gates! }
+  ensure
+    gates&.each { |gate| Clickwrap::ControllerHelpers.registered_gates.delete([gate, "current_terms"]) }
+  end
+
   test "the six kinds and their actions are frozen vocabularies" do
     assert_equal 6, Clickwrap::Vocabulary::KINDS.length
     assert Clickwrap::Vocabulary::KINDS.frozen?
