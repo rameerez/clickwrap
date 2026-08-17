@@ -402,6 +402,55 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     refute_includes response.body, theirs.event_id
   end
 
+  test "the receipt list authorizes before it paginates, so a readable receipt is never hidden" do
+    # The old shape took PER_PAGE rows and filtered afterwards, which renders
+    # "you have no receipts" whenever the viewer's newest page happens to be
+    # rows the host will not show them — while readable ones sit just past the
+    # limit. On this screen that is the worst possible way to be wrong.
+    Clickwrap::ReceiptsController.any_instance.stubs(:page_size).returns(2)
+    Clickwrap::ReceiptsController.any_instance.stubs(:batch_size).returns(2)
+
+    oldest = capture_clickwrap(:signup, actor: @user)
+    hidden = 3.times.map { capture_clickwrap(:signup, actor: @user) }
+
+    Clickwrap.config.authorize_receipt_access_with = lambda do |_controller, receipt|
+      receipt.event_id == oldest.event_id
+    end
+
+    login_as @user
+    get "/legal/receipts"
+
+    assert_response :success
+    assert_includes response.body, oldest.event_id
+    hidden.each { |receipt| refute_includes response.body, receipt.event_id }
+  end
+
+  test "the receipt list costs the same number of queries whatever the viewer's history" do
+    # The conventional callback in the README compares
+    # `controller.current_user == receipt.actor`, which loads the polymorphic
+    # actor once per row unless it is eager-loaded — fifty extra queries on a
+    # full page, for one answer that is the same every time.
+    Clickwrap.config.authorize_receipt_access_with = lambda do |controller, receipt|
+      controller.current_user == receipt.actor
+    end
+
+    3.times { capture_clickwrap(:signup, actor: @user) }
+    login_as @user
+
+    get "/legal/receipts" # warm every lazy load the first request performs
+    small = count_queries { get "/legal/receipts" }
+
+    9.times { capture_clickwrap(:signup, actor: @user) }
+    large = count_queries { get "/legal/receipts" }
+
+    # The steady state: one query for the page of events, one preload for their
+    # actors, one for the viewer. Four times the history, the same cost.
+    assert_equal 3, small
+    assert_equal small, large,
+                 "reading the receipt list must not cost one query per receipt (#{small} for 3, " \
+                 "#{large} for 12)"
+  end
+
   test "the JSON format returns the canonical receipt verbatim" do
     receipt = capture_clickwrap(:signup, actor: @user)
     login_as @user
@@ -677,6 +726,24 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   private
+
+  # Counts the queries a block asks Active Record for. Query-cache hits are
+  # COUNTED on purpose: an N+1 whose rows all resolve to the same actor is
+  # served from the cache and would otherwise measure as free here while
+  # costing a real round trip each in production, where the cache is per
+  # request. Schema reflection and transaction control are not queries a reader
+  # would recognize, so they are left out.
+  def count_queries
+    queries = 0
+    subscriber = ActiveSupport::Notifications.subscribe("sql.active_record") do |_name, _start, _finish, _id, payload|
+      queries += 1 unless %w[SCHEMA TRANSACTION].include?(payload[:name])
+    end
+
+    yield
+    queries
+  ensure
+    ActiveSupport::Notifications.unsubscribe(subscriber)
+  end
 
   def presentation_token
     css_select("input[name='clickwrap_submission[presentation_token]']").first["value"]

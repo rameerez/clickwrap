@@ -26,8 +26,17 @@ module Clickwrap
     # disposed on a separate schedule.
     PER_PAGE = 50
 
+    # How many of the viewer's own rows this screen will read looking for
+    # PER_PAGE it may show. The host's callback is Ruby, not SQL, so the
+    # database cannot apply it and something has to bound the search. A viewer
+    # whose first thousand events are all unreadable to them is a host
+    # authorization question, not a paging question.
+    AUTHORIZATION_SCAN_LIMIT = 1_000
+
+    BATCH_SIZE = 100
+
     def index
-      @events = own_events.limit(PER_PAGE).select { |event| authorized_to_read?(event) }
+      @events = authorized_page
     end
 
     def show
@@ -43,6 +52,38 @@ module Clickwrap
     end
 
     private
+
+    # Authorize, THEN paginate. Taking PER_PAGE rows and filtering afterwards
+    # renders an empty page whenever the viewer's newest fifty events happen to
+    # be ones the host will not show them — while readable receipts sit at row
+    # fifty-one. "Your receipts are gone" is a bad thing for this screen to say
+    # by accident.
+    #
+    # The actor is eager-loaded because the conventional callback compares
+    # `controller.current_user == receipt.actor`, which is one query per row
+    # otherwise. Reading in batches keeps that at a handful of queries for the
+    # whole page instead of one per receipt.
+    def authorized_page
+      authorized = []
+      scanned = 0
+
+      while authorized.length < page_size && scanned < authorization_scan_limit
+        batch = own_events.includes(:actor).offset(scanned).limit(batch_size).to_a
+        break if batch.empty?
+
+        authorized.concat(batch.select { |event| authorized_to_read?(event) })
+        scanned += batch.length
+        break if batch.length < batch_size
+      end
+
+      authorized.first(page_size)
+    end
+
+    # Readers rather than bare constants so a host that ejects this controller
+    # can page it differently by overriding one method.
+    def page_size = PER_PAGE
+    def batch_size = BATCH_SIZE
+    def authorization_scan_limit = AUTHORIZATION_SCAN_LIMIT
 
     # The viewer's own events, newest first. Scoping by the actor reference the
     # evidence itself carries — rather than by a foreign key that a deleted
