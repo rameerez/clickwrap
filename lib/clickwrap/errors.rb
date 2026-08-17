@@ -18,7 +18,6 @@ module Clickwrap
   class NotDefinedError < Error; end
 
   class UnknownPolicyError < NotDefinedError; end
-  class UnknownDocumentError < NotDefinedError; end
   class UnknownStatementError < NotDefinedError; end
   class UnknownRetentionClassError < NotDefinedError; end
 
@@ -95,10 +94,6 @@ module Clickwrap
 
   # Raised when an identical idempotency key arrives with a different payload.
   class ReplayRejected < Error; end
-
-  # Raised when a same-database protected action is requested but Clickwrap
-  # cannot join the caller's transaction on the configured connection.
-  class TransactionUnavailable < Error; end
 
   # Raised when a registration block returns without persisting the exact
   # prospective actor the presentation was issued for.

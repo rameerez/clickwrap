@@ -197,6 +197,58 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     assert fragment["unavailable_reason"].present?
   end
 
+  test "a policy that fails closed refuses the whole capture rather than recording a gap" do
+    Clickwrap.policy :fail_closed_probe do
+      acknowledge :withdrawal_requirements, statement: "I acknowledge the withdrawal requirements."
+
+      review_request_evidence_configuration_on Date.new(2027, 8, 15)
+      record_ip_address(
+        encrypted: true,
+        delete_after: 90.days,
+        fail_if_unavailable: true,
+        because: "Investigate disputed submissions"
+      )
+
+      retain_with :ordinary_agreement_evidence
+    end
+
+    error = assert_raises(Clickwrap::RequestEvidenceUnavailable) do
+      capture_clickwrap(:fail_closed_probe, actor: @user, http_request: nil,
+                                            answers: { withdrawal_requirements: "1" })
+    end
+
+    # The message names the policy, the category, and the reason — and never
+    # the value, because an exception travels into logs and issue trackers,
+    # which is precisely where a recorded IP address must not appear.
+    assert_match(/fail_closed_probe/, error.message)
+    assert_match(/ip_address/, error.message)
+    assert_match(/fail_if_unavailable: true/, error.message)
+
+    # Required request evidence and the act it belongs to commit together or
+    # not at all. A half-formed event with a hole in it is the thing this
+    # refusal exists to prevent.
+    assert_equal 0, Clickwrap::Event.for_policy(:fail_closed_probe).count
+  end
+
+  test "the same missing value is an explicit unavailable state when the policy does not fail closed" do
+    Clickwrap.policy :records_but_tolerates_probe do
+      acknowledge :withdrawal_requirements, statement: "I acknowledge the withdrawal requirements."
+
+      review_request_evidence_configuration_on Date.new(2027, 8, 15)
+      record_ip_address(encrypted: true, delete_after: 90.days,
+                        because: "Investigate disputed submissions")
+
+      retain_with :ordinary_agreement_evidence
+    end
+
+    receipt = capture_clickwrap(:records_but_tolerates_probe, actor: @user, http_request: nil,
+                                                              answers: { withdrawal_requirements: "1" })
+
+    fragment = receipt.to_h.dig("request_evidence", "ip_address")
+    assert_equal "unavailable", fragment["state"]
+    assert fragment["unavailable_reason"].present?
+  end
+
   test "the recorded values are ciphertext at rest, and their provenance is not" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)

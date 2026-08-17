@@ -467,6 +467,39 @@ class SecurityTest < ActiveSupport::TestCase
     assert_equal "system/database_seed", Clickwrap.system_actor("database_seed").clickwrap_actor_reference
   end
 
+  # --- Remediation authorization ----------------------------------------------
+
+  test "a gate refuses to remediate a subject the host did not authorize this actor for" do
+    # The gate resolves the subject SERVER-SIDE and then asks the host whether
+    # this actor may remediate for it. Without that question, a gate declared
+    # with `subject_with:` would happily mint a signed remediation token for
+    # somebody else's record. The integration tests see this as a 404 — the
+    # denial must not disclose that the record exists — which is exactly why
+    # the raise itself needs pinning: a 404 can come from several places, and
+    # only one of them is this check.
+    someone_elses = create_withdrawal(user: @attacker)
+    controller = WithdrawalReviewsController.new
+
+    error = assert_raises(Clickwrap::RemediationNotAuthorized) do
+      controller.send(:authorize_clickwrap_remediation_context!, :driver_declaration,
+                      actor: @user, subject: someone_elses, represented_party: nil)
+    end
+
+    assert_match(/did not authorize this actor/, error.message)
+    assert_kind_of Clickwrap::RemediationInvalid, error
+  end
+
+  test "a gate refuses to remediate for a represented party the host did not authorize" do
+    controller = WithdrawalReviewsController.new
+    Clickwrap.config.authorize_clickwrap_remediation_represented_party_with =
+      ->(actor:, represented_party:, policy:, controller:) { false }
+
+    assert_raises(Clickwrap::RemediationNotAuthorized) do
+      controller.send(:authorize_clickwrap_remediation_context!, :driver_declaration,
+                      actor: @user, subject: nil, represented_party: create_organization)
+    end
+  end
+
   # --- Leakage ----------------------------------------------------------------
 
   test "no prohibited claim appears anywhere in the shipped library or its output" do
