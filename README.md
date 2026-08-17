@@ -119,11 +119,18 @@ Sounds good? Let's get started!
 
 Add the gem and run the installer:
 
+```ruby
+# Gemfile
+gem "clickwrap", github: "rameerez/clickwrap"
+```
+
 ```bash
-bundle add clickwrap
+bundle install
 bin/rails generate clickwrap:install
 bin/rails db:migrate
 ```
+
+`bundle add clickwrap` would install version 0.0.0, a deliberately empty name placeholder on RubyGems — install from GitHub until the first real version is published there.
 
 The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
 
