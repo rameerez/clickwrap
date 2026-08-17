@@ -11,7 +11,7 @@ module Clickwrap
   module EngineHelper
     # The standalone capture screen for one policy — the remediation route:
     #
-    #   <%= link_to "Complete your declaration", clickwrap_capture_path(:driver_declaration) %>
+    #   <%= link_to "Complete your declaration", clickwrap_capture_path(:contractor_declaration) %>
     #
     # Any extra options become query parameters, which is how a caller passes
     # `return_to:` for a flow that should resume where it left off.

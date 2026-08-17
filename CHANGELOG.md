@@ -186,7 +186,7 @@ wished we had written.
   document. Placeholders are still written when no convention matches, and a
   convention only counts when both of its documents exist.
 
-### Added — the hardening pass (driven by an independent adversarial audit of the CarHey integration)
+### Added — the hardening pass (driven by an independent adversarial audit of the first production integration)
 
 - **Policy-declared tenant semantics: `tenant_is :not_applicable | :optional | :required`.**
   Presentation, capture, verification, and import all resolve the tenant
@@ -256,7 +256,7 @@ wished we had written.
   `declined?`) that read the validated event being committed instead of
   re-parsing browser params.
 
-Changes driven by the first real-host integration (CarHey):
+Changes driven by the first production host application:
 
 ### Changed
 
@@ -332,7 +332,7 @@ Changes driven by the first real-host integration (CarHey):
   `clickwrap_submit_button` own the three contracts a hand-written form gets
   wrong silently — the envelope name, the statement control names/ids, and a
   call to action worded by the signed manifest itself. The host owns every
-  class and wrapper around them. (Extracted from the CarHey money-path
+  class and wrapper around them. (Extracted from the first production host's money-path
   migration, where each custom form repeated all three by hand.)
 - **`Clickwrap.verify(..., require_current_revision: true)`** — opt-in
   revision currency: evidence recorded under a superseded policy revision

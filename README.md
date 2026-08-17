@@ -427,14 +427,14 @@ network work there. The provider call starts only after the helper returns.
 Clickwrap.policy :withdrawal_authorization do
   acknowledge :withdrawal_requirements
 
-  declare :ride_exclusivity,
-    subject_fingerprint_version: "covered-rides-v1",
-    subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_rides_fingerprint }
+  declare :coverage_exclusivity,
+    subject_fingerprint_version: "covered-orders-v1",
+    subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_orders_fingerprint }
 
   authorize :withdrawal,
     one_time: true,
     valid_for: 10.minutes,
-    requires: %i[withdrawal_requirements ride_exclusivity]
+    requires: %i[withdrawal_requirements coverage_exclusivity]
 
   retain_with :regulated_evidence
 end
@@ -450,7 +450,7 @@ The actor proxy is the everyday API:
 user.clickwraps.current_for?(:signup)
 user.clickwraps.agreed_to?(:terms)
 user.clickwraps.consented_to?(:product_updates)
-user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+user.clickwraps.declared?(:independent_contractor, subject: scheme)
 user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
 ```
 
@@ -459,7 +459,7 @@ When "no" needs an explanation, `verify` returns a structured result with a stab
 ```ruby
 preparation = Clickwrap.verify(:withdrawal_preparation, actor: user,
                                require_current_revision: true)
-declaration = Clickwrap.verify(:ride_exclusivity, actor: user, subject: user,
+declaration = Clickwrap.verify(:coverage_exclusivity, actor: user, subject: user,
                                require_current_revision: true)
 
 declaration.stale_policy_revision?         # legal reworded it → re-ask

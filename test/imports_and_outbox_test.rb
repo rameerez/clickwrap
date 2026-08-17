@@ -49,7 +49,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     # What stays different is the evidence, not the answer: the event carries
     # `imported_provider` attribution and names its unknowns, and
     # `require_current_version` still sends people back when the documents
-    # move on. (The CarHey migration is where this semantic was settled.)
+    # move on. (The first production host migration is where this semantic was settled.)
     assert_clickwrap_current :signup, actor: @user
     assert @user.clickwraps.agreed_to?(:terms)
     assert @user.clickwraps.acknowledged?(:privacy_notice)
@@ -258,7 +258,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       subject: withdrawal,
       provider_name: "stripe",
       submission: submission_for(presentation, { withdrawal_requirements: "1",
-                                                 ride_exclusivity: "1", withdrawal: "1" })
+                                                 coverage_exclusivity: "1", withdrawal: "1" })
     )
 
     assert_kind_of Clickwrap::ExternalAction, action
@@ -287,7 +287,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       subject: withdrawal,
       provider_name: "stripe",
       submission: submission_for(presentation, { withdrawal_requirements: "1",
-                                                 ride_exclusivity: "1", withdrawal: "1" })
+                                                 coverage_exclusivity: "1", withdrawal: "1" })
     ) do |pending_action:, pending_receipt:|
       observed = [pending_action.id, pending_receipt.event_id]
       withdrawal.update!(clickwrap_event_id: pending_receipt.event_id)
@@ -310,7 +310,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       actor: @user,
       subject: withdrawal,
       submission: submission_for(presentation, { withdrawal_requirements: "1",
-                                                 ride_exclusivity: "1", withdrawal: "1" }),
+                                                 coverage_exclusivity: "1", withdrawal: "1" }),
       after_pending_action_is_saved_inside_transaction: callback
     )
 
@@ -338,7 +338,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
         actor: @user,
         subject: withdrawal,
         submission: submission_for(presentation, { withdrawal_requirements: "1",
-                                                   ride_exclusivity: "1", withdrawal: "1" })
+                                                   coverage_exclusivity: "1", withdrawal: "1" })
       ) do |pending_receipt:, **|
         withdrawal.update!(clickwrap_event_id: pending_receipt.event_id)
         raise "legacy projection failed"
@@ -354,7 +354,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
     submission = submission_for(presentation, { withdrawal_requirements: "1",
-                                                ride_exclusivity: "1", withdrawal: "1" })
+                                                coverage_exclusivity: "1", withdrawal: "1" })
     hook_calls = 0
 
     first = Clickwrap.authorize_external_action!(
@@ -399,7 +399,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
         provider_name: "stripe",
         submission: submission_for(
           presentation,
-          { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+          { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
         )
       )
     end
@@ -434,7 +434,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   test "a repeated authorization request reuses the same outbox row and key" do
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
 
     first = Clickwrap.authorize_external_action!(
       :withdrawal_authorization, actor: @user, subject: withdrawal,
@@ -518,7 +518,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       assert_raises(Clickwrap::EventWriteFailed) do
         capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                          answers: { withdrawal_requirements: "1",
-                                                                    ride_exclusivity: "1",
+                                                                    coverage_exclusivity: "1",
                                                                     withdrawal: "1" }) do
           ran = true
           withdrawal.update!(state: "submitted")
@@ -546,7 +546,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
       assert_raises(Clickwrap::Testing::DomainWriteFailed) do
         capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                          answers: { withdrawal_requirements: "1",
-                                                                    ride_exclusivity: "1",
+                                                                    coverage_exclusivity: "1",
                                                                     withdrawal: "1" }) do
           withdrawal.update!(state: "submitted")
         end
@@ -823,7 +823,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
         presentation,
         {
           withdrawal_requirements: "1",
-          ride_exclusivity: "1",
+          coverage_exclusivity: "1",
           withdrawal: "1"
         }
       )

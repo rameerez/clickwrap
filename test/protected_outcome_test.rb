@@ -53,7 +53,7 @@ class ProtectedOutcomeTest < ActiveSupport::TestCase
       :withdrawal_authorization,
       actor: @user,
       subject: @withdrawal,
-      answers: { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+      answers: { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
     )
 
     assert_nil receipt.event.protected_outcome

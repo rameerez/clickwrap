@@ -117,8 +117,8 @@ module Clickwrap
 
     # The fingerprint of whatever the policy says identifies this subject. It is
     # how an authorization for one withdrawal stops being usable for a different
-    # one, and how a declaration about one set of rides stops covering a changed
-    # set.
+    # one, and how a declaration about one set of orders stops covering a
+    # changed set.
     def subject_fingerprint
       SubjectFingerprint.for(policy, subject)
     end

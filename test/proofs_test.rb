@@ -46,7 +46,7 @@ class ProofsTest < ActiveSupport::TestCase
   end
 
   test "proof A: an account cannot be created without its evidence" do
-    # The exact failure RailsFast and CarHey both had: the account is already
+    # The exact failure both production host applications had: the account is already
     # persisted, the evidence write fails, and the exception is rescued.
     email = "atomic-#{SecureRandom.hex(4)}@example.com"
     prospective_actor = User.new(email: email, name: "New")
@@ -98,7 +98,7 @@ class ProofsTest < ActiveSupport::TestCase
     assert Clickwrap::Event.exists?(id: receipt.event_id)
   end
 
-  # --- Proof B: driver declaration — lifecycle and composition ---------------
+  # --- Proof B: contractor declaration — lifecycle and composition ---------------
   #
   # Fails if the gem replaces the domain model, weakens server ownership, or
   # needs a private hook.
@@ -107,28 +107,28 @@ class ProofsTest < ActiveSupport::TestCase
     user = create_user
     scheme = create_withdrawal(user: user)
 
-    presentation = present_clickwrap(:driver_declaration, actor: user, subject: scheme)
+    presentation = present_clickwrap(:contractor_declaration, actor: user, subject: scheme)
     offered = presentation.statements.first.assertion
 
     receipt = committed_test_receipt(
-      Clickwrap.capture!(:driver_declaration, actor: user, subject: scheme,
-                                              submission: submission_for(
-                                                presentation, { non_professional_driver: "1" }
-                                              ))
+      Clickwrap.capture!(:contractor_declaration, actor: user, subject: scheme,
+                                                  submission: submission_for(
+                                                    presentation, { independent_contractor: "1" }
+                                                  ))
     )
 
     # The original bug recorded Terms acceptance while the server offer omitted
     # the declaration. The offered and recorded sentences are the same string
     # here, and the test would fail if they drifted.
-    assert_equal "I declare that I drive privately and not as a professional driver.", offered
+    assert_equal "I declare that I provide these services as an independent contractor, not as an employee.", offered
     assert_equal offered, receipt.statements.first.assertion_text
   end
 
   test "proof B: the policy kind is declaration, not generic acceptance" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    receipt = capture_clickwrap(:driver_declaration, actor: user, subject: scheme,
-                                                     answers: { non_professional_driver: "1" })
+    receipt = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
 
     assert_equal "declaration", receipt.statements.first.kind
     assert_equal "declared", receipt.statements.first.action
@@ -137,8 +137,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof B: scheme, validity, and fingerprint are server-owned" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    receipt = capture_clickwrap(:driver_declaration, actor: user, subject: scheme,
-                                                     answers: { non_professional_driver: "1" })
+    receipt = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
 
     statement = receipt.statements.first
     assert statement.expires_at.present?, "validity comes from the policy, not from the browser"
@@ -150,8 +150,8 @@ class ProofsTest < ActiveSupport::TestCase
     user = create_user
     scheme = create_withdrawal(user: user)
 
-    receipt = capture_clickwrap_and(:driver_declaration, actor: user, subject: scheme,
-                                                         answers: { non_professional_driver: "1" }) do |pending|
+    receipt = capture_clickwrap_and(:contractor_declaration, actor: user, subject: scheme,
+                                                             answers: { independent_contractor: "1" }) do |pending|
       scheme.update!(state: "declared", authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -162,16 +162,16 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof B: expiry and renewal work without rewriting the original" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    original = capture_clickwrap(:driver_declaration, actor: user, subject: scheme,
-                                                      answers: { non_professional_driver: "1" })
+    original = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                          answers: { independent_contractor: "1" })
 
     travel_to 13.months.from_now do
-      assert_not user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+      assert_not user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
-      renewed = capture_clickwrap(:driver_declaration, actor: user, subject: scheme,
-                                                       answers: { non_professional_driver: "1" })
+      renewed = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                           answers: { independent_contractor: "1" })
 
-      assert user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+      assert user.clickwraps.declared?(:independent_contractor, subject: scheme)
       assert_not_equal original.event_id, renewed.event_id
       assert Clickwrap::Event.exists?(id: original.event_id)
       assert original.event.reload.digest_verified?
@@ -192,21 +192,21 @@ class ProofsTest < ActiveSupport::TestCase
     kinds = receipt.statements.to_h { |s| [s.statement_key, s.kind] }
 
     assert_equal "acknowledgment", kinds["withdrawal_requirements"]
-    assert_equal "declaration", kinds["ride_exclusivity"]
+    assert_equal "declaration", kinds["coverage_exclusivity"]
     assert_equal "authorization", kinds["withdrawal"]
   end
 
-  test "proof C: the covered ride set is fingerprinted into the evidence" do
+  test "proof C: the covered order set is fingerprinted into the evidence" do
     user = create_user
-    withdrawal = create_withdrawal(user: user, covered_ride_ids: "1,2,3")
+    withdrawal = create_withdrawal(user: user, covered_order_ids: "1,2,3")
     capture_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
                                                  answers: withdrawal_answers)
 
     assert Clickwrap.verify(:withdrawal_authorization, actor: user, subject: withdrawal).success?
 
-    withdrawal.update!(covered_ride_ids: "1,2,3,4")
+    withdrawal.update!(covered_order_ids: "1,2,3,4")
 
-    # The exact CarHey invariant: evidence covering one ride set must not
+    # The invariant the first production host needed: evidence covering one order set must not
     # authorize a payout covering a different one.
     result = Clickwrap.verify(:withdrawal_authorization, actor: user, subject: withdrawal)
     assert_equal :subject_fingerprint_mismatch, result.error
@@ -272,7 +272,7 @@ class ProofsTest < ActiveSupport::TestCase
   test "B2B guide delivery and marketing consent are separate statements" do
     user = create_user
 
-    # CarHey bundled guide delivery and marketing into one required box. Here
+    # The first production host bundled guide delivery and marketing into one required box. Here
     # each purpose is its own statement, each starts unselected, and taking one
     # does not take the other.
     capture_clickwrap(:marketing_preferences, actor: user, answers: { product_updates: "1" })
@@ -379,7 +379,7 @@ class ProofsTest < ActiveSupport::TestCase
   private
 
   def withdrawal_answers
-    { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
   end
 
   def registration_submission(prospective_actor, registration_flow_id)

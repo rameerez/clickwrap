@@ -28,10 +28,10 @@ Clickwrap.document :withdrawal_requirements,
                    locale: :en,
                    from: Rails.root.join("app/content/legal/withdrawal_requirements.md")
 
-Clickwrap.document :driver_declaration,
+Clickwrap.document :contractor_declaration,
                    version: "2026-08-15",
                    locale: :en,
-                   from: Rails.root.join("app/content/legal/driver_declaration.md")
+                   from: Rails.root.join("app/content/legal/contractor_declaration.md")
 
 # --- Retention classes -------------------------------------------------------
 
@@ -126,10 +126,10 @@ Clickwrap.policy :research_contact do
   retain_with :marketing_consent_evidence
 end
 
-Clickwrap.policy :driver_declaration do
-  declare :non_professional_driver,
-          document: :driver_declaration,
-          statement: "I declare that I drive privately and not as a professional driver.",
+Clickwrap.policy :contractor_declaration do
+  declare :independent_contractor,
+          document: :contractor_declaration,
+          statement: "I declare that I provide these services as an independent contractor, not as an employee.",
           valid_for: 1.year,
           subject_fingerprint_version: "withdrawal-evidence-v1",
           subject_fingerprint_with: ->(scheme) { scheme.evidence_fingerprint }
@@ -144,18 +144,18 @@ Clickwrap.policy :withdrawal_authorization do
   acknowledge :withdrawal_requirements,
               statement: "I acknowledge the withdrawal requirements."
 
-  declare :ride_exclusivity,
+  declare :coverage_exclusivity,
           document: :withdrawal_requirements,
-          statement: "I declare that these rides have not been claimed for any other payout.",
-          subject_fingerprint_version: "covered-rides-v1",
-          subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_rides_fingerprint }
+          statement: "I declare that these orders have not been claimed for any other payout.",
+          subject_fingerprint_version: "covered-orders-v1",
+          subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_orders_fingerprint }
 
   authorize :withdrawal,
             document: :withdrawal_requirements,
             statement: "I authorize this withdrawal.",
             one_time: true,
             valid_for: 10.minutes,
-            requires: %i[withdrawal_requirements ride_exclusivity],
+            requires: %i[withdrawal_requirements coverage_exclusivity],
             protected_outcome_version: "submitted-withdrawal-v1",
             record_protected_outcome_with: lambda { |withdrawal|
               Clickwrap.protected_outcome(
@@ -164,7 +164,7 @@ Clickwrap.policy :withdrawal_authorization do
                 state: withdrawal.state,
                 facts: {
                   amount_in_cents: withdrawal.amount_cents,
-                  covered_ride_ids: withdrawal.covered_ride_ids
+                  covered_order_ids: withdrawal.covered_order_ids
                 }
               )
             }

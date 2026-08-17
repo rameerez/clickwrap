@@ -228,7 +228,7 @@ gem:
 user.clickwraps.agreed_to?(:terms)
 user.clickwraps.acknowledged?(:privacy_notice)
 user.clickwraps.consented_to?(:product_updates)
-user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+user.clickwraps.declared?(:independent_contractor, subject: scheme)
 user.clickwraps.attested?(:bank_accepted_transfer)
 user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
 user.clickwraps.exempted_from?(:signup)

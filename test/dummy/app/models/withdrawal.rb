@@ -17,9 +17,9 @@ class Withdrawal < ApplicationRecord
     self
   end
 
-  # What the policy fingerprints. Changing the covered ride set changes this, so
+  # What the policy fingerprints. Changing the covered order set changes this, so
   # an authorization for one set cannot be replayed against another.
-  def covered_rides_fingerprint = "rides:#{covered_ride_ids}"
+  def covered_orders_fingerprint = "orders:#{covered_order_ids}"
 
-  def evidence_fingerprint = "withdrawal:#{id}:#{amount_cents}:#{covered_ride_ids}"
+  def evidence_fingerprint = "withdrawal:#{id}:#{amount_cents}:#{covered_order_ids}"
 end

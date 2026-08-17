@@ -428,10 +428,10 @@ exact operation":
   ```ruby
   preparation = Clickwrap.verify(:withdrawal_preparation, actor: user,
                                  require_current_revision: true)
-  declaration = Clickwrap.verify(:ride_exclusivity, actor: user, subject: user,
+  declaration = Clickwrap.verify(:coverage_exclusivity, actor: user, subject: user,
                                  require_current_revision: true)
 
-  declaration.subject_fingerprint_mismatch?   # the ride set changed
+  declaration.subject_fingerprint_mismatch?   # the order set changed
   declaration.stale_policy_revision?          # legal reworded it → re-ask
   declaration.recorded_after?(preparation)    # order enforced, not assumed
   ```

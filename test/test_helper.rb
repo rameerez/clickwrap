@@ -112,9 +112,9 @@ module ActiveSupport
       Organization.create!(name: name)
     end
 
-    def create_withdrawal(user: nil, amount_cents: 25_000, covered_ride_ids: "1,2,3")
+    def create_withdrawal(user: nil, amount_cents: 25_000, covered_order_ids: "1,2,3")
       Withdrawal.create!(user: user || create_user, amount_cents: amount_cents,
-                         covered_ride_ids: covered_ride_ids)
+                         covered_order_ids: covered_order_ids)
     end
 
     # Counts the queries a block asks Active Record for.

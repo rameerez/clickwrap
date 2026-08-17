@@ -84,11 +84,11 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "capture stores the resolved assertion text, not an I18n key" do
-    receipt = capture_clickwrap(:driver_declaration, actor: @user, subject: create_withdrawal,
-                                                     answers: { non_professional_driver: "1" })
+    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: create_withdrawal,
+                                                         answers: { independent_contractor: "1" })
 
     statement = receipt.statements.first
-    assert_equal "I declare that I drive privately and not as a professional driver.",
+    assert_equal "I declare that I provide these services as an independent contractor, not as an employee.",
                  statement.assertion_text
     assert_equal "en", statement.assertion_locale
   end
@@ -263,7 +263,7 @@ class CaptureTest < ActiveSupport::TestCase
     assert_equal withdrawal.to_gid.to_s, outcome["reference"]
     assert_equal "submitted", outcome["state"]
     assert_equal withdrawal.amount_cents, outcome.dig("facts", "amount_in_cents")
-    assert_equal withdrawal.covered_ride_ids, outcome.dig("facts", "covered_ride_ids")
+    assert_equal withdrawal.covered_order_ids, outcome.dig("facts", "covered_order_ids")
     assert Clickwrap::Digest.well_formed?(outcome["fingerprint"])
   end
 
@@ -465,6 +465,6 @@ class CaptureTest < ActiveSupport::TestCase
   private
 
   def default_withdrawal_answers
-    { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
   end
 end

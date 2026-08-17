@@ -241,7 +241,7 @@ class DoctorTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
 
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
 
     Clickwrap.authorize_external_action!(
       :withdrawal_authorization,

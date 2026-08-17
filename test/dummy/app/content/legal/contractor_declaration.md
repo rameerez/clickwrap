@@ -1,4 +1,4 @@
-# Driver Declaration (dummy fixture)
+# Contractor Declaration (dummy fixture)
 
 Placeholder declaration used only by the clickwrap gem's test suite.
 

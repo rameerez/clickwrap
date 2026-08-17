@@ -17,7 +17,7 @@ class OneTimeAuthorizationConcurrencyTest < ActiveSupport::TestCase
     presentations = 2.times.map do
       present_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal)
     end
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
     starts = Queue.new
     results = Queue.new
     counter = 0

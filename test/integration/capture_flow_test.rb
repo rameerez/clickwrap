@@ -550,25 +550,25 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get "/withdrawal_reviews/#{withdrawal.id}"
 
     token = remediation_redirect_token
-    assert_equal "/legal/policies/driver_declaration", remediation_redirect_uri.path
+    assert_equal "/legal/policies/contractor_declaration", remediation_redirect_uri.path
 
     follow_redirect!
     assert_response :success
     assert_equal token, css_select("input[name=remediation_token]").first["value"]
 
-    post "/legal/policies/driver_declaration", params: {
+    post "/legal/policies/contractor_declaration", params: {
       remediation_token: token,
       # This browser-owned value conflicts with the signed route and therefore
       # must lose. The server returns to the blocked action in the token.
       return_to: "/billing",
       clickwrap_submission: {
         presentation_token: presentation_token,
-        answers: { non_professional_driver: "1" }
+        answers: { independent_contractor: "1" }
       }
     }
 
     assert_redirected_to "/withdrawal_reviews/#{withdrawal.id}"
-    assert Clickwrap.current?(:driver_declaration, actor: @user, subject: withdrawal)
+    assert Clickwrap.current?(:contractor_declaration, actor: @user, subject: withdrawal)
 
     get "/withdrawal_reviews/#{withdrawal.id}"
     assert_response :success
@@ -584,7 +584,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get destination
 
     assert_response :not_found
-    assert_no_clickwrap_event :driver_declaration, actor: @other_actor
+    assert_no_clickwrap_event :contractor_declaration, actor: @other_actor
   end
 
   test "a subject-bound gate does not disclose another actor's subject" do
@@ -594,7 +594,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get "/withdrawal_reviews/#{withdrawal.id}"
 
     assert_response :not_found
-    assert_no_clickwrap_event :driver_declaration, actor: @other_actor
+    assert_no_clickwrap_event :contractor_declaration, actor: @other_actor
   end
 
   test "a remediation token is invalid after its subject changes" do
@@ -607,7 +607,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get destination
 
     assert_response :not_found
-    assert_no_clickwrap_event :driver_declaration, actor: @user
+    assert_no_clickwrap_event :contractor_declaration, actor: @user
   end
 
   test "a remediation token is invalid after its subject is deleted" do
@@ -620,7 +620,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     get destination
 
     assert_response :not_found
-    assert_no_clickwrap_event :driver_declaration, actor: @user
+    assert_no_clickwrap_event :contractor_declaration, actor: @user
   end
 
   test "a policy recording representative authority cannot be completed on the bare engine screen" do

@@ -87,7 +87,7 @@ class RetentionTest < ActiveSupport::TestCase
     end
 
     scheme = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme)
+    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme)
 
     assert_nil receipt.event.reload.retain_core_event_until
     assert_equal "regulated_evidence_retention_ends", receipt.event.retention_rule_name

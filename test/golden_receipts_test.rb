@@ -14,6 +14,13 @@ require "test_helper"
 # When a receipt format legitimately changes, the correct move is to add a new
 # fixture under the new schema name and LEAVE THESE ALONE. A fixture that gets
 # updated to match new behavior has stopped testing anything.
+#
+# That is also why these files are the one place in the repository still
+# carrying the example vocabulary the rest of the suite was renamed away from
+# (`ride_exclusivity`, `covered-rides-v1`). They are captured artifacts of a
+# moment, not documentation, and their digests are computed over those exact
+# bytes: rewriting the words would mean recomputing the digests, which is the
+# same thing as saying they were never frozen at all.
 class GoldenReceiptsTest < ActiveSupport::TestCase
   FIXTURE_DIR = File.expand_path("fixtures/receipts", __dir__)
   DOCUMENT_DIR = File.join(FIXTURE_DIR, "documents")

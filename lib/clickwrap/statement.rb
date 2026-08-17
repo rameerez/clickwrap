@@ -211,7 +211,7 @@ module Clickwrap
         raise DefinitionError,
               "Statement #{key} configures `subject_fingerprint_with:` but gives no " \
               "`subject_fingerprint_version:`. Name the callback contract (for example " \
-              '"covered-rides-v1") and change that name whenever its behavior changes.'
+              '"covered-orders-v1") and change that name whenever its behavior changes.'
       end
 
       if record_protected_outcome_with && !record_protected_outcome_with.respond_to?(:call)

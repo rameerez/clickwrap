@@ -4,7 +4,7 @@ require "rails/generators/base"
 
 module Clickwrap
   module Generators
-    # `rails generate clickwrap:policy driver_declaration declare
+    # `rails generate clickwrap:policy contractor_declaration declare
     # --statement-text="I declare ..."` — one compiling policy and its test.
     #
     # The verb and exact first-person statement are required because choosing or

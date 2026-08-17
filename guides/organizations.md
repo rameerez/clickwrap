@@ -96,7 +96,7 @@ If the application uses the organization as its Clickwrap tenant too, configure
 the resolver once — **and declare tenant semantics on every policy**, because
 the resolver alone reproduces a real production bug: an organization member's
 session resolves an ambient organization on every request, so a *personal*
-policy (a driver declaration, a payout gate) would silently bind — or refuse —
+policy (a contractor declaration, a payout gate) would silently bind — or refuse —
 under whatever organization happened to be current:
 
 ```ruby
@@ -106,12 +106,12 @@ Clickwrap.configure do |config|
   }
 end
 
-Clickwrap.policy :driver_declaration do
+Clickwrap.policy :contractor_declaration do
   tenant_is :not_applicable   # personal evidence: joining an org changes nothing
 
-  declare :non_professional_driver,
+  declare :independent_contractor,
     document: :terms,
-    statement: "I share rides in my personal car, not as commercial transport."
+    statement: "I provide these services as an independent contractor, not as an employee."
 
   retain_with :ordinary_agreement_evidence
 end

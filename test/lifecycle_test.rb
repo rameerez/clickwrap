@@ -69,18 +69,18 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "a declaration expires without implying it was false when it was made" do
     scheme = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                                     answers: { non_professional_driver: "1" })
+    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
 
-    assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+    assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
-    state = @user.clickwraps.declaration(:non_professional_driver, subject: scheme)
+    state = @user.clickwraps.declaration(:independent_contractor, subject: scheme)
     assert_in_delta 1.year.from_now.to_i, state.expires_at.to_i, 60
 
     travel_to 13.months.from_now do
-      assert_not @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+      assert_not @user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
-      result = Clickwrap.verify(:driver_declaration, actor: @user, subject: scheme)
+      result = Clickwrap.verify(:contractor_declaration, actor: @user, subject: scheme)
       assert_equal :declaration_expired, result.error
 
       # The original statement is still exactly what it was.
@@ -91,23 +91,23 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "expiry is evaluated live rather than depending on a job having run" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                           answers: { non_professional_driver: "1" })
+    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                               answers: { independent_contractor: "1" })
 
     travel_to 13.months.from_now do
       # No sweep has run. The projection still says "active", and the answer is
       # still no — because evidence must not become wrongly valid just because a
       # background job did not reach it.
       assert_equal "active", Clickwrap::StatementState.last.state
-      assert_not @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+      assert_not @user.clickwraps.declared?(:independent_contractor, subject: scheme)
     end
   end
 
   test "the expiry sweep appends the lifecycle event at the exact validity boundary" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                           answers: { non_professional_driver: "1" })
-    state = @user.clickwraps.declaration(:non_professional_driver, subject: scheme)
+    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                               answers: { independent_contractor: "1" })
+    state = @user.clickwraps.declaration(:independent_contractor, subject: scheme)
 
     travel_to state.expires_at, with_usec: true do
       expiry = nil
@@ -123,17 +123,17 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "correcting a declaration appends a correction and leaves the original saying what it said" do
     scheme = create_withdrawal(user: @user)
-    original = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                                      answers: { non_professional_driver: "1" })
+    original = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                          answers: { independent_contractor: "1" })
 
     correction = nil
     assert_difference -> { Clickwrap::Event.where(event_type: "correction").count }, 1 do
       correction = committed_test_receipt(Clickwrap.correct_declaration!(
-                                            :non_professional_driver,
+                                            :independent_contractor,
                                             actor: @user,
                                             subject: scheme,
                                             because: "The person told us their circumstances changed",
-                                            submission: lifecycle_submission(:driver_declaration,
+                                            submission: lifecycle_submission(:contractor_declaration,
                                                                              actor: @user, subject: scheme)
                                           ))
     end
@@ -152,10 +152,10 @@ class LifecycleTest < ActiveSupport::TestCase
     # The corrected statement is the one that counts now, and it is still an
     # ACTIVE declaration — a correction replaces what the person says, it does
     # not put them in a state of having declared nothing.
-    state = @user.clickwraps.declaration(:non_professional_driver, subject: scheme)
+    state = @user.clickwraps.declaration(:independent_contractor, subject: scheme)
     assert_equal "active", state.state
     assert_equal correction.event_id, state.current_event_id
-    assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+    assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
   end
 
   test "an agreement cannot be corrected, because that is what a new version is for" do
@@ -170,30 +170,30 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "renewing starts a new validity period rather than extending the old one" do
     scheme = create_withdrawal(user: @user)
-    original = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                                      answers: { non_professional_driver: "1" })
-    first_expiry = @user.clickwraps.declaration(:non_professional_driver, subject: scheme).expires_at
+    original = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                          answers: { independent_contractor: "1" })
+    first_expiry = @user.clickwraps.declaration(:independent_contractor, subject: scheme).expires_at
 
     renewal = nil
     travel_to 6.months.from_now do
       assert_difference -> { Clickwrap::Event.where(event_type: "renewal").count }, 1 do
         renewal = committed_test_receipt(Clickwrap.renew!(
-                                           :non_professional_driver,
+                                           :independent_contractor,
                                            actor: @user,
                                            subject: scheme,
                                            because: "The person renewed their declaration before it lapsed",
-                                           submission: lifecycle_submission(:driver_declaration,
+                                           submission: lifecycle_submission(:contractor_declaration,
                                                                             actor: @user, subject: scheme)
                                          ))
       end
 
-      renewed_expiry = @user.clickwraps.declaration(:non_professional_driver, subject: scheme).expires_at
+      renewed_expiry = @user.clickwraps.declaration(:independent_contractor, subject: scheme).expires_at
 
       # A full period from the renewal, not the old expiry pushed along — so a
       # stale expiry can never quietly survive a renewal.
       assert_in_delta 1.year.from_now.to_i, renewed_expiry.to_i, 60
       assert_operator renewed_expiry, :>, first_expiry
-      assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+      assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
     end
 
     assert_equal "renewal", renewal.event.event_type
@@ -252,27 +252,27 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "only consent has a changeable scope" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                           answers: { non_professional_driver: "1" })
+    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                               answers: { independent_contractor: "1" })
 
     error = assert_raises(Clickwrap::LifecycleError) do
-      Clickwrap.change_consent_scope!(:non_professional_driver, actor: @user, subject: scheme,
-                                                                because: "Trying to rescope a declaration")
+      Clickwrap.change_consent_scope!(:independent_contractor, actor: @user, subject: scheme,
+                                                               because: "Trying to rescope a declaration")
     end
 
     assert_match(/Only consent has a changeable scope/, error.message)
   end
 
   test "a declaration is bound to its subject fingerprint" do
-    scheme = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
-    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
-                                           answers: { non_professional_driver: "1" })
+    scheme = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
+    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                               answers: { independent_contractor: "1" })
 
-    assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+    assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
-    scheme.update!(covered_ride_ids: "1,2,3,4")
+    scheme.update!(covered_order_ids: "1,2,3,4")
 
-    result = Clickwrap.verify(:driver_declaration, actor: @user, subject: scheme)
+    result = Clickwrap.verify(:contractor_declaration, actor: @user, subject: scheme)
     assert_equal :subject_fingerprint_mismatch, result.error
   end
 
@@ -415,7 +415,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "an event id re-derives the subject fingerprint when a subject is passed" do
-    withdrawal = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
+    withdrawal = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
     capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                  answers: withdrawal_answers)
     event_id = @user.clickwraps.events.last.id
@@ -424,7 +424,7 @@ class LifecycleTest < ActiveSupport::TestCase
 
     # The subject is the same RECORD, so subject_key still matches — only the
     # fingerprint can tell that what the declaration covered has changed.
-    withdrawal.update!(covered_ride_ids: "1,2,3,4")
+    withdrawal.update!(covered_order_ids: "1,2,3,4")
 
     result = Clickwrap.verify(event_id, subject: withdrawal)
 
@@ -434,12 +434,12 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "an event id verified with no subject still answers the question it was asked" do
-    withdrawal = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
+    withdrawal = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
     capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                  answers: withdrawal_answers)
     event_id = @user.clickwraps.events.last.id
 
-    withdrawal.update!(covered_ride_ids: "1,2,3,4")
+    withdrawal.update!(covered_order_ids: "1,2,3,4")
 
     # Nobody named a subject, so nothing about a subject was claimed. Silently
     # checking against the live record would answer a question that was not
@@ -547,7 +547,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   def withdrawal_answers
-    { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
   end
   test "recorded_after? makes multi-step ordering API instead of ULID folklore" do
     first = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
@@ -632,7 +632,7 @@ class LifecycleTest < ActiveSupport::TestCase
                              actor: :user,
                              subject: :self
     end
-    row = required_class.new(user: @user, covered_ride_ids: "9", amount_cents: 500)
+    row = required_class.new(user: @user, covered_order_ids: "9", amount_cents: 500)
 
     assert_not row.valid?
     assert_match(/must be linked inside/, row.errors[:clickwrap_event].to_sentence)

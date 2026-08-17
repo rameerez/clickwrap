@@ -215,7 +215,7 @@ class SecurityTest < ActiveSupport::TestCase
   test "a repeated submit of the same presentation produces one event and one action" do
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
     counter = 0
 
     2.times do
@@ -237,7 +237,7 @@ class SecurityTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     first = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
     second = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
     counter = 0
 
     Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
@@ -274,7 +274,7 @@ class SecurityTest < ActiveSupport::TestCase
 
   test "a new presentation after terminal state can create a deliberate new authorization" do
     withdrawal = create_withdrawal(user: @user)
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
 
     first = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
     Clickwrap.capture_and!(:withdrawal_authorization, actor: @user, subject: withdrawal,
@@ -307,7 +307,7 @@ class SecurityTest < ActiveSupport::TestCase
 
     withdrawal = create_withdrawal(user: @user)
     presentation = present_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal)
-    answers = { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
+    answers = { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
     counter = 0
     mutex = Mutex.new
     start_line = Queue.new
@@ -339,12 +339,12 @@ class SecurityTest < ActiveSupport::TestCase
 
     capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                  answers: { withdrawal_requirements: "1",
-                                                            ride_exclusivity: "1", withdrawal: "1" })
+                                                            coverage_exclusivity: "1", withdrawal: "1" })
 
     assert_raises(Clickwrap::OneTimeAuthorizationConflict) do
       capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
                                                    answers: { withdrawal_requirements: "1",
-                                                              ride_exclusivity: "1", withdrawal: "1" })
+                                                              coverage_exclusivity: "1", withdrawal: "1" })
     end
 
     states = Clickwrap::StatementState.for_actor(@user.clickwrap_actor_reference)
@@ -481,7 +481,7 @@ class SecurityTest < ActiveSupport::TestCase
     controller = WithdrawalReviewsController.new
 
     error = assert_raises(Clickwrap::RemediationNotAuthorized) do
-      controller.send(:authorize_clickwrap_remediation_context!, :driver_declaration,
+      controller.send(:authorize_clickwrap_remediation_context!, :contractor_declaration,
                       actor: @user, subject: someone_elses, represented_party: nil)
     end
 
@@ -495,7 +495,7 @@ class SecurityTest < ActiveSupport::TestCase
       ->(actor:, represented_party:, policy:, controller:) { false }
 
     assert_raises(Clickwrap::RemediationNotAuthorized) do
-      controller.send(:authorize_clickwrap_remediation_context!, :driver_declaration,
+      controller.send(:authorize_clickwrap_remediation_context!, :contractor_declaration,
                       actor: @user, subject: nil, represented_party: create_organization)
     end
   end

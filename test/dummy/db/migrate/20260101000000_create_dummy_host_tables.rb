@@ -23,7 +23,7 @@ class CreateDummyHostTables < ActiveRecord::Migration[7.1]
     create_table :withdrawals do |t|
       t.references :user, null: false, foreign_key: true
       t.integer :amount_cents, null: false, default: 0
-      t.string :covered_ride_ids, null: false, default: ""
+      t.string :covered_order_ids, null: false, default: ""
       t.string :state, null: false, default: "draft"
       t.string :authorized_by_clickwrap_event
       t.string :clickwrap_event_id, limit: 26
