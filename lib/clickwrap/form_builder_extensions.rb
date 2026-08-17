@@ -79,9 +79,30 @@ module Clickwrap
     # wording is declared here. `form.clickwrap_submit` reuses it without a
     # second string. An ordinary `form.submit "Create account"` is supported too,
     # but Clickwrap verifies that it says exactly what the manifest says.
+    #
+    # A design system that renders its OWN button markup — not `form.submit`,
+    # so not something Clickwrap can check — takes the block form and reads the
+    # wording off the presentation instead of retyping it:
+    #
+    #   <%= form.clickwrap_fields :signup, submit_button_text: "Create account" do |clickwrap| %>
+    #     <button class="btn btn--primary" data-turbo-submits-with="Creating…">
+    #       <%= clickwrap.submit_button_text %>
+    #     </button>
+    #   <% end %>
+    #
+    # The block is yielded the whole Presenter::Result — `submit_button_text`,
+    # `statements`, `policy_key`, `locale` — and its output is rendered inside
+    # the same wrapper, after the controls. This is the shape that makes drift
+    # impossible rather than merely detected: there is one string, it is the
+    # signed one, and nothing has to compare two copies of it afterwards.
+    #
+    # `submit:` on `form.clickwrap` and `submit_button_text:` here are a
+    # deliberate pair, not a duplication. `submit:` says "render the button
+    # too"; `submit_button_text:` says "bind these exact words into the
+    # manifest, and I will render the button myself".
     def clickwrap_fields(policy_key, submit_button_text:, actor: NOT_GIVEN, subject: nil,
                          tenant: NOT_GIVEN, acting_for: nil, locale: nil, capture_channel: nil, errors: nil,
-                         **html_options)
+                         **html_options, &block)
       clickwrap_reserve_form_presentation!(policy_key)
       presentation = clickwrap_present(
         policy_key,
@@ -93,13 +114,19 @@ module Clickwrap
         locale: locale,
         capture_channel: capture_channel
       )
-      @clickwrap_expected_submit_button_text = presentation.submit_button_text
+
+      # A block that renders the action itself has already single-sourced the
+      # wording off the signed presentation, so there is no second copy left to
+      # verify — and arming the `form.submit` check would then reject a form
+      # that never called `form.submit` at all.
+      @clickwrap_expected_submit_button_text = presentation.submit_button_text unless block
 
       clickwrap_render_fields(
         presentation,
         submit: nil,
         errors: errors,
-        html_options: html_options
+        html_options: html_options,
+        after: (@template.capture(presentation, &block) if block)
       )
     end
 
@@ -205,12 +232,13 @@ module Clickwrap
     #
     # The gem's own file lives at
     # Clickwrap::Engine.root.join("app/views/clickwrap/shared/_fields.html.erb").
-    def clickwrap_render_fields(presentation, submit:, errors:, html_options:)
+    def clickwrap_render_fields(presentation, submit:, errors:, html_options:, after: nil)
       @template.render(
         partial: "clickwrap/shared/fields",
         locals: {
           presentation: presentation,
           submit: submit,
+          after: after,
           errors: errors || clickwrap_errors_from_view_context,
           wrapper_options: html_options
         }

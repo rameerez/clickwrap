@@ -24,12 +24,15 @@
   Locals:
     presentation    — a Clickwrap::Presenter::Result
     submit          — { text:, options: } to render the action here, or nil
+    after           — markup the host rendered from the presentation itself
+                      (the `form.clickwrap_fields do |clickwrap|` block), or nil
     errors          — { "statement_key" => "message" } from a failed capture
     wrapper_options — HTML options for the wrapper element
 %>
 <%
   errors = (local_assigns[:errors] || {}).to_h { |key, value| [key.to_s, value] }
   submit = local_assigns[:submit]
+  after = local_assigns[:after]
   wrapper_options = (local_assigns[:wrapper_options] || {}).symbolize_keys
   wrapper_classes = ["clickwrap", "clickwrap-fields", wrapper_options.delete(:class)].compact
   failing_statements = presentation.statements.select { |statement| errors[statement.key].present? }
@@ -63,5 +66,12 @@
       %>
       <%= submit_tag submit[:text], **button_options, class: button_classes %>
     </div>
+  <% end %>
+
+  <%# The host's own action, rendered by its own markup from this same
+      presentation. It sits here, after the controls and after the document
+      links, for exactly the reason above. %>
+  <% if after.present? %>
+    <div class="clickwrap-actions"><%= after %></div>
   <% end %>
 <% end %>

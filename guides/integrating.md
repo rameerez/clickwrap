@@ -316,6 +316,35 @@ and wrapper:
 is written once, at present time, so the recorded words and the pressed words
 cannot drift.
 
+### Keeping `form.clickwrap_fields` and your own button
+
+If you want the gem's controls but your design system's button markup, take the
+block form rather than dropping to a fully custom surface. The block is yielded
+the presentation, so the wording still comes from the signed manifest:
+
+```erb
+<%= form.clickwrap_fields :signup, submit_button_text: "Create account" do |clickwrap| %>
+  <button type="submit" class="btn btn--primary" data-turbo-submits-with="Creating…">
+    <%= clickwrap.submit_button_text %>
+  </button>
+<% end %>
+```
+
+`submit:` on `form.clickwrap` and `submit_button_text:` on
+`form.clickwrap_fields` are a deliberate pair, not a duplication:
+
+| | What it means |
+|---|---|
+| `form.clickwrap :signup, submit: "Create account"` | Bind these words **and render the button**. |
+| `form.clickwrap_fields :signup, submit_button_text: "Create account"` | Bind these words; **I render the action myself**. |
+
+With `clickwrap_fields`, render the action one of three ways:
+`form.clickwrap_submit` (Rails' button, wording reused automatically), the
+block above (your markup, wording read off the presentation), or an ordinary
+`form.submit "Create account"` — which Clickwrap checks against the signed
+wording and refuses if the two disagree. A raw `<button>` outside the block
+cannot be checked at all, which is exactly why the block exists.
+
 Hard-won rules for custom surfaces:
 
 - **Let the policy own the on-screen words.** Render `statement.assertion` as

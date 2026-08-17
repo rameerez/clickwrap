@@ -279,6 +279,55 @@ class FormBuilderTest < ActionView::TestCase
     assert_equal "Create account", Clickwrap::PresentationManifest.from_token(presentation_token).submit_button_text
   end
 
+  test "the block form hands the host the signed presentation to word its own button from" do
+    # A design system that renders its own <button> markup cannot be checked by
+    # the `form.submit` hook — a raw button bypasses it entirely. So instead of
+    # detecting drift afterwards, this shape removes the second copy of the
+    # string: the host reads the wording off the presentation that was signed.
+    render inline: <<~ERB
+      <%= form_with url: "/signup", method: :post do |form| %>
+        <%= form.clickwrap_fields :signup, actor: @user, submit_button_text: "Create account" do |clickwrap| %>
+          <button type="submit" class="btn"><%= clickwrap.submit_button_text %></button>
+        <% end %>
+      <% end %>
+    ERB
+
+    assert_select "button[type=submit].btn", text: "Create account", count: 1
+    assert_select "input[type=submit]", count: 0
+    assert_equal "Create account", Clickwrap::PresentationManifest.from_token(presentation_token).submit_button_text
+
+    # The host's action still renders after the controls and their document
+    # links: a link that only appears below the button has already been skipped.
+    assert_operator rendered.index("clickwrap-statements"), :<, rendered.index("btn")
+  end
+
+  test "the block form yields the whole presentation, not just its wording" do
+    render inline: <<~ERB
+      <%= form_with url: "/signup", method: :post do |form| %>
+        <%= form.clickwrap_fields :signup, actor: @user, submit_button_text: "Create account" do |clickwrap| %>
+          <p class="summary"><%= clickwrap.policy_key %>: <%= clickwrap.statements.map(&:key).join(", ") %></p>
+        <% end %>
+      <% end %>
+    ERB
+
+    assert_select "p.summary", text: "signup: terms, privacy_notice"
+  end
+
+  test "the block form does not arm the form.submit wording check it has already satisfied" do
+    # Nothing calls `form.submit` here, so a check waiting for one would either
+    # never fire or fire against markup it was never meant to inspect.
+    render inline: <<~ERB
+      <%= form_with url: "/signup", method: :post do |form| %>
+        <%= form.clickwrap_fields :signup, actor: @user, submit_button_text: "Create account" do |clickwrap| %>
+          <button type="submit"><%= clickwrap.submit_button_text %></button>
+        <% end %>
+        <%= form.submit "Something else entirely" %>
+      <% end %>
+    ERB
+
+    assert_select "input[type=submit][value='Something else entirely']", count: 1
+  end
+
   test "ordinary form submit refuses wording that differs from the split presentation" do
     error = assert_raises(ActionView::Template::Error) do
       render inline: <<~ERB

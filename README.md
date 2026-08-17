@@ -731,6 +731,16 @@ end
 If that required legacy write fails, the account and Clickwrap evidence roll
 back with it. Remove the hook after parity and cutover are proved.
 
+Want the gem's controls but your own button markup? `form.clickwrap_fields` takes a block and hands you the signed presentation, so the wording is read rather than retyped:
+
+```erb
+<%= form.clickwrap_fields :signup, submit_button_text: "Create account" do |clickwrap| %>
+  <button type="submit" class="btn btn--primary"><%= clickwrap.submit_button_text %></button>
+<% end %>
+```
+
+`submit:` and `submit_button_text:` are a deliberate pair: `form.clickwrap :signup, submit: "Create account"` binds the words *and renders the button*, while `form.clickwrap_fields :signup, submit_button_text: "Create account"` binds the words and leaves the action to you.
+
 Everything is server-rendered HTML: full-page requests, Turbo Drive and Frames, no-JavaScript validation, and Hotwire Native all work with the same helper. JSON/API clients use `Clickwrap.present` to get the server-owned manifest and submit answers with the signed token. Views are ejectable with `bin/rails generate clickwrap:views`, or build fully custom UI on `Clickwrap.present` plus the view helpers — `clickwrap_presentation_token_field`, `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and `clickwrap_submit_button` own the envelope name, the control names, and a call to action worded by the signed manifest itself, while you own every class and wrapper around them. The [integrating guide](guides/integrating.md#4-custom-surfaces--the-three-contracts) shows a full custom surface.
 
 ### Works with `organizations`
