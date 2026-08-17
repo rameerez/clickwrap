@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — the emitted footprint
 
+- **The generated initializer states decisions, not defaults.** It carried about
+  thirty live lines that assigned the gem's own default back to itself, so a
+  reader could not tell which lines somebody had chosen and which were noise —
+  and every one of them was a line to maintain in two places forever. Live lines
+  are now only what the installer actually decided or detected; every other
+  setting appears commented, with its default value, under prose that says what
+  it does. A default install drops from about thirty live settings to three,
+  plus the eleven request-evidence lines.
+
+  Those eleven stay live even when every answer is `false`, deliberately: each
+  is an answer to a question the installer asked, and "we decided not to collect
+  this" is a decision worth reading rather than inferring from a file that does
+  not mention it. The file says so where the rule is stated.
 - **`clickwrap:install` emits only the tables an installation can put a row
   in.** Seven of the seventeen tables — persisted presentations, the
   request-evidence annex, chain heads, integrity attestations, external

@@ -244,11 +244,16 @@ class InstallGeneratorTest < Rails::Generators::TestCase
                      "Expected config.#{setting} to be written and set to false")
       end
 
-      # Nothing is enabled, so there is nothing to justify, delete, or resolve.
-      assert_match(/config\.reason_for_recording_ip_addresses_by_default = nil/, initializer)
-      assert_match(/config\.delete_recorded_ip_addresses_after = nil/, initializer)
-      assert_match(/config\.ip_geolocation_resolver = nil/, initializer)
-      assert_match(/config\.review_default_request_evidence_configuration_on = nil/, initializer)
+      # Nothing is enabled, so there is nothing to justify, delete, or resolve
+      # — and a live line assigning nil would be a restated default dressed up
+      # as a decision. Each appears as a commented example instead.
+      %w[reason_for_recording_ip_addresses_by_default delete_recorded_ip_addresses_after
+         ip_geolocation_resolver review_default_request_evidence_configuration_on].each do |setting|
+        assert_no_live_setting initializer, setting
+      end
+
+      assert_match(/^\s*#\s*config\.reason_for_recording_ip_addresses_by_default = /, initializer)
+      assert_match(/^\s*#\s*config\.ip_geolocation_resolver = /, initializer)
     end
   end
 
@@ -264,7 +269,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
 
     assert_file "config/initializers/clickwrap.rb" do |initializer|
       assert_match(/^\s*config\.document_renderer = :markdown_rails$/, initializer)
-      assert_match(/byte-identical to the page they/, initializer)
+      assert_match(/byte-identical to the/, initializer)
     end
   end
 
@@ -275,7 +280,12 @@ class InstallGeneratorTest < Rails::Generators::TestCase
 
     run_generator %w[--skip-questions]
 
-    assert_file "config/initializers/clickwrap.rb", /^\s*config\.document_renderer = nil$/
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      # The gem's default renderer is already the faithful one, so there is
+      # nothing to override — and nothing to write as live code.
+      assert_no_live_setting initializer, "document_renderer"
+      assert_match(/^\s*#\s*config\.document_renderer = :markdown_rails$/, initializer)
+    end
   end
 
   test "detected pages without markdown-rails keep the faithful default and name the built-in options" do
@@ -285,8 +295,8 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     run_generator %w[--skip-questions]
 
     assert_file "config/initializers/clickwrap.rb" do |initializer|
-      assert_match(/^\s*config\.document_renderer = nil$/, initializer)
-      assert_match(/`:markdown` renders HTML/, initializer)
+      assert_no_live_setting initializer, "document_renderer"
+      assert_match(/`:markdown` renders through whichever Markdown/, initializer)
       assert_match(/`:markdown_rails` renders through your/, initializer)
     end
   end
@@ -295,7 +305,10 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     output = run_generator %w[--skip-questions]
 
     assert_file "config/initializers/clickwrap.rb" do |initializer|
-      assert_match(/^\s*config\.publish_documents_after_database_preparation = true$/, initializer)
+      # True is the gem's default, so the generated file explains it rather
+      # than restating it as a decision nobody made.
+      assert_no_live_setting initializer, "publish_documents_after_database_preparation"
+      assert_match(/^\s*#\s*config\.publish_documents_after_database_preparation = true$/, initializer)
       assert_match(/rides `db:prepare`/, initializer)
       assert_match(%r{`bin/rails clickwrap:publish`}, initializer)
     end
@@ -451,8 +464,11 @@ class InstallGeneratorTest < Rails::Generators::TestCase
         /config\.trusted_proxy_configuration_digest\s*=\s*#{Regexp.escape(proxy_digest.inspect)}/,
         initializer
       )
-      assert_match(/config\.reason_for_recording_browser_user_agents_by_default = nil/, initializer)
-      assert_match(/config\.ip_geolocation_resolver = nil/, initializer)
+      # The categories that were NOT enabled get no purpose, no deletion rule,
+      # and no resolver — and none of them appears as a live line, because
+      # nothing was decided about them.
+      assert_no_live_setting initializer, "reason_for_recording_browser_user_agents_by_default"
+      assert_no_live_setting initializer, "ip_geolocation_resolver"
     end
   end
 
@@ -696,6 +712,14 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   end
 
   private
+
+  # The initializer's rule is that a LIVE line means somebody decided
+  # something. A setting the gem already defaults to appears commented, with
+  # its value, so a reader can tell the two apart at a glance.
+  def assert_no_live_setting(initializer, setting)
+    refute_match(/^\s*config\.#{setting}\s*=/, initializer,
+                 "config.#{setting} restates a gem default as live code")
+  end
 
   # The generator only touches routes when the host actually has a routes file,
   # and `prepare_destination` gives every run an empty directory.

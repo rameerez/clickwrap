@@ -658,6 +658,15 @@ module Clickwrap
         "current_#{actor_class_name.underscore.tr("/", "_")}"
       end
 
+      # Whether what we detected is what the gem already assumes. When it is,
+      # the initializer shows the setting commented with its value rather than
+      # writing a live line that changes nothing: a file full of restated
+      # defaults reads as a file full of decisions, and then nobody can tell
+      # which lines were actually chosen.
+      def default_identity_settings?
+        actor_class_name == "User" && current_actor_method_name == "current_user"
+      end
+
       def host_file?(path)
         File.exist?(File.expand_path(path, destination_root))
       end
