@@ -94,7 +94,13 @@ module Clickwrap
       @documents = nil
       @policies = nil
       @retention_classes = nil
+      # Every memoized verifier goes with the configuration it was built from.
+      # A verifier that outlived a reset keeps signing and accepting tokens
+      # under the previous secret, which is the kind of thing a test suite
+      # papers over (by resetting it itself) and a console session discovers
+      # the hard way.
       RemediationToken.reset_verifier! if defined?(RemediationToken)
+      PresentationManifest.reset_verifier! if defined?(PresentationManifest)
       self
     end
 

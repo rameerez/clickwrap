@@ -279,6 +279,23 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_equal "User", Clickwrap.config.actor_class_name
   end
 
+  test "reset! leaves no memoized token verifier behind" do
+    # A verifier that outlives a reset goes on signing and accepting tokens
+    # under the configuration it was built from. `reset!` used to clear the
+    # remediation verifier and not the presentation one; the test suite hid
+    # that by resetting it separately in its own setup, which is exactly why
+    # nothing caught it.
+    Clickwrap::PresentationManifest.verifier
+    Clickwrap::RemediationToken.send(:verifier)
+
+    Clickwrap.reset!
+
+    [Clickwrap::PresentationManifest, Clickwrap::RemediationToken].each do |holder|
+      refute holder.instance_variable_get(:@verifier),
+             "#{holder.name} kept a verifier built before reset!"
+    end
+  end
+
   # --- The named escape hatch -------------------------------------------------
 
   test "turning encryption off is a sentence a reviewer can find, not a false" do

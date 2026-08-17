@@ -88,7 +88,6 @@ module ActiveSupport
       Clickwrap.reset!
       Clickwrap.configure(&DUMMY_CONFIGURATION)
       Clickwrap::Services::LoadPolicies.new(root: Rails.root.to_s, paths: ["config/clickwrap.rb"]).call
-      Clickwrap::PresentationManifest.reset_verifier!
       Clickwrap::Testing.reset! if defined?(Clickwrap::Testing)
 
       publish_clickwrap_documents!
