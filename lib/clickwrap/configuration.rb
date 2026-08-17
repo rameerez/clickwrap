@@ -52,6 +52,9 @@ module Clickwrap
 
     attr_reader :raise_on_missing_translation
 
+    # --- Development aids -----------------------------------------------------
+    attr_accessor :lint_presentations
+
     # --- Presentation ---------------------------------------------------------
     attr_reader :presentation_valid_for
     attr_reader :remediation_token_valid_for
@@ -159,6 +162,12 @@ module Clickwrap
       # A required legal statement with no translation is not presentable. Fail
       # rather than show a raw I18n key, a blank, or an unexpected language.
       @raise_on_missing_translation = true
+
+      # nil means "decide from the environment": on in development and test,
+      # off everywhere else. `true` and `false` answer for a host that
+      # disagrees with either half — a linter nobody can turn off is a warning
+      # people learn to scroll past.
+      @lint_presentations = nil
 
       # Presentation manifests are short-lived by design: they bind a render to
       # a submit, and a token that stayed valid for days would weaken exactly

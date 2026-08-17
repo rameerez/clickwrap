@@ -179,6 +179,21 @@ class LinterTest < ActionView::TestCase
     refute_predicate Clickwrap::Linter, :enabled?
   end
 
+  test "config.lint_presentations answers for a host that disagrees with either half" do
+    # A linter nobody can turn off is a warning people learn to scroll past.
+    Clickwrap.config.lint_presentations = false
+    refute_predicate Clickwrap::Linter, :enabled?
+
+    Rails.stubs(:env).returns(ActiveSupport::StringInquirer.new("production"))
+    Clickwrap.config.lint_presentations = true
+    assert_predicate Clickwrap::Linter, :enabled?
+
+    # nil is the default and means "decide from the environment", which is a
+    # third answer rather than a synonym for false.
+    Clickwrap.config.lint_presentations = nil
+    refute_predicate Clickwrap::Linter, :enabled?
+  end
+
   test "reporting a finding logs it and never raises" do
     findings = Clickwrap::Linter.review_rendered_html(
       %(<input type="checkbox" name="clickwrap_submission[answers][terms]" checked>)

@@ -43,9 +43,18 @@ module Clickwrap
     BUNDLED_PURPOSE_PATTERN = %r{\b(and|and/or|as well as|plus)\b}i
 
     class << self
-      # On in development and test, off everywhere else. A production request
-      # should not be scanning its own HTML.
+      # On in development and test, off everywhere else — a production request
+      # should not be scanning its own HTML — and `config.lint_presentations`
+      # answers for a host that disagrees with either half.
+      #
+      # Every finding is a log line, never an exception: a lint finding is a
+      # thing to look at, not a reason to stop a developer's page from
+      # rendering. Which is exactly why it needs a switch — a warning nobody
+      # can turn off is one people learn to scroll past.
       def enabled?
+        configured = Clickwrap.config.lint_presentations
+        return configured unless configured.nil?
+
         return false unless defined?(::Rails) && ::Rails.respond_to?(:env) && ::Rails.env
 
         ::Rails.env.development? || ::Rails.env.test?

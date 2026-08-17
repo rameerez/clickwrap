@@ -409,6 +409,18 @@ Clickwrap.configure do |config|
   # assume.
   config.report_after_commit_failure_with = ->(error, _event) { Rails.error.report(error) }
 
+  # --- Development aids -------------------------------------------------------
+  #
+  # In development and test, every render is scanned for the mistakes a form can
+  # make silently: a preselected consent control, a consent sentence carrying
+  # two purposes, a document link below the submit button, a missing
+  # presentation token. Findings go to the log and never raise — a lint finding
+  # is a thing to look at, not a reason to stop a page from rendering — and it
+  # is off in production, because a production request has no business scanning
+  # its own HTML on the way out. `nil` means "decide from the environment":
+  #
+  # config.lint_presentations = nil
+
   # --- Retention calculations -------------------------------------------------
   #
   # A duration alone cannot express every schedule, so a retention class can

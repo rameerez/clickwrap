@@ -1110,7 +1110,19 @@ Clickwrap.configure do |config|
 end
 ```
 
+Only your decisions are live in that file. Every setting left at the gem's default appears commented with its value, under prose explaining what it does, so a reader can tell at a glance which lines somebody chose. The one deliberate exception is the request-evidence block: each `record_*_by_default` line is written even when it says `false`, because each is an answer to a question the installer asked, and "we decided not to collect this" is worth reading rather than inferring from a file that does not mention it.
+
 Class names are strings resolved lazily for autoloading, and ambiguity fails at boot instead of becoming a surprising runtime default. Optional external integrations are explicit: anchoring and timestamping are off (`nil`) until an adapter is configured; optional hook procs have working no-op defaults; and geolocation/document integrations run only when their corresponding policy or storage choice asks for them.
+
+### The presentation linter
+
+In development and test, every render is scanned for the mistakes a form can make silently — a preselected consent control, a consent sentence carrying two purposes, a document link below the submit button, a missing presentation token. Findings go to the log as warnings and never raise: a lint finding is a thing to look at, not a reason to stop a page from rendering. It is off in production, because a production request has no business scanning its own HTML on the way out.
+
+```ruby
+config.lint_presentations = false   # or true to run it in another environment
+```
+
+`nil` (the default) means "decide from the environment".
 
 ## Operations
 
