@@ -24,6 +24,31 @@ class ConfigurationTest < ActiveSupport::TestCase
                  config.document_link_html_options_with.call(nil))
   end
 
+  test "the default authentication description claims a session only when an actor exists" do
+    config = Clickwrap::Configuration.new
+    controller_shape = Struct.new(:current_user)
+
+    assert_equal({ method: :authenticated_session },
+                 config.describe_authentication_with.call(controller_shape.new(Object.new)))
+    assert_equal({}, config.describe_authentication_with.call(controller_shape.new(nil)),
+                 "a signup form is not an authenticated session")
+    assert_equal({}, config.describe_authentication_with.call(Object.new),
+                 "a controller with no authentication at all has nothing to describe — never an error")
+  end
+
+  test "publishing rides db:prepare by default, and the opt-out is a boolean" do
+    config = Clickwrap::Configuration.new
+
+    assert config.publish_documents_after_database_preparation
+
+    config.publish_documents_after_database_preparation = false
+    assert_not config.publish_documents_after_database_preparation
+
+    assert_raises(Clickwrap::ConfigurationError) do
+      config.publish_documents_after_database_preparation = "yes"
+    end
+  end
+
   test "nothing personal is collected by default" do
     config = Clickwrap::Configuration.new
 

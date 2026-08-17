@@ -34,7 +34,15 @@ module Clickwrap
     # per-request questions the way it always does — `hotwire_native_app?`
     # being the canonical one: a native WebView usually wants a same-window
     # link its screen rules can route, while the web wants a new tab.
+    #
+    # `config.hotwire_native_document_links`, when set, answers native renders
+    # entirely (the attributes here, and the absolutized href in
+    # ControllerHelpers#clickwrap_document_version_path_for_presentation);
+    # the hook keeps answering everything else.
     def clickwrap_document_link_html_options(document = nil)
+      native_options = clickwrap_hotwire_native_link_options
+      return native_options if native_options
+
       raw_options = instance_exec(document, &Clickwrap.config.document_link_html_options_with)
       unless raw_options.is_a?(Hash) || raw_options.is_a?(ActiveSupport::HashWithIndifferentAccess)
         raise ConfigurationError,
@@ -53,6 +61,25 @@ module Clickwrap
       end
 
       options
+    end
+
+    # The declared native answer, or nil when this render is not one of the
+    # cases `config.hotwire_native_document_links` decides.
+    def clickwrap_hotwire_native_link_options
+      native_links = Clickwrap.config.hotwire_native_document_links
+      return nil unless native_links
+      return nil unless respond_to?(:hotwire_native_app?) && hotwire_native_app?
+
+      case native_links[:open_in]
+      when :external_browser
+        # `data-turbo-false` keeps the tap out of the Turbo/Hotwire Native
+        # navigation stack so the absolutized href reaches the system browser.
+        { target: "_blank", rel: "noopener", data: { turbo: false } }
+      when :same_screen
+        # A plain link, on purpose: the app's own native path configuration
+        # decides how the document presents (typically a modal sheet).
+        {}
+      end
     end
 
     # The signed presentation token, under the envelope name the capture reads.

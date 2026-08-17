@@ -266,6 +266,43 @@ module Clickwrap
       Clickwrap.capture_and!(policy_key, **clickwrap_capture_options(policy_key, options), &)
     end
 
+    # The refusal-absorbing halves of the pair above, shaped like `save` next
+    # to `save!`: a refused submission — stale presentation, unticked control,
+    # over-long answer — returns false instead of raising, with the
+    # per-statement message already in `clickwrap_errors` (the reference views
+    # re-render it beside the control) and the whole refusal in
+    # `clickwrap_refusal`, whose `user_facing_message` is a complete sentence
+    # fit to put in front of a person:
+    #
+    #   receipt = capture_clickwrap_and(:api_access) { current_user.enable_api_access! }
+    #   unless receipt
+    #     flash.now[:alert] = clickwrap_refusal.user_facing_message
+    #     return render :new, status: :unprocessable_entity
+    #   end
+    #
+    # Only REFUSALS are absorbed. Infrastructure failures escape, and so do
+    # lifecycle conflicts (ReplayRejected, OneTimeAuthorizationConflict):
+    # "this was already done" needs a domain answer — usually "treat it as
+    # done" — that no generic rescue can supply honestly.
+    def capture_clickwrap(policy_key, **)
+      capture_clickwrap!(policy_key, **)
+    rescue Clickwrap::CaptureRefused => error
+      absorb_clickwrap_capture_refusal(error)
+      false
+    end
+
+    def capture_clickwrap_and(policy_key, **, &)
+      capture_clickwrap_and!(policy_key, **, &)
+    rescue Clickwrap::CaptureRefused => error
+      absorb_clickwrap_capture_refusal(error)
+      false
+    end
+
+    # The refusal the last non-bang helper in this request absorbed, or nil.
+    def clickwrap_refusal
+      @clickwrap_refusal
+    end
+
     # `Clickwrap.authorize_external_action!` with the request, submission,
     # actor, tenant, and authentication context this controller already knows.
     # The optional block is strictly local compatibility/domain work: it runs
@@ -295,27 +332,53 @@ module Clickwrap
     end
 
     # The exact immutable URL offered beside a Clickwrap control. The mounted
-    # engine route is the default. A host that needs a native-app external-link
-    # wrapper or another reviewed routing layer can override this one method;
-    # the resulting path is both rendered and signed into the presentation
-    # manifest, so the evidence never claims a different target from the link.
+    # engine route is the default; a Hotwire Native request under
+    # `config.hotwire_native_document_links = { open_in: :external_browser, … }`
+    # gets the same path absolutized against the canonical host, so the
+    # document opens outside the WebView instead of destroying the screen the
+    # form is on. A host that needs another reviewed routing layer can still
+    # override this one method. Whatever this returns is both rendered and
+    # signed into the presentation manifest, so the evidence never claims a
+    # different target from the link.
     def clickwrap_document_version_path_for_presentation(version)
-      clickwrap_engine_routes.document_version_path(version.id)
+      path = clickwrap_engine_routes.document_version_path(version.id)
+
+      native_links = Clickwrap.config.hotwire_native_document_links
+      if native_links && native_links[:open_in] == :external_browser &&
+         clickwrap_hotwire_native_request?
+        "#{Clickwrap.config.hotwire_native_canonical_host}#{path}"
+      else
+        path
+      end
+    end
+
+    # False whenever the host has no Hotwire Native integration at all — the
+    # predicate is turbo-rails' own, and its absence means no native app.
+    def clickwrap_hotwire_native_request?
+      respond_to?(:hotwire_native_app?, true) && send(:hotwire_native_app?)
     end
 
     # Signup, for Rails' own authentication generator or any hand-rolled
-    # registration:
+    # registration door. The pair works exactly like `save` and `save!`:
     #
-    #   register_with_clickwrap :signup, user: @user do
-    #     @user.save!
+    #   # Absorbs refusals: a stale presentation, an unticked control, or a
+    #   # failed validation paints the same human sentences the Devise adapter
+    #   # uses — inline via clickwrap_errors and once on the record's :base —
+    #   # and returns false, ready for `render :new, status: :unprocessable_entity`.
+    #   unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    #     return render :new, status: :unprocessable_entity
     #   end
     #
-    # The account and the evidence that authorized creating it commit together.
-    # A failed evidence write raises rather than returning falsy, so the sign-in,
-    # the welcome email, and the redirect that would normally follow simply do
-    # not happen — which is the difference between a refused signup and a live
-    # account nobody can explain.
-    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **, &)
+    #   # Raises on refusal, for flows that handle the exceptions themselves:
+    #   register_with_clickwrap!(:signup, user: @user) { @user.save! }
+    #
+    # Either way, the account and the evidence that authorized creating it
+    # commit together, and an infrastructure failure (EventWriteFailed) always
+    # escapes from BOTH forms — a broken database is not a refusal to dress up
+    # as validation, and the sign-in, the welcome email, and the redirect that
+    # would normally follow simply do not happen. That is the difference
+    # between a refused signup and a live account nobody can explain.
+    def register_with_clickwrap!(policy_key, user: nil, prospective_actor: nil, **, &)
       result = Clickwrap::Registration.perform(
         policy_key,
         prospective_actor: prospective_actor || user,
@@ -329,6 +392,17 @@ module Clickwrap
 
       clear_clickwrap_registration_flow_when_committed(result, policy_key)
       result
+    end
+
+    def register_with_clickwrap(policy_key, user: nil, prospective_actor: nil, **, &)
+      register_with_clickwrap!(policy_key, user: user, prospective_actor: prospective_actor, **, &)
+    rescue *Clickwrap::Registration::REFUSALS => error
+      @clickwrap_refusal = Clickwrap::Registration.absorb_refusal(
+        error,
+        resource: prospective_actor || user,
+        clickwrap_errors: clickwrap_errors
+      )
+      false
     end
 
     # Creates a new represented party (for example, an organization) and its
@@ -379,6 +453,14 @@ module Clickwrap
     end
 
     private
+
+    def absorb_clickwrap_capture_refusal(error)
+      @clickwrap_refusal = error
+      if error.is_a?(Clickwrap::AnswerInvalid) && error.statement_key.present?
+        clickwrap_errors[error.statement_key.to_s] = I18n.t("clickwrap.errors.required_statement")
+      end
+      error
+    end
 
     def clickwrap_registration_flow_id(policy_key)
       unless respond_to?(:session)

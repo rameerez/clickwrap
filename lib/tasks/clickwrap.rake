@@ -519,3 +519,51 @@ namespace :clickwrap do
     end
   end
 end
+
+# --- Publishing rides `db:prepare` --------------------------------------------
+#
+# Deploys that migrate but never publish are the most common way a Clickwrap
+# installation breaks: signup presentations refuse unpublished documents (the
+# safe failure), so a forgotten `clickwrap:publish` becomes "nobody can sign
+# up" some time after the deploy looked green. Enhancing `db:prepare` removes
+# the step instead of documenting it — by the time the server takes traffic,
+# every declared document version has an immutable snapshot.
+#
+# The guards, in order: the host can opt out
+# (`config.publish_documents_after_database_preparation = false`); an
+# installation with no declared documents stays silent; and an installation
+# whose clickwrap tables do not exist yet (the generator ran, the migration
+# has not) is skipped with a sentence rather than crashed. A real publish
+# refusal — a reused version label over changed bytes — still fails the
+# deploy loudly, which is strictly better than signups failing quietly later.
+# No `desc` on purpose: this is db:prepare's follow-through, not a task
+# anyone runs by hand — `clickwrap:publish` is the human-facing spelling.
+# The `:environment` prerequisite matters: `db:prepare` itself runs on
+# `:load_config` alone, and the declared documents and any host opt-out only
+# exist once the application has actually booted.
+namespace :clickwrap do
+  task publish_after_database_preparation: :environment do
+    if Clickwrap.config.publish_documents_after_database_preparation && Clickwrap.documents.any?
+      tables_ready =
+        begin
+          Clickwrap::Document.table_exists?
+        rescue StandardError
+          false
+        end
+
+      if tables_ready
+        Rake::Task["clickwrap:publish"].invoke
+      else
+        ClickwrapTasks.say("Clickwrap documents were not published: the clickwrap tables do " \
+                           "not exist in this database yet. Run the clickwrap migration, then " \
+                           "`bin/rails clickwrap:publish`.")
+      end
+    end
+  end
+end
+
+if Rake::Task.task_defined?("db:prepare")
+  Rake::Task["db:prepare"].enhance do
+    Rake::Task["clickwrap:publish_after_database_preparation"].invoke
+  end
+end

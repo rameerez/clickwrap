@@ -46,6 +46,8 @@ module Clickwrap
     # --- Documents and policies -----------------------------------------------
     attr_reader :store_document_contents_in, :document_renderer, :document_resolver
     attr_reader :document_link_html_options_with
+    attr_reader :hotwire_native_document_links
+    attr_reader :publish_documents_after_database_preparation
     attr_accessor :policy_paths
 
     attr_reader :raise_on_missing_translation
@@ -121,14 +123,38 @@ module Clickwrap
       # fields someone reviewed and chose, not every column that happened to
       # exist on the day it was written.
       @snapshot_actor_with = ->(_actor) { {} }
-      @describe_authentication_with = ->(_controller) { {} }
+
+      # An honest default: when the controller can name a current actor, the
+      # request ran under an application-authenticated session; when it cannot
+      # — a signup form, a public capture screen, a controller with no
+      # authentication at all — nothing is claimed. The temptation this guards
+      # against is describing every request as authenticated merely because it
+      # passed through ApplicationController. Deliberately gentler than the
+      # capture path's actor resolution: describing authentication is context,
+      # not identity, so a missing actor method here means "nothing to
+      # describe", never an error.
+      configuration = self
+      @describe_authentication_with = lambda do |controller|
+        method_name = configuration.current_actor_method_name
+        actor = controller.respond_to?(method_name, true) ? controller.send(method_name) : nil
+        actor ? { method: :authenticated_session } : {}
+      end
 
       # Documents and policies.
       @store_document_contents_in = :database
       @document_renderer = DocumentRenderer.new
       @document_resolver = nil
       @document_link_html_options_with = ->(_document) { { target: "_blank", rel: "noopener" } }
+      @hotwire_native_document_links = nil
       @policy_paths = ["config/clickwrap.rb", "config/clickwrap/*.rb"]
+
+      # Publishing rides `db:prepare`, so the deploy step everyone forgets
+      # does not exist: by the time the server takes traffic, every declared
+      # document version has an immutable snapshot. Idempotent — an
+      # already-published version is left untouched — and a publish refusal
+      # (a reused label over changed bytes) fails the deploy loudly, which is
+      # strictly better than signups failing quietly later.
+      @publish_documents_after_database_preparation = true
 
       # A required legal statement with no translation is not presentable. Fail
       # rather than show a raw I18n key, a blank, or an unexpected language.
@@ -294,21 +320,25 @@ module Clickwrap
     # `:safe_text` (the default) escapes everything into a faithful <pre>
     # block; `:markdown` renders real HTML through whichever Markdown library
     # the application already bundles (commonmarker, redcarpet, or kramdown —
-    # no new dependency). A custom renderer object must return the exact
-    # rendered bytes it offered, because Clickwrap stores their digest
-    # alongside the original source digest. That is what preserves the
-    # difference between "this Markdown file existed" and "this rendered
+    # no new dependency); `:markdown_rails` renders through the application's
+    # OWN registered markdown-rails renderer — the exact pipeline its public
+    # `.md` pages already go through — so the stored snapshot is byte-identical
+    # to the page readers see, by construction. A custom renderer object must
+    # return the exact rendered bytes it offered, because Clickwrap stores
+    # their digest alongside the original source digest. That is what preserves
+    # the difference between "this Markdown file existed" and "this rendered
     # representation was offered".
     def document_renderer=(value)
       @document_renderer =
         case value
         when nil then nil
         when :markdown then DocumentRenderers::Markdown.new
+        when :markdown_rails then DocumentRenderers::MarkdownRails.new
         when :safe_text then DocumentRenderer.new
         when Symbol
           raise ConfigurationError,
-                "document_renderer accepts :safe_text, :markdown, or an object responding " \
-                "to call(bytes, definition) — not #{value.inspect}."
+                "document_renderer accepts :safe_text, :markdown, :markdown_rails, or an " \
+                "object responding to call(bytes, definition) — not #{value.inspect}."
         else ensure_callable(value, "document_renderer")
         end
     end
@@ -323,8 +353,107 @@ module Clickwrap
       @document_link_html_options_with = ensure_callable(value, "document_link_html_options_with")
     end
 
+    HOTWIRE_NATIVE_DOCUMENT_LINK_MODES = %i[external_browser same_screen].freeze
+
+    # One declarative answer for how document links behave inside a Hotwire
+    # Native app, doing both halves coherently — the signed href AND the
+    # navigation attributes:
+    #
+    #   config.hotwire_native_document_links = {
+    #     open_in: :external_browser,
+    #     canonical_host: "https://www.example.com"
+    #   }
+    #
+    # `:external_browser` absolutizes every document link against your
+    # canonical host and opens it outside the WebView — the right answer when
+    # clickwraps render on native AUTH SHEETS, where a same-host navigation
+    # pops the sheet and loses the half-filled form behind it. `:same_screen`
+    # leaves plain same-host links for your native path configuration to route
+    # (a modal document sheet inside a signed-in funnel, for example).
+    #
+    # When set, this answers native renders entirely; your
+    # `document_link_html_options_with` hook continues to answer everything
+    # else. An app whose native screens need different answers in different
+    # places skips this and keeps the per-request hook.
+    def hotwire_native_document_links=(value)
+      if value.nil?
+        @hotwire_native_document_links = nil
+        return
+      end
+
+      unless value.is_a?(Hash)
+        raise ConfigurationError,
+              "hotwire_native_document_links takes nil or a Hash like " \
+              "{ open_in: :external_browser, canonical_host: \"https://www.example.com\" }."
+      end
+
+      options = value.symbolize_keys
+      open_in = options[:open_in]
+      unless HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.include?(open_in)
+        raise ConfigurationError,
+              "hotwire_native_document_links needs `open_in:` as one of " \
+              "#{HOTWIRE_NATIVE_DOCUMENT_LINK_MODES.map(&:inspect).join(" or ")}, " \
+              "got #{open_in.inspect}."
+      end
+
+      unknown = options.keys - %i[open_in canonical_host]
+      unless unknown.empty?
+        raise ConfigurationError,
+              "hotwire_native_document_links has unknown option#{"s" if unknown.many?} " \
+              "#{unknown.map(&:inspect).join(", ")}. Supported options are :open_in and " \
+              ":canonical_host."
+      end
+
+      canonical_host = options[:canonical_host]
+      if open_in == :external_browser
+        if canonical_host.nil?
+          raise ConfigurationError,
+                "hotwire_native_document_links with open_in: :external_browser needs a " \
+                "`canonical_host:` — the absolute https host the external browser opens, for " \
+                "example \"https://www.example.com\". A relative link would land back inside " \
+                "the WebView this setting exists to escape."
+        end
+        validate_hotwire_native_canonical_host!(canonical_host) unless canonical_host.respond_to?(:call)
+      elsif canonical_host
+        raise ConfigurationError,
+              "hotwire_native_document_links with open_in: :same_screen keeps ordinary " \
+              "same-host links, so `canonical_host:` has no meaning there. Remove it, or use " \
+              "open_in: :external_browser."
+      end
+
+      @hotwire_native_document_links = { open_in: open_in, canonical_host: canonical_host }.freeze
+    end
+
+    # The canonical host, resolved and validated at use time so a host that is
+    # only knowable after boot (application config, credentials) can be a
+    # callable. Trailing slashes are trimmed because the engine path this
+    # prefixes always begins with one.
+    def hotwire_native_canonical_host
+      configured = hotwire_native_document_links&.fetch(:canonical_host, nil)
+      return nil if configured.nil?
+
+      resolved = configured.respond_to?(:call) ? configured.call.to_s : configured.to_s
+      validate_hotwire_native_canonical_host!(resolved)
+      resolved.chomp("/")
+    end
+
+    def validate_hotwire_native_canonical_host!(value)
+      return if value.to_s.start_with?("https://")
+
+      raise ConfigurationError,
+            "hotwire_native_document_links canonical_host must be an absolute https:// URL " \
+            "(got #{value.inspect}). It is the address an external browser opens on a user's " \
+            "phone; anything else either stays inside the WebView or downgrades the transport."
+    end
+    private :validate_hotwire_native_canonical_host!
+
     def raise_on_missing_translation=(value)
       @raise_on_missing_translation = ensure_boolean(value, "raise_on_missing_translation")
+    end
+
+    def publish_documents_after_database_preparation=(value)
+      @publish_documents_after_database_preparation =
+        ensure_boolean(value, "publish_documents_after_database_preparation")
     end
 
     def presentation_valid_for=(value)

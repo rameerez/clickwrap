@@ -22,7 +22,10 @@ class DocumentRenderersMarkdownTest < ActiveSupport::TestCase
     assert_includes result[:bytes], "<strong>mundo</strong>"
     assert_equal "text/html; charset=utf-8", result[:media_type]
     assert_equal "clickwrap_markdown_document_renderer", result[:renderer_name]
-    assert_match(/\A1 \(kramdown \d/, result[:renderer_version],
+    # Which engine wins depends on what the test bundle carries (markdown-rails
+    # brings redcarpet in alongside kramdown); the pinned contract is that ONE
+    # recognized engine and its version are recorded, never "unstated".
+    assert_match(/\A1 \((commonmarker|redcarpet|kramdown) \d/, result[:renderer_version],
                  "the receipt must record which Markdown engine produced the offered bytes")
   end
 

@@ -40,6 +40,27 @@ class TasksTest < ActiveSupport::TestCase
     @receipt = capture_clickwrap(:signup, actor: @user)
   end
 
+  # --- Publishing rides db:prepare -------------------------------------------
+
+  test "db:prepare is enhanced to publish declared documents afterwards" do
+    assert Rake::Task.task_defined?("clickwrap:publish_after_database_preparation"),
+           "the follow-through task must exist for db:prepare to invoke"
+    assert Rake::Task["db:prepare"].actions.any? { |action|
+             action.source_location&.first&.end_with?("lib/tasks/clickwrap.rake")
+           }, "db:prepare must carry the clickwrap publishing follow-through"
+  end
+
+  test "the follow-through publishes, and the host opt-out silences it entirely" do
+    Rake::Task["clickwrap:publish"].reenable
+    output = run_task("clickwrap:publish_after_database_preparation")
+    assert_match(/Publishing documents/, output)
+
+    Clickwrap.config.publish_documents_after_database_preparation = false
+    Rake::Task["clickwrap:publish"].reenable
+    output = run_task("clickwrap:publish_after_database_preparation")
+    assert_empty output
+  end
+
   # --- Reporting --------------------------------------------------------------
 
   test "clickwrap:doctor prints one line per finding and reaches no verdict" do

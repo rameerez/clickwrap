@@ -36,6 +36,11 @@ group :test do
   # kramdown is the pure-Ruby one, so it is the one the test lane exercises.
   gem "kramdown", require: false
 
+  # Same posture for the :markdown_rails renderer, which renders documents
+  # through the HOST's own registered markdown-rails handler — the byte-parity
+  # contract the tests exercise. Never a runtime dependency.
+  gem "markdown-rails", require: false
+
   # Rails frameworks the dummy app boots that are NOT runtime dependencies of
   # the gem itself. Clickwrap never requires a job backend or a mailer, but the
   # dummy app exercises the after-commit hook and the retention tasks against

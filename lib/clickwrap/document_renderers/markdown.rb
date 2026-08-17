@@ -40,9 +40,6 @@ module Clickwrap
       NAME = "clickwrap_markdown_document_renderer"
       VERSION = "1"
 
-      # `---` opens; `---` or `...` closes (both are valid YAML document ends).
-      LEADING_YAML_FRONTMATTER = /\A---\s*\n.*?\n(?:---|\.\.\.)\s*(?:\n|\z)/m
-
       def initialize(render_markdown_with: nil, engine_name: nil, engine_version: nil,
                      sanitize_rendered_html: true)
         @sanitize_rendered_html = sanitize_rendered_html != false
@@ -83,7 +80,7 @@ module Clickwrap
         return @fallback.call(bytes, definition) unless definition.media_type == "text/markdown"
 
         text = utf8_text!(bytes, definition)
-        html = @render_markdown.call(text.sub(LEADING_YAML_FRONTMATTER, ""))
+        html = @render_markdown.call(FrontMatter.strip(text))
 
         if @sanitize_rendered_html
           {

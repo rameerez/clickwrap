@@ -9,6 +9,7 @@ appraise "rails-7.1" do
   # The :markdown renderer autodetects a host Markdown library; kramdown is
   # the pure-Ruby one the test lane exercises (same as the main Gemfile).
   gem "kramdown", require: false
+  gem "markdown-rails", require: false
 end
 
 appraise "rails-7.2" do
@@ -16,6 +17,7 @@ appraise "rails-7.2" do
   # The :markdown renderer autodetects a host Markdown library; kramdown is
   # the pure-Ruby one the test lane exercises (same as the main Gemfile).
   gem "kramdown", require: false
+  gem "markdown-rails", require: false
 end
 
 appraise "rails-8.0" do
@@ -23,6 +25,7 @@ appraise "rails-8.0" do
   # The :markdown renderer autodetects a host Markdown library; kramdown is
   # the pure-Ruby one the test lane exercises (same as the main Gemfile).
   gem "kramdown", require: false
+  gem "markdown-rails", require: false
 end
 
 # Test the latest Rails version — this is the default/main Gemfile anyway.
@@ -31,4 +34,5 @@ appraise "rails-8.1" do
   # The :markdown renderer autodetects a host Markdown library; kramdown is
   # the pure-Ruby one the test lane exercises (same as the main Gemfile).
   gem "kramdown", require: false
+  gem "markdown-rails", require: false
 end

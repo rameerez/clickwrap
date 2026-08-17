@@ -18,8 +18,48 @@ module Clickwrap
   # `account_registration` attribution instead of implying a session that did
   # not exist.
   module Registration
+    # Everything that counts as a REFUSAL of one registration attempt — a
+    # person on a stale render, an unticked control, a validation the account
+    # failed — as opposed to an infrastructure failure (EventWriteFailed and
+    # friends), which is never dressed up as validation and always escapes.
+    REFUSALS = [
+      Clickwrap::SubmissionInvalid,
+      Clickwrap::PresentationInvalid,
+      Clickwrap::AnswerInvalid,
+      Clickwrap::RegistrationFailed,
+      ActiveRecord::RecordInvalid
+    ].freeze
+
     def self.included(base)
       base.extend(ClassMethods)
+    end
+
+    # Translates one refusal into the same human sentences everywhere: inline
+    # beside the control it belongs to (through the controller's
+    # clickwrap_errors) and once on the resource's :base so the page's error
+    # rollup announces it. The Devise adapter and the hand-rolled-door helper
+    # (`register_with_clickwrap` without the bang) both come through here, so
+    # every door in an application refuses in identical language by
+    # construction — a door cannot forget a rescue it never writes.
+    def self.absorb_refusal(error, resource:, clickwrap_errors:)
+      case error
+      when Clickwrap::AnswerInvalid
+        if error.statement_key.present?
+          clickwrap_errors[error.statement_key.to_s] = I18n.t("clickwrap.errors.required_statement")
+        end
+        resource.errors.add(:base, I18n.t("clickwrap.errors.required_statement")) if resource.errors.empty?
+      when Clickwrap::SubmissionInvalid, Clickwrap::PresentationInvalid
+        # A missing, stale, expired, or swapped presentation is a person on an
+        # old render (or a cached form with no presentation at all) — not an
+        # application error, and never a raw 500 in front of a person.
+        resource.errors.add(:base, I18n.t("clickwrap.errors.presentation_no_longer_valid")) if resource.errors.empty?
+      when Clickwrap::RegistrationFailed, ActiveRecord::RecordInvalid
+        resource.errors.add(:base, error.message) if resource.errors.empty?
+      else
+        raise error
+      end
+
+      error
     end
 
     # The optional Devise controller macro. Nothing happens unless a host calls
@@ -163,25 +203,15 @@ module Clickwrap
         clear_clickwrap_registration_flow_when_committed(result, clickwrap_registration_policy)
 
         resource.persisted?
-      rescue Clickwrap::SubmissionInvalid, Clickwrap::PresentationInvalid
-        # A missing, stale, expired, or swapped presentation is a person on an
-        # old render (or a cached form with no presentation at all) — not an
-        # application error. Refuse the signup on the form Devise re-renders,
-        # with the same localized sentence the reference screens use. Never a
-        # raw 500, and never a developer-facing message in front of a person.
-        resource.errors.add(:base, I18n.t("clickwrap.errors.presentation_no_longer_valid")) if resource.errors.empty?
-        false
-      rescue Clickwrap::AnswerInvalid => error
-        # Beside the control it belongs to on the form Devise re-renders — the
-        # same inline treatment the engine's own screens use — plus once on
-        # :base so the page's summary block announces it.
-        if error.statement_key.present?
-          clickwrap_errors[error.statement_key.to_s] = I18n.t("clickwrap.errors.required_statement")
-        end
-        resource.errors.add(:base, I18n.t("clickwrap.errors.required_statement")) if resource.errors.empty?
-        false
-      rescue Clickwrap::RegistrationFailed, ActiveRecord::RecordInvalid => error
-        resource.errors.add(:base, error.message) if resource.errors.empty?
+      rescue *Clickwrap::Registration::REFUSALS => error
+        # The one shared translation of refusals into human sentences —
+        # inline beside the control and once on :base — so this adapter and
+        # every hand-rolled door refuse in identical language.
+        Clickwrap::Registration.absorb_refusal(
+          error,
+          resource: resource,
+          clickwrap_errors: clickwrap_errors
+        )
         false
       end
 

@@ -4,6 +4,9 @@ module Clickwrap
   # A declared document version, before it is published.
   #
   #   Clickwrap.document :terms,
+  #     from: Rails.root.join("app/content/legal/terms.md")
+  #
+  #   Clickwrap.document :terms,
   #     version: "2026-08-15",
   #     locale: :en,
   #     effective_at: Time.utc(2026, 8, 15),
@@ -14,6 +17,14 @@ module Clickwrap
   # on the snapshot is the evidence; the file on disk is only where it came
   # from. Changing the file does not change published evidence, and reusing a
   # version label for different bytes is refused rather than silently accepted.
+  #
+  # `version:` is optional exactly when the source can name its own: a file or
+  # inline content whose leading YAML front matter carries `clickwrap_version:`
+  # (or `last_updated:`) IS the single source of truth for its label, so
+  # bumping a legal text is one edit in one file. A source with no front-matter
+  # version and no explicit `version:` is refused at boot with a sentence —
+  # Clickwrap never invents a label, because a policy that requires a current
+  # version cannot be satisfied by a guess.
   class DocumentDefinition
     SOURCE_KINDS = %i[file inline resolver].freeze
 
@@ -33,16 +44,16 @@ module Clickwrap
                 :tenant_key, :source_kind, :source_reference, :inline_content,
                 :resolver, :renderer
 
-    def initialize(key:, version:, locale: :en, media_type: nil, effective_at: nil,
+    def initialize(key:, version: nil, locale: :en, media_type: nil, effective_at: nil,
                    tenant: nil, from: nil, content: nil, resolver: nil, renderer: nil)
       @key = normalize_key(key)
-      @version_label = normalize_version(version)
       @locale = locale.to_s
       @effective_at = effective_at
       @tenant_key = tenant&.to_s
       @renderer = renderer
 
       assign_source(from:, content:, resolver:)
+      @version_label = normalize_version(version || version_label_from_front_matter)
       @media_type = (media_type || infer_media_type).to_s
 
       validate!
@@ -102,6 +113,47 @@ module Clickwrap
       end
 
       File.binread(source_reference)
+    end
+
+    # No explicit `version:` was given, so the source itself must name one
+    # through its leading YAML front matter. Every refusal here is a boot
+    # failure with the fix in the sentence, because a silently invented label
+    # would let "unversioned" evidence masquerade as versioned.
+    def version_label_from_front_matter
+      case source_kind
+      when :file then file_front_matter_version_label
+      when :inline then inline_front_matter_version_label
+      else
+        raise DefinitionError,
+              "Document #{key} has no `version:`, and a `resolver:` source cannot name its own " \
+              "version at boot because its bytes are only read at publish time. Pass `version:` " \
+              "explicitly, for example version: \"2026-08-15\"."
+      end
+    end
+
+    def file_front_matter_version_label
+      unless File.exist?(source_reference)
+        raise DefinitionError,
+              "Document #{key} has no `version:` and its file #{source_reference} does not " \
+              "exist yet, so there is no front matter to read one from. Create the file with a " \
+              "`clickwrap_version:` or `last_updated:` front-matter key, or pass `version:` " \
+              "explicitly."
+      end
+
+      FrontMatter.version_label_in(File.read(source_reference)) ||
+        raise(DefinitionError,
+              "Document #{key} has no `version:` and #{source_reference} has no " \
+              "`clickwrap_version:` or `last_updated:` front-matter key. The version label has " \
+              "no other source of truth — add one of those keys to the file's front matter " \
+              "(`clickwrap_version:` wins when both are present), or pass `version:` explicitly.")
+    end
+
+    def inline_front_matter_version_label
+      FrontMatter.version_label_in(inline_content) ||
+        raise(DefinitionError,
+              "Document #{key} has no `version:` and its inline `content:` has no " \
+              "`clickwrap_version:` or `last_updated:` front-matter key. Add one to the " \
+              "content's leading front matter, or pass `version:` explicitly.")
     end
 
     def read_resolver_bytes
