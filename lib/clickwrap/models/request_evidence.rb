@@ -127,14 +127,27 @@ module Clickwrap
       ip_geolocation_metro_code: :encrypt_recorded_ip_geolocation
     }.freeze
 
+    # Declaring an encrypted attribute reads the column, so this can only run
+    # where the table exists. On an installation that records no request
+    # evidence the annex table is not created at all — and there is nothing to
+    # encrypt, because there is nothing to store. It is applied again at the
+    # moment an annex is actually built, so an application whose connection was
+    # not up at boot still encrypts everything it was told to.
     def self.apply_configured_encryption!
       return unless respond_to?(:encrypts)
+      return unless annex_table_exists?
 
       wanted = ENCRYPTED_COLUMNS.select { |_, setting| Clickwrap.config.public_send(setting) }.keys
       return if wanted.empty?
 
       already = (encrypted_attributes || []).map(&:to_sym)
       (wanted - already).each { |column| encrypts column }
+    end
+
+    def self.annex_table_exists?
+      connection.data_source_exists?(table_name)
+    rescue StandardError
+      false
     end
 
     # Whether this application has Active Record encryption keys at all.

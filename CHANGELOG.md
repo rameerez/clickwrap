@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — the quickstart runs in CI
+
+- **The README quickstart is now executed end to end**, in a subprocess, against
+  a throwaway application built only from what the installer emitted: install →
+  migrate → declare → `has_clickwraps` → publish → render the form → submit the
+  token that render produced → the evidence row exists → the receipt verifies.
+  It is the one document every user reads and was the only one nothing checked.
+
+  It found real defects on its first run, all of them consequences of emitting
+  fewer tables: capture marked a presentation accepted without asking whether
+  the policy retains presentations, and receipts, verification, and the
+  retention planner read optional annex tables unconditionally. Every
+  association whose table is optional now answers "there is nothing here" when
+  the table was never created — which is not a fallback but the exact truth,
+  since without the table no row was ever written.
+
 ### Changed — the emitted footprint
 
 - **The generated initializer states decisions, not defaults.** It carried about

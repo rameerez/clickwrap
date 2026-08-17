@@ -125,6 +125,41 @@ module Clickwrap
             inverse_of: :event,
             dependent: :restrict_with_error
 
+    # --- Associations whose tables are optional -------------------------------
+    #
+    # `clickwrap:install` emits only the tables an installation can put a row
+    # in; the rest arrive with their own flag. Reading one of these associations
+    # on an installation that never created the table would read the schema of
+    # a table that deliberately does not exist — so each reader answers "there
+    # is nothing here", which is not a fallback but the exact truth: without the
+    # table, no row was ever written.
+    #
+    # Guarded here rather than at each call site, because the call sites are
+    # everywhere and the answer is a property of this record.
+    def presentation
+      super if SchemaRequirements.available?(:persisted_presentations)
+    end
+
+    def request_evidence
+      super if SchemaRequirements.available?(:request_evidence)
+    end
+
+    def integrity_attestations
+      return IntegrityAttestation.none unless SchemaRequirements.available?(:integrity)
+
+      super
+    end
+
+    def legal_holds
+      return LegalHold.none unless SchemaRequirements.available?(:retention_ops)
+
+      super
+    end
+
+    def external_action
+      super if SchemaRequirements.available?(:external_actions)
+    end
+
     belongs_to :root_event, class_name: "Clickwrap::Event", optional: true
     belongs_to :predecessor_event, class_name: "Clickwrap::Event", optional: true
 

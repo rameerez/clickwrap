@@ -113,6 +113,13 @@ module Clickwrap
         ::ActiveRecord::MigrationContext.new(paths).needs_migration?
       end
 
+      # "Is it safe to query this capability's tables?" — false only when the
+      # answer is a definite no. An unanswerable question is not a no: code that
+      # skipped work because a connection was not up yet would skip it silently.
+      def available?(key)
+        installed?(feature!(key)) != false
+      end
+
       # Raised at the entry point of a capability nothing in the configuration
       # announces. `installed?` returning nil means the question could not be
       # asked (no database yet), and an unanswerable question is not a refusal.

@@ -35,8 +35,15 @@ module Clickwrap
 
     class << self
       def find(event_id)
-        event = Event.includes(:statements, :documents, :policy_revision, :request_evidence)
-                     .find_by(id: event_id)
+        # The annex is eager-loaded only where it can exist. An installation
+        # that records no request evidence never created that table, and
+        # `includes` would read its schema before deciding there is nothing in
+        # it. The receipt still reports every category by state — the states
+        # just all come out `not_configured`, which is the true answer.
+        associations = %i[statements documents policy_revision]
+        associations << :request_evidence if SchemaRequirements.available?(:request_evidence)
+
+        event = Event.includes(*associations).find_by(id: event_id)
 
         raise ReceiptInvalid, "No Clickwrap event with id #{event_id.inspect}" unless event
 

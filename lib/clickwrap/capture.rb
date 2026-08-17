@@ -530,12 +530,18 @@ module Clickwrap
     # an actor from another system this application owns no class for; and nil
     # is "nobody yet", which the registration path binds later.
     def validate_actor_class!
-      expected = expected_actor_class
-      return if expected.nil?
+      candidates = [actor, @prospective_actor].compact.reject do |candidate|
+        candidate.is_a?(SystemActor) || candidate.is_a?(AnonymousActor) ||
+          candidate.is_a?(String) || candidate.is_a?(Symbol)
+      end
+      return if candidates.empty?
 
-      [actor, @prospective_actor].compact.each do |candidate|
-        next if candidate.is_a?(SystemActor) || candidate.is_a?(AnonymousActor)
-        next if candidate.is_a?(String) || candidate.is_a?(Symbol)
+      # Resolved only once there is something to check, so an application whose
+      # every actor is anonymous or system-owned never has to name a class it
+      # does not have.
+      expected = expected_actor_class
+
+      candidates.each do |candidate|
         next if candidate.is_a?(expected)
 
         raise ConfigurationError,
@@ -560,7 +566,14 @@ module Clickwrap
             "has to resolve."
     end
 
+    # Only a policy that retains pre-submit presentations ever wrote a row for
+    # this nonce, so only that policy has one to mark — and on a default
+    # install the table does not exist at all, which is what makes the guard
+    # load-bearing rather than an optimization. The event builder has always
+    # asked the same question before looking; this path did not.
     def mark_presentation_accepted!(manifest)
+      return unless policy.persist_presentations?
+
       Presentation.find_by(nonce: manifest.nonce)&.mark_accepted!
     end
 

@@ -279,7 +279,12 @@ module Clickwrap
 
       # --- The optional request-evidence annex ----------------------------------
 
+      # Same reasoning as presentations: an installation can have the retention
+      # tables and not the annex, because they are separate capabilities behind
+      # separate flags. Nothing was ever recorded, so nothing is due.
       def plan_request_evidence
+        return unless SchemaRequirements.available?(:request_evidence)
+
         ANNEX_PARTS.each do |part|
           seen = Set.new
 
@@ -323,7 +328,14 @@ module Clickwrap
       # retention run from deleting the manifest a receipt cites. What is left
       # is the pre-submit rows a policy chose to retain, and expired offers
       # nobody ever submitted.
+      # An installation can have the retention tables without the persisted
+      # presentations one — they are separate capabilities behind separate
+      # flags. Nothing was ever retained here, so there is nothing to dispose
+      # of, and asking the database would only raise about a table this
+      # installation deliberately does not have.
       def plan_presentations
+        return unless SchemaRequirements.available?(:persisted_presentations)
+
         seen = Set.new
 
         presentation_scopes.each do |scope|

@@ -189,6 +189,12 @@ module Clickwrap
       def build_request_evidence_annex(event_id)
         return nil if @request_evidence.nil? || !@request_evidence.records_anything?
 
+        # Idempotent, and applied here as well as at boot: declaring an
+        # encrypted attribute reads the column, so an application whose
+        # database was not reachable during initialization would otherwise
+        # write this annex in plain text without anyone noticing.
+        RequestEvidence.apply_configured_encryption!
+
         RequestEvidence.new(
           @request_evidence.attributes.merge(event_id: event_id, created_at: Clickwrap.now)
         )
