@@ -358,6 +358,12 @@ module Clickwrap
       {
         "manifest_digest" => event.presentation_manifest_digest,
         "submit_button_text" => manifest["submit_button_text"],
+        # Present only when the offer was ONE control carrying one composed
+        # sentence. The acts below say what was recorded; this says what the
+        # person actually read, which is the thing a substitution argument is
+        # about, and which statements that single answer covered.
+        "combined_sentence" => manifest.dig("combined_control", "sentence"),
+        "combined_statements" => manifest.dig("combined_control", "covers"),
         "locale" => manifest["locale"],
         "capture_channel" => event.capture_channel,
         "offered_at" => manifest["issued_at"],

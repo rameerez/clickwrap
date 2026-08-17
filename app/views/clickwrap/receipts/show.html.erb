@@ -30,6 +30,13 @@
     <% if @event.presentation_manifest.present? %>
       <dt><%= t("clickwrap.receipts.submit_button_text") %></dt>
       <dd><%= @event.presentation_manifest["submit_button_text"] %></dd>
+
+      <%# When the offer was one control carrying one composed sentence, the
+          acts below say what was recorded and this says what was read. %>
+      <% if (sentence = @event.presentation_manifest.dig("combined_control", "sentence")) %>
+        <dt><%= t("clickwrap.receipts.combined_sentence") %></dt>
+        <dd><%= sentence %></dd>
+      <% end %>
     <% end %>
   </dl>
 

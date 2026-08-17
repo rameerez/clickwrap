@@ -97,6 +97,8 @@ trusting the column it is supposed to be checking.
 |---|---|
 | `manifest_digest` | The canonical digest of the presentation manifest the server generated |
 | `submit_button_text` | The exact call-to-action wording in that manifest |
+| `combined_sentence` | Present only when the offer was ONE control carrying one composed sentence ("I agree to the Terms of Service and I acknowledge the Privacy Policy."). The acts say what was recorded; this says what the person read, which is what a substitution argument is actually about |
+| `combined_statements` | Which statement keys that one answer covered |
 | `locale` | The locale the presentation was rendered in |
 | `capture_channel` | `web_browser`, `native_app`, `api_client`, `operator`, `background_job`, `imported_provider`, or `system` |
 | `offered_at` | When the manifest was issued |

@@ -720,6 +720,8 @@ module Clickwrap
         compact_hash(
           "manifest_digest" => presentation["manifest_digest"],
           "submit_button_text" => manifest["submit_button_text"],
+          "combined_sentence" => manifest.dig("combined_control", "sentence"),
+          "combined_statements" => manifest.dig("combined_control", "covers"),
           "locale" => manifest["locale"],
           "capture_channel" => event["capture_channel"],
           "offered_at" => manifest["issued_at"]

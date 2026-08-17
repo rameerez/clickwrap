@@ -253,6 +253,31 @@ class CombinedStatementTest < ActiveSupport::TestCase
     end
   end
 
+  # --- What the receipt says was read ----------------------------------------------
+
+  test "the receipt records the sentence that was read, and still verifies" do
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1" })
+    presentation = receipt.to_h.fetch("presentation")
+
+    # The acts below it say what was recorded. This says what the person read,
+    # which is the thing a substitution argument is actually about.
+    assert_equal "I agree to the Terms of Service and I acknowledge the Privacy Policy.",
+                 presentation["combined_sentence"]
+    assert_equal %w[terms privacy_notice], presentation["combined_statements"]
+
+    assert_predicate receipt.verify, :success?
+    assert_includes receipt.to_html, "I agree to the Terms of Service and I acknowledge the Privacy Policy."
+  end
+
+  test "an itemized receipt carries no composed sentence at all" do
+    receipt = submit_clickwrap(:manual_bank_transfer, actor: @user, capture_channel: :operator)
+    presentation = receipt.to_h.fetch("presentation")
+
+    refute_includes presentation.keys, "combined_sentence"
+    refute_includes presentation.keys, "combined_statements"
+    assert_predicate receipt.verify, :success?
+  end
+
   # --- Turning it off ------------------------------------------------------------
 
   test "combined: false presents the itemized shape for a policy that would compose" do

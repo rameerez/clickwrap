@@ -156,6 +156,10 @@ module Clickwrap
           <h2>What the application offered</h2>
           <dl>
             <dt>Call to action</dt><dd><%= h(presentation["submit_button_text"]) %></dd>
+            <% if presentation["combined_sentence"] %>
+              <dt>Sentence offered</dt><dd><%= h(presentation["combined_sentence"]) %></dd>
+              <dt>Covered by one control</dt><dd><%= h(Array(presentation["combined_statements"]).join(", ")) %></dd>
+            <% end %>
             <dt>Locale</dt><dd><%= h(presentation["locale"]) %></dd>
             <dt>Channel</dt><dd><%= h(presentation["capture_channel"]) %></dd>
             <dt>Offered at</dt><dd><%= h(presentation["offered_at"]) %></dd>

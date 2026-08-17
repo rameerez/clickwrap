@@ -83,6 +83,7 @@ es:
       event_type: "Qué ocurrió"
       recorded_at_by_server: "Registrado por el servidor el"
       submit_button_text: "Botón de acción de la oferta del servidor"
+      combined_sentence: "Frase que ofreció el servidor, en una sola casilla"
       acts: "Declaraciones y respuestas registradas"
       documents: "Versiones de documentos vinculadas a este registro"
       offered_and_not_taken: "ofrecido, no marcado"

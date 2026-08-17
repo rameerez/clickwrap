@@ -104,6 +104,7 @@ en:
       event_type: "What happened"
       recorded_at_by_server: "Recorded by the server at"
       submit_button_text: "Call to action in the server offer"
+      combined_sentence: "Sentence the server offered, in one control"
       acts: "Recorded statements and answers"
       documents: "Document versions bound to this record"
       offered_and_not_taken: "offered, not taken"
