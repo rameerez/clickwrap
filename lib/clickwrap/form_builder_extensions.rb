@@ -187,10 +187,14 @@ module Clickwrap
       }
       controller = @template.try(:controller)
       if controller.respond_to?(:clickwrap_document_version_path_for_presentation, true)
-        options[:document_version_path_with] =
-          ->(version) { controller.send(:clickwrap_document_version_path_for_presentation, version) }
+        options[:default_document_version_path_with] = lambda do |version, declared_link|
+          controller.send(:clickwrap_document_version_path_for_presentation, version,
+                          declared_link: declared_link)
+        end
       elsif @template.respond_to?(:clickwrap_document_version_path)
-        options[:document_version_path_with] = ->(version) { @template.clickwrap_document_version_path(version) }
+        options[:default_document_version_path_with] = lambda do |version, declared_link|
+          declared_link.presence || @template.clickwrap_document_version_path(version)
+        end
       end
       if controller.respond_to?(:clickwrap_authentication_context, true)
         options[:authentication_context] = controller.send(:clickwrap_authentication_context)

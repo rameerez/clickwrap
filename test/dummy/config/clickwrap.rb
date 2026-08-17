@@ -8,15 +8,22 @@
 # operator attestation, an exemption-permitting policy, and a policy that records
 # request evidence — so the suite exercises the real compiler rather than fixtures.
 
+# The two documents a person reads on the host's OWN pages: `link:` is the
+# formatted, navigable page rather than the engine's rendering of the published
+# bytes, and it is both what the signup line links to and what the manifest
+# signs. Every other document below leaves `link:` off and therefore keeps the
+# engine's per-version route, so the suite exercises both halves.
 Clickwrap.document :terms,
                    version: "2026-08-15",
                    locale: :en,
-                   from: Rails.root.join("app/content/legal/terms.md")
+                   from: Rails.root.join("app/content/legal/terms.md"),
+                   link: "/terms-of-service"
 
 Clickwrap.document :privacy_notice,
                    version: "2026-08-15",
                    locale: :en,
-                   from: Rails.root.join("app/content/legal/privacy.md")
+                   from: Rails.root.join("app/content/legal/privacy.md"),
+                   link: "/privacy-policy"
 
 Clickwrap.document :marketing_notice,
                    version: "2026-08-15",
@@ -63,9 +70,13 @@ end
 # The five-minute path. Note the two different verbs: Terms are agreed to, a
 # privacy notice is acknowledged. They are different acts with different
 # lifecycles, and collapsing them would record something that did not happen.
+#
+# `link_label:` is where a host chooses the words in the sentence — "Terms of
+# Service" rather than the key humanized — without touching what the statement
+# asserts.
 Clickwrap.policy :signup do
-  agree_to :terms
-  acknowledge :privacy_notice
+  agree_to :terms, link_label: "Terms of Service"
+  acknowledge :privacy_notice, link_label: "Privacy Policy"
 
   retain_with :ordinary_agreement_evidence
 end

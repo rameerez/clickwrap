@@ -120,6 +120,38 @@ class DocumentsTest < ActiveSupport::TestCase
     end
   end
 
+  test "a link is the page a person reads the document on, and it must be navigable" do
+    declaration = Clickwrap.document(:linked, version: "1", content: "a", link: "  /legal/terms  ")
+    assert_equal "/legal/terms", declaration.link
+
+    assert_nil Clickwrap.document(:unlinked, version: "1", content: "a").link
+    assert_nil Clickwrap.document(:blank_link, version: "1", content: "a", link: "   ").link
+    assert_equal "https://www.example.com/terms",
+                 Clickwrap.document(:absolute, version: "1", content: "a",
+                                               link: "https://www.example.com/terms").link
+
+    # A link is rendered as an href AND signed into the manifest, so a scheme
+    # the gem would be painting into a page is refused at boot rather than at
+    # the moment somebody presses it. `//host` is refused for the same reason:
+    # protocol-relative is a different origin wearing a path's clothes.
+    ["javascript:alert(1)", "data:text/html,<script>", "legal/terms", "//evil.example.com"].each do |hostile|
+      error = assert_raises(Clickwrap::DefinitionError) do
+        Clickwrap.document(:hostile, version: "1", content: "a", link: hostile)
+      end
+
+      assert_match(/root-relative path/, error.message)
+    end
+  end
+
+  test "an unknown document option is refused by name, `link:` included in the list" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.document(:x, version: "1", content: "a", lnik: "/legal/terms")
+    end
+
+    assert_match(/`lnik:`/, error.message)
+    assert_match(/`link:`/, error.message)
+  end
+
   test "a missing source file is reported with its path" do
     Clickwrap.document(:nowhere, version: "1", from: Rails.root.join("app/content/legal/absent.md"))
 

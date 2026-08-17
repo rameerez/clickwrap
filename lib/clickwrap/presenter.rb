@@ -40,7 +40,8 @@ module Clickwrap
                    registration_flow_id: nil, prospective_actor: nil, acting_for: nil,
                    represented_party_creation_flow_id: nil,
                    authentication_context: nil,
-                   document_version_path_with: nil)
+                   document_version_path_with: nil,
+                   default_document_version_path_with: nil)
       @policy = policy
       @actor = actor
       @prospective_actor = prospective_actor
@@ -54,6 +55,11 @@ module Clickwrap
       @represented_party_creation_flow_id = represented_party_creation_flow_id
       @authentication_context = (authentication_context || {}).to_h.symbolize_keys
       @document_version_path_with = document_version_path_with
+      # Wired by `form.clickwrap` and `present_clickwrap` from the render
+      # context, never by a host: it is the engine fallback with the render's
+      # own Hotwire Native treatment attached, and it is asked LAST, after a
+      # document's declared `link:` has had its say.
+      @default_document_version_path_with = default_document_version_path_with
 
       return unless @document_version_path_with && !@document_version_path_with.respond_to?(:call)
 
@@ -303,9 +309,21 @@ module Clickwrap
           sanitizer_name: version.sanitizer_name,
           sanitizer_version: version.sanitizer_version,
           version_id: version.id,
-          path: document_path(version)
+          path: document_path(version, declared_link_for(document_key, version))
         )
       end
+    end
+
+    # The `link:` the application declared for exactly these bytes: same tenant,
+    # same key, same version label, same locale. Read from the registry rather
+    # than the database because it is a presentation decision, not evidence —
+    # the evidence is the digest of the bytes, which the row already holds.
+    def declared_link_for(document_key, version)
+      document = documents_for_this_policy[document_key.to_s]
+      return nil unless document
+
+      Clickwrap.documents[[document.tenant_key, document.document_key,
+                           version.version_label, version.locale]]&.link
     end
 
     # Documents are immutable and published: within one presentation build, the
@@ -326,18 +344,63 @@ module Clickwrap
       end
     end
 
+    # The order here is the whole contract of a document link.
+    #
+    #   1. A resolver the CALLER passed wins outright: it is the host saying, at
+    #      this call site, exactly where this document lives.
+    #   2. The document's declared `link:` — the host's own reader-facing page.
+    #   3. The render context's default resolver: the mounted engine route, with
+    #      whatever Hotwire Native treatment this request calls for. It is given
+    #      the declared link too, so a native render absolutizes a host page the
+    #      same way it absolutizes an engine path.
+    #   4. Nothing but the engine's own routes, which refuse rather than sign a
+    #      path that resolves to nothing.
+    def document_path(version, link)
+      path =
+        if @document_version_path_with
+          @document_version_path_with.call(version)
+        elsif @default_document_version_path_with
+          @default_document_version_path_with.call(version, link)
+        elsif link.present?
+          link
+        elsif defined?(Clickwrap::Engine)
+          engine_document_version_path(version)
+        end
+
+      return path.to_s if path.present?
+
+      raise ConfigurationError,
+            "Clickwrap could not build the immutable URL for document version #{version.id}. " \
+            "Present through form.clickwrap or present_clickwrap so the mounted route is known, " \
+            "or pass document_version_path_with: ->(version) { ... }."
+    rescue Clickwrap::Error
+      raise
+    rescue StandardError => error
+      raise ConfigurationError,
+            "Clickwrap could not build the immutable URL for document version #{version.id}: " \
+            "#{error.class}: #{error.message}"
+    end
+
     # The tenant's own document wins over the shared one, exactly as the
     # per-key lookup did. When there is no tenant the two scopes are the same
     # query, so only one is issued.
     def documents_for_this_policy
-      keys = policy.statements.flat_map(&:document_keys).uniq
-      return {} if keys.empty?
+      @documents_for_this_policy ||= begin
+        keys = policy.statements.flat_map(&:document_keys).uniq
 
-      shared = ::Clickwrap::Document.where(document_key: keys, tenant_key: nil).index_by(&:document_key)
-      return shared if tenant_key.blank?
+        if keys.empty?
+          {}
+        else
+          shared = ::Clickwrap::Document.where(document_key: keys, tenant_key: nil).index_by(&:document_key)
 
-      shared.merge(::Clickwrap::Document.for_tenant(tenant_key)
-                                        .where(document_key: keys).index_by(&:document_key))
+          if tenant_key.blank?
+            shared
+          else
+            shared.merge(::Clickwrap::Document.for_tenant(tenant_key)
+                                              .where(document_key: keys).index_by(&:document_key))
+          end
+        end
+      end
     end
 
     # One query for every version this presentation could offer, ordered the
@@ -357,28 +420,6 @@ module Clickwrap
         .order(effective_at: :desc, published_at: :desc, created_at: :desc)
         .group_by(&:document_id)
         .transform_values(&:first)
-    end
-
-    def document_path(version)
-      path =
-        if @document_version_path_with
-          @document_version_path_with.call(version)
-        elsif defined?(Clickwrap::Engine)
-          engine_document_version_path(version)
-        end
-
-      return path.to_s if path.present?
-
-      raise ConfigurationError,
-            "Clickwrap could not build the immutable URL for document version #{version.id}. " \
-            "Present through form.clickwrap or present_clickwrap so the mounted route is known, " \
-            "or pass document_version_path_with: ->(version) { ... }."
-    rescue Clickwrap::Error
-      raise
-    rescue StandardError => error
-      raise ConfigurationError,
-            "Clickwrap could not build the immutable URL for document version #{version.id}: " \
-            "#{error.class}: #{error.message}"
     end
 
     # The engine's own URL helpers carry no mount prefix, so on an application

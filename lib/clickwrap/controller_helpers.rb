@@ -380,13 +380,17 @@ module Clickwrap
       resolved[:actor] = clickwrap_current_actor unless resolved.key?(:actor)
       resolved[:tenant] = clickwrap_current_tenant(policy_key) unless resolved.key?(:tenant)
       resolved[:locale] = I18n.locale unless resolved.key?(:locale)
-      resolved[:document_version_path_with] ||= method(:clickwrap_document_version_path_for_presentation)
+      resolved[:default_document_version_path_with] ||= lambda do |version, declared_link|
+        clickwrap_document_version_path_for_presentation(version, declared_link: declared_link)
+      end
 
       Clickwrap.present(policy_key, **resolved)
     end
 
-    # The exact immutable URL offered beside a Clickwrap control. The mounted
-    # engine route is the default; a Hotwire Native request under
+    # The exact URL offered beside a Clickwrap control. A document declared with
+    # `link:` is read on the host's own page and that path is used as declared;
+    # everything else gets the mounted engine route for the exact published
+    # version. Either way, a Hotwire Native request under
     # `config.hotwire_native_document_links = { open_in: :external_browser, … }`
     # gets the same path absolutized against the canonical host, so the
     # document opens outside the WebView instead of destroying the screen the
@@ -394,10 +398,16 @@ module Clickwrap
     # override this one method. Whatever this returns is both rendered and
     # signed into the presentation manifest, so the evidence never claims a
     # different target from the link.
-    def clickwrap_document_version_path_for_presentation(version)
-      ControllerHelpers.assert_engine_can_resolve_document_links!(version) unless respond_to?(:clickwrap)
+    #
+    # `declared_link:` is passed by the presenter, which is the only thing that
+    # knows which document this version belongs to; a controller calling this
+    # directly for an engine link simply omits it.
+    def clickwrap_document_version_path_for_presentation(version, declared_link: nil)
+      path = declared_link.presence || begin
+        ControllerHelpers.assert_engine_can_resolve_document_links!(version) unless respond_to?(:clickwrap)
 
-      path = clickwrap_engine_routes.document_version_path(version.id)
+        clickwrap_engine_routes.document_version_path(version.id)
+      end
 
       native_links = Clickwrap.config.hotwire_native_document_links
       if native_links && clickwrap_hotwire_native_request? &&

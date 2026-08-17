@@ -121,6 +121,39 @@ class HotwireNativeDocumentLinksTest < ActiveSupport::TestCase
                  controller.clickwrap_document_version_path_for_presentation(version)
   end
 
+  test "a document's declared host-page link gets the same treatment as an engine path" do
+    # A `link:` points at the host's own formatted page, which is exactly the
+    # kind of same-host navigation that pops a native auth sheet and takes the
+    # half-filled signup form with it. Nothing about that changes because the
+    # path came from a declaration instead of a route.
+    Clickwrap.config.hotwire_native_document_links = {
+      open_in: :external_browser,
+      canonical_host: "https://www.example.com"
+    }
+    controller = NativeAwareController.new
+
+    controller.native = true
+    assert_equal "https://www.example.com/terms-of-service",
+                 controller.clickwrap_document_version_path_for_presentation(
+                   Version.new("x"), declared_link: "/terms-of-service"
+                 )
+
+    controller.native = false
+    assert_equal "/terms-of-service",
+                 controller.clickwrap_document_version_path_for_presentation(
+                   Version.new("x"), declared_link: "/terms-of-service"
+                 )
+  end
+
+  test "a declared link answers before the engine route, mounted or not" do
+    controller = NativeAwareController.new
+
+    assert_equal "/terms-of-service",
+                 controller.clickwrap_document_version_path_for_presentation(
+                   Version.new("x"), declared_link: "/terms-of-service"
+                 )
+  end
+
   test "same_screen keeps plain paths for native path configuration to route" do
     Clickwrap.config.hotwire_native_document_links = { open_in: :same_screen }
     controller = NativeAwareController.new

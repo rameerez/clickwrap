@@ -16,21 +16,32 @@ class EngineMountTest < ActiveSupport::TestCase
   # The dummy mounts at "/legal", NOT at the root, so this also proves the
   # fallback carries the host's real mount prefix rather than a bare path that
   # only happens to work when the engine is mounted at "/".
+  #
+  # :manual_bank_transfer, because its document declares no `link:` and
+  # therefore still resolves through the engine's own per-version route.
   test "a mounted engine signs the document link the host actually routes" do
-    presentation = Clickwrap.present(:signup, actor: @user)
-
-    paths = presentation.to_h["statements"].flat_map { |statement| statement["documents"] }
-                                           .map { |document| document["path"] }
+    paths = document_paths_in(Clickwrap.present(:manual_bank_transfer, actor: @user,
+                                                                       capture_channel: :operator))
 
     assert_predicate paths, :any?
     paths.each { |path| assert_match(%r{\A/legal/}, path, "the signed link must carry the mount prefix") }
+  end
+
+  # The refusal is about the ENGINE's route. A document that names the host page
+  # a person actually reads it on never reaches it — and a policy whose every
+  # document does that presents on an application with no mount at all.
+  test "a declared link is signed as declared, and needs no mount to be resolvable" do
+    Clickwrap::ControllerHelpers.stubs(:engine_is_mounted?).returns(false)
+
+    assert_equal ["/terms-of-service", "/privacy-policy"],
+                 document_paths_in(Clickwrap.present(:signup, actor: @user))
   end
 
   test "presenting refuses to sign a document link an unmounted engine cannot resolve" do
     Clickwrap::ControllerHelpers.stubs(:engine_is_mounted?).returns(false)
 
     error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.present(:signup, actor: @user)
+      Clickwrap.present(:manual_bank_transfer, actor: @user, capture_channel: :operator)
     end
 
     # The sentence has to name the line that fixes it. An error that says
@@ -43,14 +54,16 @@ class EngineMountTest < ActiveSupport::TestCase
   test "a host that binds its own document route may present without mounting the engine" do
     Clickwrap::ControllerHelpers.stubs(:engine_is_mounted?).returns(false)
 
-    presentation = Clickwrap.present(
-      :signup,
-      actor: @user,
-      document_version_path_with: ->(version) { "/our/legal/#{version.id}" }
+    # And it wins over the declared `link:` too: a resolver passed at the call
+    # site is the host saying where this document lives on THIS screen, which is
+    # more specific than what the declaration says in general.
+    paths = document_paths_in(
+      Clickwrap.present(
+        :signup,
+        actor: @user,
+        document_version_path_with: ->(version) { "/our/legal/#{version.id}" }
+      )
     )
-
-    paths = presentation.to_h["statements"].flat_map { |statement| statement["documents"] }
-                                           .map { |document| document["path"] }
 
     assert_predicate paths, :any?
     paths.each { |path| assert_match(%r{\A/our/legal/}, path) }
@@ -83,5 +96,12 @@ class EngineMountTest < ActiveSupport::TestCase
     findings = Clickwrap::Doctor.new.report
 
     assert_empty(findings.select { |finding| finding.message.include?("sign a document link") })
+  end
+
+  private
+
+  def document_paths_in(presentation)
+    presentation.to_h["statements"].flat_map { |statement| statement["documents"] }
+                                   .map { |document| document["path"] }
   end
 end

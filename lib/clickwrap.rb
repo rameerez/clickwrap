@@ -59,7 +59,7 @@ require_relative "clickwrap/engine" if defined?(Rails::Engine)
 # and no configuration flag here can stand in for them.
 module Clickwrap
   DOCUMENT_OPTIONS = %i[
-    version locale media_type effective_at tenant from content resolver renderer
+    version locale media_type effective_at tenant from content resolver renderer link
   ].freeze
 
   # The Minitest helpers hosts include in their own suite. Autoloaded rather

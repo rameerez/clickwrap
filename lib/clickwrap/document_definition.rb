@@ -12,6 +12,24 @@ module Clickwrap
   #     effective_at: Time.utc(2026, 8, 15),
   #     from: Rails.root.join("app/content/legal/terms.en.md")
   #
+  #   Clickwrap.document :terms,
+  #     from: Rails.root.join("app/content/legal/terms.md"),
+  #     link: "/legal/terms"
+  #
+  # `link:` is where a PERSON reads this document — the host's own formatted
+  # page, with its typography, its navigation, and its language switcher —
+  # rather than the engine's plain rendering of the published bytes. It is the
+  # path Clickwrap presents beside the control AND the path it signs into the
+  # presentation manifest, so the evidence never cites a different target from
+  # the link somebody could actually press.
+  #
+  # The trade is explicit and belongs to the host: a host page shows whatever
+  # is current, so the signed path is a stable address rather than an immutable
+  # snapshot. The bytes are still frozen, digested, and recorded — what changes
+  # is which URL the receipt says was offered. A host that wants the immutable
+  # rendering in the evidence simply leaves `link:` off and gets the engine's
+  # per-version route, as before.
+  #
   # The declaration says which bytes to publish. `bin/rails clickwrap:publish`
   # reads them once, digests them, and freezes a database snapshot. From then
   # on the snapshot is the evidence; the file on disk is only where it came
@@ -40,17 +58,24 @@ module Clickwrap
 
     REFUSED_VERSION_LABELS = %w[unversioned current latest head none default].freeze
 
+    # A `link:` is rendered as an href and signed into evidence, so it has to be
+    # somewhere a browser can navigate. Anything else — `javascript:`, `data:`,
+    # a bare word — would be a scheme the gem itself painted into a page.
+    LINK_SCHEMES = %r{\A(?:/[^/]|/\z|https://|http://)}
+
     attr_reader :key, :version_label, :locale, :media_type, :effective_at,
                 :tenant_key, :source_kind, :source_reference, :inline_content,
-                :resolver, :renderer
+                :resolver, :renderer, :link
 
     def initialize(key:, version: nil, locale: :en, media_type: nil, effective_at: nil,
-                   tenant: nil, from: nil, content: nil, resolver: nil, renderer: nil)
+                   tenant: nil, from: nil, content: nil, resolver: nil, renderer: nil,
+                   link: nil)
       @key = normalize_key(key)
       @locale = locale.to_s
       @effective_at = effective_at
       @tenant_key = tenant&.to_s
       @renderer = renderer
+      @link = normalize_link(link)
 
       assign_source(from:, content:, resolver:)
       @version_label = normalize_version(version || version_label_from_front_matter)
@@ -201,6 +226,23 @@ module Clickwrap
       end
 
       normalized
+    end
+
+    def normalize_link(value)
+      return nil if value.nil?
+
+      normalized = value.to_s.strip
+      return nil if normalized.empty?
+
+      unless normalized.match?(LINK_SCHEMES)
+        raise DefinitionError,
+              "Document #{key} has a `link:` of #{value.inspect}. A link is the page a person " \
+              "reads this document on, so it must be a root-relative path (\"/legal/terms\") or " \
+              "an absolute http(s) URL. Clickwrap renders it as an href and signs it into the " \
+              "presentation manifest, and it will not sign a scheme it cannot navigate to."
+      end
+
+      normalized.freeze
     end
 
     def validate!

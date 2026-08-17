@@ -45,7 +45,7 @@ class FormBuilderTest < ActionView::TestCase
     # The accessible name is the document's own name. "Click here" tells a person
     # reading a link list nothing about what they are about to accept.
     link_texts = links.map { |link| link.text.strip }
-    assert_equal ["Terms", "Privacy notice"], link_texts
+    assert_equal ["Terms of Service", "Privacy Policy"], link_texts
     links.each do |link|
       assert_equal "noopener", link["rel"]
       assert_equal "_blank", link["target"]
@@ -342,16 +342,20 @@ class FormBuilderTest < ActionView::TestCase
     assert_match(/form\.clickwrap_submit/, error.message)
   end
 
-  test "the manifest binds the exact immutable document paths rendered by the form" do
+  test "the manifest binds the exact document paths rendered by the form" do
     render_clickwrap(:signup, submit: "Create account")
 
-    manifest_paths = Clickwrap::PresentationManifest.from_token(presentation_token).statements.flat_map do |statement|
-      Array(statement["documents"]).map { |document| document["path"] }
-    end
-    rendered_paths = css_select("a.clickwrap-documents__link").map { |link| link["href"] }
+    assert_equal ["/terms-of-service", "/privacy-policy"], rendered_document_paths,
+                 "a document declared with `link:` is read on the host's own page"
+    assert_equal rendered_document_paths, manifest_document_paths
+  end
 
-    assert_equal rendered_paths, manifest_paths
-    assert(manifest_paths.all? { |path| path.match?(%r{/documents/\d+\z}) })
+  test "a document with no declared link keeps the engine's immutable per-version route" do
+    withdrawal = create_withdrawal(user: @user)
+    render_clickwrap(:withdrawal_authorization, submit: "Authorize", subject: withdrawal)
+
+    assert_equal rendered_document_paths, manifest_document_paths
+    assert(manifest_document_paths.all? { |path| path.match?(%r{/documents/\d+\z}) })
   end
 
   test "form.clickwrap refuses to guess the call to action" do
@@ -444,5 +448,15 @@ class FormBuilderTest < ActionView::TestCase
 
   def presentation_token
     css_select("input[name='clickwrap_submission[presentation_token]']").first["value"]
+  end
+
+  def rendered_document_paths
+    css_select("a.clickwrap-documents__link").map { |link| link["href"] }
+  end
+
+  def manifest_document_paths
+    Clickwrap::PresentationManifest.from_token(presentation_token).statements.flat_map do |statement|
+      Array(statement["documents"]).map { |document| document["path"] }
+    end
   end
 end
