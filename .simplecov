@@ -41,7 +41,11 @@ SimpleCov.start do
   # execute on some adapters. The floor has to hold on the LEANEST leg, so it
   # sits below the richest one. Raise both numbers whenever every leg has
   # cleared them for a while.
-  minimum_coverage line: 88, branch: 68
+  #
+  # Currently 92.09 line / 72.60 branch on the leanest leg (sqlite), so this is
+  # about a point of room in each. If a legitimate change spends it, add the
+  # tests rather than lowering these back.
+  minimum_coverage line: 91, branch: 71
 
   # Disambiguate parallel test runs
   command_name "Job #{ENV["TEST_ENV_NUMBER"]}" if ENV["TEST_ENV_NUMBER"]
