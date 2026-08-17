@@ -21,6 +21,17 @@ against its own claims. Everything below is a defect they evidenced.
   subclass reachable. "The installer detects your authentication stack and
   generates an explicit adapter" now says what it does: it detects, and prints
   the line for you to add.
+- **`renew!`, `correct_declaration!`, and `change_consent_scope!` had no tests,
+  no documentation, and no callers.** They are the conceptual spine of the six
+  verbs, so they are now tested behaviorally — the event is appended, the
+  earlier event still says exactly what it said and still verifies, and the new
+  receipt verifies on its own — and the README shows each one with the sentence
+  that says what it means. Writing those tests surfaced the reason nobody had
+  used them: all three capture through a real presentation, so each needs a
+  `submission:` exactly as the original statement did. That is correct — a
+  correction, a renewal and a rescope are new statements by the same person,
+  not administrative flags — but it was nowhere in the docs, and the README now
+  says it.
 - **`config.actor_class_name` now decides something.** The installer spends
   sixty lines, a `--actor-class` option, and a seven-line warning on this
   setting because "a wrong guess attributes evidence to the wrong kind of

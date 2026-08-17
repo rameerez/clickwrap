@@ -521,6 +521,30 @@ Clickwrap.withdraw!(:product_updates, actor: current_user, http_request: request
 
 Withdrawal appends an event — it never deletes or mutates the historical grant. Declarations work the same way: they expire, get corrected, or get superseded through linked lifecycle events, without pretending the original statement never happened.
 
+Three of those transitions are new statements by the same person rather than administrative flags, so each one is captured through a real presentation and submission, exactly like the first statement was:
+
+```ruby
+# The facts someone declared changed. A correction never implies the original
+# was false when it was made.
+Clickwrap.correct_declaration!(:contractor_status, actor: current_user, subject: engagement,
+  submission: clickwrap_submission,
+  because: "The person told us their circumstances changed")
+
+# A new validity period, starting now — never the old expiry pushed along, so a
+# stale expiry cannot quietly survive a renewal.
+Clickwrap.renew!(:contractor_status, actor: current_user, subject: engagement,
+  submission: clickwrap_submission,
+  because: "The person renewed their declaration before it lapsed")
+
+# Consent that now covers something narrower or wider. Rescoping is not
+# withdrawal: the permission stays active, under new terms.
+Clickwrap.change_consent_scope!(:product_updates, actor: current_user,
+  submission: clickwrap_submission,
+  because: "The person narrowed this permission in privacy settings")
+```
+
+Every one of them appends a linked event, leaves the earlier event exactly as it was recorded, and produces a receipt that verifies on its own.
+
 Seeds, imports, and admin-created accounts never fake a human click either — `Clickwrap.exempt!` records an explicit exemption with who created it and why, and exemptions never satisfy `agreed_to?`.
 
 ## Receipts show exactly what the application recorded

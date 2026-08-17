@@ -121,6 +121,148 @@ class LifecycleTest < ActiveSupport::TestCase
     end
   end
 
+  test "correcting a declaration appends a correction and leaves the original saying what it said" do
+    scheme = create_withdrawal(user: @user)
+    original = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
+                                                      answers: { non_professional_driver: "1" })
+
+    correction = nil
+    assert_difference -> { Clickwrap::Event.where(event_type: "correction").count }, 1 do
+      correction = committed_test_receipt(Clickwrap.correct_declaration!(
+                                            :non_professional_driver,
+                                            actor: @user,
+                                            subject: scheme,
+                                            because: "The person told us their circumstances changed",
+                                            submission: lifecycle_submission(:driver_declaration,
+                                                                             actor: @user, subject: scheme)
+                                          ))
+    end
+
+    # A correction does not say the original was false when it was made. Both
+    # events exist, the first still verifies, and it still reads "declared".
+    assert_equal "correction", correction.event.event_type
+    assert_equal original.event_id, correction.event.predecessor_event_id
+    assert_equal original.event_id, correction.event.root_event_id
+    assert_equal "declared", original.event.reload.statements.sole.action
+    assert_predicate original.event, :digest_verified?
+
+    assert_equal "corrected", correction.event.statements.sole.action
+    assert_predicate correction.verify, :success?
+
+    # The corrected statement is the one that counts now, and it is still an
+    # ACTIVE declaration — a correction replaces what the person says, it does
+    # not put them in a state of having declared nothing.
+    state = @user.clickwraps.declaration(:non_professional_driver, subject: scheme)
+    assert_equal "active", state.state
+    assert_equal correction.event_id, state.current_event_id
+    assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+  end
+
+  test "an agreement cannot be corrected, because that is what a new version is for" do
+    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+
+    error = assert_raises(Clickwrap::LifecycleError) do
+      Clickwrap.correct_declaration!(:terms, actor: @user, because: "Trying to correct a contract")
+    end
+
+    assert_match(/superseded by a new version/, error.message)
+  end
+
+  test "renewing starts a new validity period rather than extending the old one" do
+    scheme = create_withdrawal(user: @user)
+    original = capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
+                                                      answers: { non_professional_driver: "1" })
+    first_expiry = @user.clickwraps.declaration(:non_professional_driver, subject: scheme).expires_at
+
+    renewal = nil
+    travel_to 6.months.from_now do
+      assert_difference -> { Clickwrap::Event.where(event_type: "renewal").count }, 1 do
+        renewal = committed_test_receipt(Clickwrap.renew!(
+                                           :non_professional_driver,
+                                           actor: @user,
+                                           subject: scheme,
+                                           because: "The person renewed their declaration before it lapsed",
+                                           submission: lifecycle_submission(:driver_declaration,
+                                                                            actor: @user, subject: scheme)
+                                         ))
+      end
+
+      renewed_expiry = @user.clickwraps.declaration(:non_professional_driver, subject: scheme).expires_at
+
+      # A full period from the renewal, not the old expiry pushed along — so a
+      # stale expiry can never quietly survive a renewal.
+      assert_in_delta 1.year.from_now.to_i, renewed_expiry.to_i, 60
+      assert_operator renewed_expiry, :>, first_expiry
+      assert @user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+    end
+
+    assert_equal "renewal", renewal.event.event_type
+    assert_equal original.event_id, renewal.event.root_event_id
+    assert_equal "declared", original.event.reload.statements.sole.action
+    assert_predicate original.event, :digest_verified?
+    assert_predicate renewal.verify, :success?
+  end
+
+  test "a statement with no validity period cannot be renewed" do
+    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+
+    error = assert_raises(Clickwrap::LifecycleError) do
+      Clickwrap.renew!(:terms, actor: @user, because: "Trying to renew something that never expires")
+    end
+
+    assert_match(/no validity period/, error.message)
+  end
+
+  test "changing consent scope appends a scope change and keeps the original grant" do
+    grant = capture_clickwrap(:personal_newsletter, actor: @user,
+                                                    answers: { personal_newsletter: "1" })
+
+    change = nil
+    assert_difference -> { Clickwrap::Event.where(event_type: "scope_change").count }, 1 do
+      change = committed_test_receipt(Clickwrap.change_consent_scope!(
+                                        :personal_newsletter,
+                                        actor: @user,
+                                        because: "The person narrowed this permission in privacy settings",
+                                        submission: lifecycle_submission(
+                                          :personal_newsletter, actor: @user,
+                                                                answers: { personal_newsletter: "1" }
+                                        )
+                                      ))
+    end
+
+    assert_equal "scope_change", change.event.event_type
+    assert_equal grant.event_id, change.event.root_event_id
+    assert_equal grant.event_id, change.event.predecessor_event_id
+    assert_equal "scope_changed", change.event.statements.sole.action
+
+    # The rescoped consent is the one that counts now, and it is still ACTIVE:
+    # narrowing what a permission covers is not the same act as withdrawing it,
+    # and the projection must not blur the two.
+    state = @user.clickwraps.consent(:personal_newsletter)
+    assert_equal "active", state.state
+    assert_equal change.event_id, state.current_event_id
+    assert @user.clickwraps.consented_to?(:personal_newsletter)
+
+    # The original grant is still there and still says what it said. A scope
+    # change is a new permission, never a rewrite of the earlier one.
+    assert_equal "granted", grant.event.reload.statements.sole.action
+    assert_predicate grant.event, :digest_verified?
+    assert_predicate change.verify, :success?
+  end
+
+  test "only consent has a changeable scope" do
+    scheme = create_withdrawal(user: @user)
+    capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
+                                           answers: { non_professional_driver: "1" })
+
+    error = assert_raises(Clickwrap::LifecycleError) do
+      Clickwrap.change_consent_scope!(:non_professional_driver, actor: @user, subject: scheme,
+                                                                because: "Trying to rescope a declaration")
+    end
+
+    assert_match(/Only consent has a changeable scope/, error.message)
+  end
+
   test "a declaration is bound to its subject fingerprint" do
     scheme = create_withdrawal(user: @user, covered_ride_ids: "1,2,3")
     capture_clickwrap(:driver_declaration, actor: @user, subject: scheme,
@@ -392,6 +534,17 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   private
+
+  # Correcting, renewing, and rescoping are affirmative acts by the same
+  # person, so each one is captured through a real presentation exactly as the
+  # first statement was — not an administrative flag flipped behind the
+  # person's back. That is why every one of them needs a submission.
+  def lifecycle_submission(policy_key, actor:, subject: nil, answers: {})
+    submission_for(
+      present_clickwrap(policy_key, actor: actor, subject: subject),
+      default_clickwrap_answers(policy_key, answers)
+    )
+  end
 
   def withdrawal_answers
     { withdrawal_requirements: "1", ride_exclusivity: "1", withdrawal: "1" }
