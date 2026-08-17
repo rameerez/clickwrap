@@ -320,6 +320,33 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     end
   end
 
+  test "the post-install message names the door line, with the host's own Devise file and class" do
+    # The one omission nothing can warn about at runtime. A host that follows
+    # this message verbatim and never adds the door line gets a rendering
+    # checkbox, a created account, and no evidence — and the gem is never
+    # called, so it cannot complain. The message is the only place that
+    # instruction can live, so it is pinned here.
+    assert defined?(::Devise), "this test proves the Devise branch, so the test process must load Devise"
+
+    output = run_generator %w[--skip-questions]
+
+    assert_match(/clickwraps_registration_with :signup/, output)
+    assert_match(%r{app/controllers/users/registrations_controller\.rb}, output)
+    assert_match(/class Users::RegistrationsController < Devise::RegistrationsController/, output)
+    assert_match(%r{devise_for :users, controllers: \{ registrations: "users/registrations" \}}, output)
+  end
+
+  test "the post-install message also names the door line for a hand-rolled signup" do
+    output = run_generator %w[--skip-questions]
+
+    assert_match(/register_with_clickwrap\(:signup, user: @user\) \{ @user\.save! \}/, output)
+    assert_match(/render :new, status: :unprocessable_entity/, output)
+
+    # Stating the consequence is the point: the danger is that nothing looks
+    # broken, so the message has to say the failure out loud.
+    assert_match(/no evidence/, output)
+  end
+
   test "the initializer offers the Hotwire Native seam without turning it on" do
     run_generator %w[--skip-questions]
 

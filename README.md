@@ -127,7 +127,32 @@ bin/rails db:migrate
 
 The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
 
-Point the generated policy at the documents your app already owns (see the example above), add `has_clickwraps` to your user model, drop `form.clickwrap` into your signup form, then publish immutable snapshots of your documents:
+Point the generated policy at the documents your app already owns (see the example above), add `has_clickwraps` to your user model, and drop `form.clickwrap` into your signup form:
+
+```erb
+<%= form.clickwrap :signup, submit: "Create account" %>
+```
+
+Then wire the door that creates the account, because the form is only half the circuit — some line has to write the account and its evidence in the same transaction:
+
+```ruby
+# Devise — app/controllers/users/registrations_controller.rb
+class Users::RegistrationsController < Devise::RegistrationsController
+  clickwraps_registration_with :signup
+end
+```
+
+```ruby
+# Rails authentication, an OAuth finish screen, a service object — any door
+# that builds the record itself.
+unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+  return render :new, status: :unprocessable_entity
+end
+```
+
+Do not skip that step. Leave it out and everything still *looks* right — the checkbox renders, the person ticks it, the account is created — and there is no evidence at all. It is the one omission this gem cannot warn you about at runtime, because an app with no door simply never calls it.
+
+Finally, publish immutable snapshots of your documents:
 
 ```bash
 bin/rails clickwrap:publish
@@ -618,7 +643,7 @@ bin/rails clickwrap:verify        # verify continuously in production
 
 ## Works with Devise, Rails authentication, Hotwire, and APIs
 
-The installer detects your authentication stack and generates an explicit adapter — not a hidden `after_create` callback:
+The installer detects your authentication stack and prints the exact door line to add, with your own file path and class name filled in. You add it yourself: this is an explicit adapter you can read in your own controller, not a hidden `after_create` callback the gem installs behind your back.
 
 ```ruby
 # Devise

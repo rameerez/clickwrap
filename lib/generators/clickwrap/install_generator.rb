@@ -302,6 +302,8 @@ module Clickwrap
         say "  #{step += 1}. Render the policy and its bound submit action:"
         say "       <%= form.clickwrap :signup, submit: \"Create account\" %>"
 
+        step = say_the_authentication_door_step(step)
+
         say "  #{step += 1}. Set up your test suite (presentations refuse unpublished documents"
         say "     in tests exactly as in production):"
         say "       # test/test_helper.rb"
@@ -327,6 +329,64 @@ module Clickwrap
       end
 
       private
+
+      # The step nothing else can stand in for. `form.clickwrap` renders the
+      # policy and binds the submit action, but the form is only half the
+      # circuit: some line in the signup door has to be the one that creates
+      # the account and writes the evidence in the same transaction. Leave it
+      # out and everything still LOOKS right — the checkbox renders, the person
+      # ticks it, the account is created — and there is no evidence at all.
+      #
+      # This is the one instruction whose omission is silent, so it is printed
+      # in every run, with the host's own file path and class name filled in.
+      def say_the_authentication_door_step(step)
+        say "  #{step += 1}. Record the acceptance in the door that creates the account."
+        say "     ⚠️  Nothing else does this. Without the line below the form still", :yellow
+        say "     renders and the box still ticks, and every account is created with", :yellow
+        say "     no evidence — silently.", :yellow
+
+        say_devise_door_step if devise_detected?
+        say_generic_door_step
+
+        step
+      end
+
+      def say_devise_door_step
+        say "       # #{devise_registrations_controller_path}"
+        say "       class #{devise_registrations_controller_class_name} < Devise::RegistrationsController"
+        say "         clickwraps_registration_with :signup"
+        say "       end"
+        say "       # config/routes.rb — Devise has to route at that subclass:"
+        say "       devise_for :#{devise_scope_name}, controllers: " \
+            "{ registrations: \"#{devise_registrations_controller_path_for_routes}\" }"
+      end
+
+      def say_generic_door_step
+        say "       # Rails authentication, an OAuth finish screen, a service object —"
+        say "       # any door that builds the record itself:"
+        say "       unless register_with_clickwrap(:signup, user: @user) { @user.save! }"
+        say "         return render :new, status: :unprocessable_entity"
+        say "       end"
+      end
+
+      # Devise's own convention scopes the registrations controller under the
+      # plural of the mapped model, so a `User` mapping is served by
+      # Users::RegistrationsController.
+      def devise_scope_name
+        (actor_class_name || "User").underscore.tr("/", "_").pluralize
+      end
+
+      def devise_registrations_controller_class_name
+        "#{(actor_class_name || "User").pluralize}::RegistrationsController"
+      end
+
+      def devise_registrations_controller_path_for_routes
+        "#{(actor_class_name || "User").underscore.pluralize}/registrations"
+      end
+
+      def devise_registrations_controller_path
+        "app/controllers/#{devise_registrations_controller_path_for_routes}_controller.rb"
+      end
 
       def migration_version
         "[#{ActiveRecord::VERSION::STRING.to_f}]"
