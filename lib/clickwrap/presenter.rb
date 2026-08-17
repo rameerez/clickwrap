@@ -52,6 +52,12 @@ module Clickwrap
                            :control_name, :control_id, :error_id) do
       def covers?(statement_key) = statement_keys.include?(statement_key.to_s)
 
+      # Always. Only required statements compose, so the single control is
+      # required too — which also lets a custom surface pass this object to
+      # `clickwrap_statement_check_box` and get the same markup contract a
+      # statement gets.
+      def required? = true
+
       # The statement whose name the single control carries. Every covered
       # statement is answered by it; this is the one whose key it is submitted
       # under, so a browser sends one value and the server fans it out.

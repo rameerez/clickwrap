@@ -233,6 +233,21 @@ Ask, in order:
 
 If a single control would need two of these answers, it is two controls.
 
+### One control, several acts — and the line consent never crosses
+
+The default rendering composes an ordinary `agree_to` and `acknowledge` into one checkbox
+carrying one sentence, and the receipt still records them as two acts with two lifecycles. That
+is not a contradiction of the rule above: the person is not being asked to answer them
+differently, they are being asked to do the two ordinary things a signup asks for, and the
+manifest signs which statements the one control covered.
+
+A `consent_to` never joins that line, under any configuration. It cannot be optional inside a
+required sentence without silently becoming required; it cannot be separately withdrawable if
+withdrawing it would mean withdrawing assent to the Terms; and it cannot be distinguishable from
+other matters if it is one clause in a sentence about other matters. Only `agreement` and
+`acknowledgment` are composable at all, so this is not a default somebody can configure their
+way past — it is the shape of the code.
+
 ---
 
 ## Reading current state

@@ -341,6 +341,12 @@ module Clickwrap
 
         say "  #{step += 1}. Render the policy and its bound submit action:"
         say "       <%= form.clickwrap :signup, submit: \"Create account\" %>"
+        say "       That renders ONE line — a checkbox and a sentence with your documents"
+        say "       linked inside it:"
+        say "         [ ] I agree to the Terms and I acknowledge the Privacy Notice."
+        say "       Point each document at the page people read it on, and the links in that"
+        say "       sentence go there:"
+        say "         Clickwrap.document :terms, from: ..., link: \"/legal/terms\""
 
         step = say_the_authentication_door_step(step)
 

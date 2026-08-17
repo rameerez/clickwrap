@@ -6,6 +6,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — the signup clickwrap is one line
+
+- **`form.clickwrap` renders ONE checkbox carrying ONE sentence** whenever every
+  statement in a policy is an ordinary, required, default-worded `agree_to` or
+  `acknowledge`:
+
+      ☐ I agree to the Terms of Service and I acknowledge the Privacy Policy.
+
+  The documents are linked inside the sentence, and the label IS the sentence —
+  pressing the words toggles the control and assistive technology announces both
+  together. Gone from the rendering: the "Required" flag, the visible "(opens in
+  a new tab)" hint, the version label under each link, and the list of documents
+  under each statement. The `required` attribute stays as progressive
+  enhancement (THE SERVER DECIDES is unchanged), the new-tab truth is now an
+  `sr-only` span rendered only when the link really does open one, and versions
+  stay on receipts, where somebody reading the record can act on them.
+
+  The evidence is unchanged. One control, several statements: the manifest signs
+  which statement keys it covers and which key it is submitted under, and the
+  server fans that one answer out to all of them — each recorded with its own
+  kind, documents, assertion, and lifecycle, exactly as before. An unticked or
+  absent control refuses every one of them. Whether one answer may cover several
+  statements is re-checked at capture against the FROZEN POLICY REVISION, not
+  taken on the token's word.
+
+  Nothing that a person could reasonably want to answer differently is folded
+  in: optional consents, recorded yes/nos, statements with a withdrawal route,
+  and copy an application wrote itself all keep a control of their own below the
+  line. A policy with nothing composable — operator attestation rails, payout
+  authorizations — renders exactly as it did before. `combined: false` on
+  `form.clickwrap` / `form.clickwrap_fields` asks for the itemized shape, and it
+  reaches the presenter rather than the template, so the manifest signs the
+  shape that was offered. An itemized manifest is byte-identical to the ones
+  earlier versions wrote.
+
+  The words are translations: `clickwrap.sentence.agreement`,
+  `clickwrap.sentence.acknowledgment`, and three connectives, with `%{documents}`
+  marking where the links go. A locale that has not translated them renders the
+  itemized shape rather than half an English sentence.
+
+  Custom surfaces iterate `presentation.itemized_statements` rather than
+  `statements`, and render `clickwrap_combined_sentence(presentation.combined)`
+  when there is one. The presentation linter keeps its preselected-control and
+  action-ordering rules and gains
+  `combined_statement_rendered_as_its_own_control`, which is where an ejected
+  view lands after this change.
+
+### Added — `link:`, the page a person actually reads a document on
+
+- **`Clickwrap.document :terms, from: ..., link: "/legal/terms"`** presents and
+  signs the host's own formatted page instead of the engine's rendering of the
+  published bytes. It is the path rendered AND the path signed, so evidence
+  never cites a different target from the link somebody pressed, and the trade
+  is written where a reviewer sees it: a host page shows whatever is current, so
+  the signed path is a stable address rather than an immutable snapshot. The
+  bytes stay frozen, digested, and recorded either way.
+
+  Precedence: a resolver passed at the call site, then `link:`, then the render
+  context's default resolver (the mounted engine route, with this request's
+  Hotwire Native treatment attached — which therefore applies to `link:` paths
+  unchanged), then the engine's own routes. The refusal to sign a link an
+  unmounted engine cannot resolve is about the ENGINE route, so a policy whose
+  every document names a host page now presents with no mount at all, and the
+  refusal keeps firing for every document that does not.
+
+  A `link:` is checked at boot for a scheme a browser can navigate:
+  `javascript:`, `data:`, a bare word, and protocol-relative `//host` are
+  refused with the sentence that fixes them.
+
+- The presenter's framework wiring moved from `document_version_path_with:` to
+  `default_document_version_path_with:`, leaving the former as what it always
+  read like — the host's own resolver, which still wins outright.
+  `clickwrap_document_version_path_for_presentation` gained a `declared_link:`
+  keyword.
+
 ### Added — the quickstart runs in CI
 
 - **The README quickstart is now executed end to end**, in a subprocess, against

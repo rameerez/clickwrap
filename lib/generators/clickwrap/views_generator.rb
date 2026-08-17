@@ -23,6 +23,12 @@ module Clickwrap
     # the person can actually press. Restyle freely, but a copy that preselects a
     # control or moves the links below the button changes what the receipt is
     # describing — and the development linter will say so.
+    #
+    # The same goes for the composed line. `presentation.combined` is one control
+    # answering several statements, and the manifest signs which ones; render it
+    # and then iterate `presentation.itemized_statements`, never `statements`, or
+    # the page offers a second control for a statement the one control already
+    # covers. The linter reports that too.
     class ViewsGenerator < Rails::Generators::Base
       source_root File.expand_path("../../../app/views", __dir__)
 
@@ -55,7 +61,10 @@ module Clickwrap
         say "\n   Worth keeping while you restyle: explicit labels, visible keyboard focus,"
         say "   conventional high-contrast links, `aria-invalid`/`aria-describedby` error"
         say "   relationships, meaning that does not depend on color alone, and validation"
-        say "   that still works with no JavaScript.\n"
+        say "   that still works with no JavaScript."
+        say "\n   And keep the shape: render `presentation.combined` as ONE control, then"
+        say "   iterate `presentation.itemized_statements` — never `statements`, or you offer"
+        say "   a second box for a statement the first one already answers.\n"
       end
 
       private

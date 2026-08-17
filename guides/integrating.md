@@ -320,13 +320,25 @@ and wrapper:
                                     submit_button_text: "He leído todo: empezar") %>
 <%= clickwrap_presentation_token_field(presentation) %>
 
-<% presentation.statements.each do |statement| %>
+<% if presentation.combined %>
+  <%= clickwrap_statement_check_box(presentation.combined, class: "your-checkbox") %>
+  <%= label_tag presentation.combined.control_id,
+        clickwrap_combined_sentence(presentation.combined) %>
+<% end %>
+
+<% presentation.itemized_statements.each do |statement| %>
   <%= clickwrap_statement_check_box(statement, class: "your-checkbox") %>
   <%= label_tag statement.control_id, statement.assertion %>
 <% end %>
 
 <%= clickwrap_submit_button(presentation, class: "your-button") %>
 ```
+
+Iterate `itemized_statements`, never `statements`: on a policy that composed, the
+statements the line already covers have no control of their own, and rendering
+one for each would offer a choice nobody has. (Present with `combined: false` if
+you want a control per statement — then `combined` is nil and
+`itemized_statements` is every statement, so the same template does both.)
 
 `clickwrap_submit_button` is worded by the signed manifest itself — the CTA
 is written once, at present time, so the recorded words and the pressed words

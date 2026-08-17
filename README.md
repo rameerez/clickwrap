@@ -15,6 +15,12 @@ Ordinary Terms acceptance is one line in your signup form:
 <%= form.clickwrap :signup, submit: "Create account" %>
 ```
 
+…and it renders one line on the page. One checkbox, one sentence, your legal pages linked inside it:
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+No "Required" flag, no "(opens in a new tab)" printed beside every link, no version label sitting under a checkbox. Behind that single control, the receipt still records two separate acts — an *agreement* to the Terms and an *acknowledgment* of the Privacy Notice — with their own versions, digests, and lifecycles.
+
 And when an action is consequential enough that it must never happen without its evidence (a payout, a data handoff, a contract), the evidence and the action commit in the same database transaction:
 
 ```ruby
@@ -48,11 +54,15 @@ last_updated: 2026-08-15
 # clickwrap-doc-test: syntax-only — terms.md and privacy.md are files in your app
 # config/clickwrap.rb
 Clickwrap.document :terms,
-  from: Rails.root.join("app/content/legal/terms.md")
+  from: Rails.root.join("app/content/legal/terms.md"),
+  link: "/legal/terms"
 
 Clickwrap.document :privacy_notice,
-  from: Rails.root.join("app/content/legal/privacy.md")
+  from: Rails.root.join("app/content/legal/privacy.md"),
+  link: "/legal/privacy"
 ```
+
+`from:` is the bytes Clickwrap freezes, digests, and keeps as evidence. `link:` is where a *person* reads them — your own formatted page, with your typography and your navigation — and it is the path Clickwrap both renders and signs, so the receipt never cites a different target from the link somebody pressed. Leave `link:` off and the sentence links to the engine's rendering of the exact published version instead. (Your page shows whatever is current; that trade is yours to make, and it is written down in the declaration where a reviewer will see it.)
 
 Changing your Terms is then one edit in one file: new words, new `last_updated:`, publish. There is no second copy of the version label anywhere to drift — and a file carrying neither `clickwrap_version:` nor `last_updated:` fails the boot with a sentence instead of getting a label Clickwrap invented. Sources that can't carry front matter still name their label the explicit way:
 
@@ -103,11 +113,13 @@ class User < ApplicationRecord
 end
 ```
 
-Render the checkboxes and the submit button as one bound presentation:
+Render the line and the submit button as one bound presentation:
 
 ```erb
 <%= form.clickwrap :signup, submit: "Create account" %>
 ```
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
 
 From that moment on, you can ask readable questions everywhere:
 
@@ -195,6 +207,64 @@ it also freezes the snapshots for whatever you declared, before the server takes
 That's it! Your app now records which exact document versions the server offered, which explicit
 answers it accepted, the bound presentation wording, and when—atomically with account creation.
 Let's see how it works.
+
+### What that one line renders
+
+One line:
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+One checkbox, one label, one sentence, with the documents linked *inside* it. The label **is** the
+line, so pressing the words toggles the control and a screen reader announces the sentence and the
+box together. There is no "Required" flag, no "(opens in a new tab)" printed beside every link, and
+no version label under the checkbox. (The `required` attribute is still there as progressive
+enhancement — **the server decides** — the "opens in a new tab" truth is still announced to screen
+readers when the link really does open one, and versions still appear on receipts, where somebody
+is actually reading the record.)
+
+Behind that single control the evidence is unchanged: two statements, two kinds, two document
+versions, two lifecycles. Ticking the box records an *agreement* to the Terms and an
+*acknowledgment* of the Privacy Notice; leaving it empty refuses both. The manifest signs the exact
+composed sentence and which statements the one control answered, so the substitution defense holds
+over the wording a person actually read.
+
+Clickwrap composes that line only when every statement in the policy is an ordinary, required,
+default-worded `agree_to` or `acknowledge`. Anything else keeps a control of its own, **below** the
+line:
+
+```ruby
+Clickwrap.policy :signup do
+  # These two compose into the line.
+  agree_to :terms, link_label: "Terms of Service"
+  acknowledge :privacy_notice, link_label: "Privacy Policy"
+
+  # This one gets its own box, below the line, with its withdrawal route.
+  consent_to :product_updates,
+    document: :marketing_notice,
+    optional: true,
+    withdrawal_path: "/settings/privacy"
+
+  retain_with :ordinary_agreement_evidence
+end
+```
+
+An optional consent is never folded in — bundling it would silently make it required, and unbundled
+consent is the whole point of the `consent_to` verb. Neither is a recorded yes/no, a statement with
+a withdrawal route, or copy your application wrote itself. And a policy with nothing composable —
+the operator attestation rails, the payout authorization — renders exactly as it always has, one
+control per act.
+
+Want the itemized shape anyway? One boolean, and it reaches the presenter, so the manifest signs
+the shape that was actually offered:
+
+```erb
+<%= form.clickwrap :signup, submit: "Create account", combined: false %>
+```
+
+The words are yours. `clickwrap.sentence.agreement` and `clickwrap.sentence.acknowledgment` are
+ordinary translations with `%{documents}` marking where the links go, and each document's link text
+comes from `link_label:` on the statement — which is how "Privacy Notice" becomes "Privacy Policy"
+without touching what the statement asserts.
 
 Legal pages in Markdown? `config.document_renderer = :markdown` renders through whichever
 Markdown library you already bundle, and `:markdown_rails` renders through your application's

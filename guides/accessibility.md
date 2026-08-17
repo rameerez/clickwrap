@@ -20,27 +20,41 @@ the gem's own suite.
 
 ### Labels and programmatic names
 
-Every statement renders one control with one label, tied together by ID:
+Every control has one label, tied together by ID, and the label carries the words:
 
 ```erb
-<%= check_box_tag statement.control_name, "1", false, id: statement.control_id, ... %>
-<%= label_tag statement.control_id do %>
-  <%= statement.assertion %>
-<% end %>
+<%= check_box_tag combined.control_name, "1", false, id: combined.control_id, ... %>
+<%= label_tag combined.control_id, clickwrap_combined_sentence(combined) %>
 ```
 
-The label contains the exact first-person sentence the receipt will record. Pressing the words
-toggles the control, and assistive technology announces them together. There is no
-`aria-label` standing in for a visible label, and no placeholder doing a label's job.
+The label **is** the sentence — including the document links, which sit inside it. Pressing the
+words toggles the control, and assistive technology announces the sentence and the box together.
+There is no `aria-label` standing in for a visible label, and no placeholder doing a label's job.
 
 For an explicit yes/no decision, the group is a real `<fieldset>` with a `<legend>` carrying the
 assertion, and each radio has its own `<label>`.
 
-### One control per act
+### The default is one line
 
-Two acts never share a checkbox. "Agreed to the Terms" and "acknowledged the Privacy Notice" are
-different facts with different lifecycles, and a single control claiming both records something
-that did not happen. This is an evidence rule that happens to also be a usability rule.
+An ordinary signup renders one checkbox carrying one sentence:
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+That is a deliberate accessibility decision as much as a visual one. Two boxes, two "Required"
+flags, two version labels, and four stacked links are four times the interface for the same
+decision — and everything a screen-reader user has to hear before reaching the button is
+something a sighted user gets to skip.
+
+### One control never covers two *different kinds of* answer
+
+The composed line is one control answering several statements, and it is allowed to be, because
+the server signs which statements it covered and answers all of them from the one box. What it
+may never absorb is an answer somebody could reasonably want to give differently: an optional
+consent (which the line would silently make required), a recorded yes/no, a purpose with a
+withdrawal route, or copy the application wrote itself. Each of those keeps its own control below
+the line — and the development linter flags
+`combined_statement_rendered_as_its_own_control` if a page offers a *second* control for a
+statement the signed line already covers, because that box offers a choice nobody has.
 
 ### Controls start unselected
 
@@ -69,13 +83,20 @@ matching `id`. The `fieldset` gets the same treatment for choice groups.
 `role="alert"` so assistive technology announces it when the failed submission re-renders,
 `tabindex="-1"` so it can hold focus, and `autofocus` so the browser moves focus there on load —
 **without a line of JavaScript**. Each entry is a link to the control it is about, so the fix is
-one press away rather than a scroll and a hunt.
+one press away rather than a scroll and a hunt. One control gets one entry however many acts it
+answered: three lines pointing at the same checkbox is a list of the page's internals, not of a
+person's problems.
 
 ### Meaning is never carried by color alone
 
-Required and optional are rendered as text (`clickwrap.ui.required`, `clickwrap.ui.optional`),
-not as a colored asterisk. Error messages carry a text prefix (`clickwrap.ui.error_prefix`)
-before the message. The styling underlines and colors these; the meaning survives without either.
+Error messages carry a text prefix (`clickwrap.ui.error_prefix`) before the message. The styling
+underlines and colors these; the meaning survives without either.
+
+Nothing prints the word "Required" beside a control. The `required` attribute is there as
+progressive enhancement, and **the server decides** either way — but a required control on a
+signup form is not information anybody is missing, and a page that has to say it is a page
+expecting to be argued with. An optional consent stays unlabelled for the same reason and
+because it is unticked, unrequired, and separate: three signals that say it already.
 
 ### It works with no JavaScript
 
@@ -86,18 +107,21 @@ attribute, never sends the field, or posts by hand meets the same server-side ch
 
 ### Document links come before the action
 
-Links to each document render above the submit control, carry the document's own name rather
-than "click here", and open in a new tab with `rel="noopener"` plus a visible "opens in a new
-tab" hint so a half-filled form is not lost. A link that only appears after the call to action
-has been pressed is not a link to anything.
+Links to each document render above the submit control — inside the sentence on the composed
+line, under the statement on an itemized one — carry the document's own name rather than "click
+here", and open in a new tab with `rel="noopener"` so a half-filled form is not lost. A link
+that only appears after the call to action has been pressed is not a link to anything.
 
-Hosts that change how links open — `config.document_link_html_options_with`, or
-`config.hotwire_native_document_links` for a native app — change the hint with them: it is
-rendered only when the link really does open a new tab, so a `:same_screen` native link
-announces nothing it does not do.
+The "opens in a new tab" hint is rendered as an `sr-only` span rather than visible text: a
+sighted person gets their browser's own new-tab behavior and does not need it spelled out beside
+every link, and a screen-reader user gets the words. It is still rendered **only** when the link
+really does open a new tab, so hosts that change how links open —
+`config.document_link_html_options_with`, or `config.hotwire_native_document_links` for a native
+app — change the hint with them, and a `:same_screen` native link announces nothing it does not
+do.
 
-Each link is followed by its version label, so the reader can see which version the server offer
-names.
+There is no version label beside a control. Versions are on the receipt, where somebody is
+reading the record and can act on them.
 
 ### Locale-aware selection, with no silent fallback
 
@@ -155,16 +179,18 @@ Run this against a real page in a real browser, not against the partial.
 
 **Structure and naming**
 
-- [ ] Every control has a visible label whose text is the exact assertion the receipt will
-      record. Pressing the label text toggles the control.
-- [ ] There is exactly one control per act. No control covers two statements.
+- [ ] Every control has a visible label whose text is exactly what the server offered — the
+      composed sentence, or the statement's own assertion. Pressing the label text toggles the
+      control.
+- [ ] No control covers a statement the signed presentation did not say it covers, and no
+      statement the composed line covers has a second control of its own.
 - [ ] Choice groups are a `fieldset` with a `legend`.
 - [ ] Every control has an accessible name in the accessibility tree — check it, do not assume.
 
 **State**
 
 - [ ] Every control renders unselected on first load and after a failed submission.
-- [ ] Required and optional are conveyed in text, not only by color or an asterisk.
+- [ ] Nothing on your surrounding page conveys "required" by color or an asterisk alone.
 
 **Keyboard and focus**
 
@@ -183,7 +209,9 @@ Run this against a real page in a real browser, not against the partial.
 **Documents**
 
 - [ ] Every document is linked, above the submit control, with the document's own name.
-- [ ] The "opens in a new tab" hint is announced, not only styled.
+- [ ] The `sr-only` "opens in a new tab" hint is announced — check it in a screen reader, not
+      only in the markup, and check that your own CSS has not turned `.clickwrap-sr-only` into
+      `display: none`, which would remove it from the accessibility tree entirely.
 - [ ] Following a link and returning does not lose the form state.
 
 **Without JavaScript**
@@ -196,8 +224,9 @@ Run this against a real page in a real browser, not against the partial.
 - [ ] At 400% zoom and at 320 CSS pixels wide, nothing overlaps and nothing is cut off.
 - [ ] Contrast of label text, link text, error text, and the focus indicator meets your target
       against your real palette.
-- [ ] Screen-reader pass: the assertion, its required/optional state, its document links, and
-      any error are all announced, in an order that makes sense.
+- [ ] Screen-reader pass: the whole sentence, its document links, and any error are all
+      announced, in an order that makes sense — and a link inside the sentence does not break
+      the sentence into fragments that stop reading as one statement.
 - [ ] The submit button's text says what pressing it does.
 
 **Locale**
