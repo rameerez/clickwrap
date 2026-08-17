@@ -79,6 +79,8 @@ module Clickwrap
       # transaction held open across someone else's network is a transaction
       # holding locks on evidence rows while waiting for a stranger's DNS.
       def call
+        SchemaRequirements.require!(:external_actions)
+
         action = nil
 
         receipt = Capture.new(

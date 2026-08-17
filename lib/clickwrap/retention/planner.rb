@@ -197,6 +197,8 @@ module Clickwrap
       # Builds and persists the plan. Nothing is deleted, nothing is marked, and
       # no state changes anywhere else.
       def call
+        SchemaRequirements.require!(:retention_ops)
+
         @items = []
 
         plan_core_events

@@ -101,6 +101,7 @@ module Clickwrap
       # the hard way.
       RemediationToken.reset_verifier! if defined?(RemediationToken)
       PresentationManifest.reset_verifier! if defined?(PresentationManifest)
+      SchemaRequirements.reset! if defined?(SchemaRequirements)
       self
     end
 

@@ -6,6 +6,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — the emitted footprint
+
+- **`clickwrap:install` emits only the tables an installation can put a row
+  in.** Seven of the seventeen tables — persisted presentations, the
+  request-evidence annex, chain heads, integrity attestations, external
+  actions, disposition plans, legal holds — are each gated on a configuration
+  that is off by default, so a default install could never write to any of
+  them. A schema that contains them anyway claims capabilities and data
+  categories the application does not have, which is exactly the impression
+  this gem exists not to give. Each now arrives with its own flag
+  (`--with-persisted-presentations`, `--with-request-evidence`,
+  `--with-integrity`, `--with-retention-ops`, `--with-external-actions`),
+  following the `clickwrap:hardening` precedent, and re-running the generator
+  later with a flag adds that migration then.
+
+  Enabling a request-evidence field implies `--with-request-evidence`: an
+  installation that records IP addresses into a table it never created is not
+  a schema choice, and the operator already answered the question that matters.
+
+  The one failure mode this trade creates — turning a capability on and
+  forgetting its migration — is caught three ways, each naming the exact
+  command: at boot, by `bin/rails clickwrap:doctor`, and at the entry points
+  no configuration announces (`authorize_external_action!`, legal holds,
+  disposition planning). The boot check deliberately stays quiet while
+  migrations are pending, because refusing to boot would make the fix
+  unrunnable.
+
 ### Fixed — the two-audit adversarial review
 
 Two independent audits read the gem as an unfamiliar developer would: one

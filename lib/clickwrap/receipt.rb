@@ -253,6 +253,8 @@ module Clickwrap
     # --- Legal holds ----------------------------------------------------------
 
     def place_on_legal_hold!(because:, placed_by:, review_at:)
+      SchemaRequirements.require!(:retention_ops)
+
       hold = nil
 
       ::ActiveRecord::Base.transaction do

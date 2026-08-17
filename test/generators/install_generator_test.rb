@@ -537,43 +537,89 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   # proved" and "the migration users actually get" can never diverge silently —
   # which would mean the whole suite is green against a schema nobody ships.
 
-  TEMPLATE_MIGRATION = File.expand_path(
-    "../../lib/generators/clickwrap/templates/create_clickwrap_tables.rb.erb", __dir__
-  )
-  DUMMY_MIGRATION = File.expand_path(
-    "../dummy/db/migrate/20260101000001_create_clickwrap_tables.rb", __dir__
-  )
+  # The core migration and one file per opt-in tier, paired with the dummy's
+  # concrete rendering of each. The dummy installs every tier, because the suite
+  # exercises every capability; a default install emits only the first pair.
+  MIGRATION_TIMESTAMPS = {
+    "create_clickwrap_tables" => "20260101000001",
+    "create_clickwrap_presentation_tables" => "20260101000002",
+    "create_clickwrap_request_evidence_tables" => "20260101000003",
+    "create_clickwrap_integrity_tables" => "20260101000004",
+    "create_clickwrap_retention_tables" => "20260101000005",
+    "create_clickwrap_external_action_tables" => "20260101000006"
+  }.freeze
 
-  test "the dummy's clickwrap migration declares the same columns as the template" do
-    assert_equal column_names_in(TEMPLATE_MIGRATION), column_names_in(DUMMY_MIGRATION)
+  MIGRATION_PAIRS = MIGRATION_TIMESTAMPS.to_h do |name, timestamp|
+    [File.expand_path("../../lib/generators/clickwrap/templates/#{name}.rb.erb", __dir__),
+     File.expand_path("../dummy/db/migrate/#{timestamp}_#{name}.rb", __dir__)]
+  end.freeze
+
+  TEMPLATE_MIGRATIONS = MIGRATION_PAIRS.keys.freeze
+  DUMMY_MIGRATIONS = MIGRATION_PAIRS.values.freeze
+
+  # Every table this gem knows about, and which flag brings it. A tier that
+  # stops emitting one of its tables fails here rather than at the first host
+  # that turns the capability on.
+  TABLES_BY_TIER = {
+    "create_clickwrap_tables" => %w[
+      clickwrap_documents clickwrap_document_versions clickwrap_policy_revisions
+      clickwrap_recording_sequences clickwrap_events clickwrap_event_statements
+      clickwrap_event_documents clickwrap_statement_states clickwrap_statement_identity_locks
+      clickwrap_receipt_accesses
+    ],
+    "create_clickwrap_presentation_tables" => %w[clickwrap_presentations],
+    "create_clickwrap_request_evidence_tables" => %w[clickwrap_request_evidence],
+    "create_clickwrap_integrity_tables" => %w[clickwrap_chain_heads clickwrap_integrity_attestations],
+    "create_clickwrap_retention_tables" => %w[clickwrap_legal_holds clickwrap_disposition_plans],
+    "create_clickwrap_external_action_tables" => %w[clickwrap_external_actions]
+  }.freeze
+
+  test "the dummy's clickwrap migrations declare the same columns as the templates" do
+    assert_equal(TEMPLATE_MIGRATIONS.flat_map { |path| column_names_in(path) },
+                 DUMMY_MIGRATIONS.flat_map { |path| column_names_in(path) })
   end
 
-  test "the dummy's clickwrap migration declares the same tables as the template" do
-    assert_equal table_names_in(TEMPLATE_MIGRATION), table_names_in(DUMMY_MIGRATION)
+  test "the dummy's clickwrap migrations declare the same tables as the templates" do
+    assert_equal(TEMPLATE_MIGRATIONS.flat_map { |path| table_names_in(path) },
+                 DUMMY_MIGRATIONS.flat_map { |path| table_names_in(path) })
   end
 
-  test "the dummy's clickwrap migration declares the same indexes as the template" do
+  test "the dummy's clickwrap migrations declare the same indexes as the templates" do
     # The unique indexes here are load-bearing behavior, not tuning: they are
     # what make a duplicate submit lose an INSERT race instead of producing two
     # live authorizations.
-    assert_equal index_names_in(TEMPLATE_MIGRATION), index_names_in(DUMMY_MIGRATION)
+    assert_equal(TEMPLATE_MIGRATIONS.flat_map { |path| index_names_in(path) },
+                 DUMMY_MIGRATIONS.flat_map { |path| index_names_in(path) })
   end
 
-  test "the dummy's clickwrap migration declares the same foreign keys as the template" do
-    assert_equal foreign_keys_in(TEMPLATE_MIGRATION), foreign_keys_in(DUMMY_MIGRATION)
+  test "the dummy's clickwrap migrations declare the same foreign keys as the templates" do
+    assert_equal(TEMPLATE_MIGRATIONS.flat_map { |path| foreign_keys_in(path) },
+                 DUMMY_MIGRATIONS.flat_map { |path| foreign_keys_in(path) })
   end
 
-  test "the dummy migration is an ordered, exact rendering of the install template" do
-    template = migration_body(TEMPLATE_MIGRATION).sub("<%= migration_version %>", "[7.1]")
-    dummy = migration_body(DUMMY_MIGRATION)
+  test "each dummy migration is an ordered, exact rendering of its install template" do
+    MIGRATION_PAIRS.each do |template_path, dummy_path|
+      template = migration_body(template_path).sub("<%= migration_version %>", "[7.1]")
+      dummy = migration_body(dummy_path)
 
-    assert_equal template, dummy,
-                 "The dummy database must exercise the exact migration users receive, " \
-                 "including column options, declaration order, constraints, and helpers."
+      assert_equal template, dummy,
+                   "The dummy database must exercise the exact migration users receive, " \
+                   "including column options, declaration order, constraints, and helpers. " \
+                   "(#{File.basename(template_path)})"
+    end
   end
 
-  test "neither migration declares the same generated column twice inside one table" do
-    [TEMPLATE_MIGRATION, DUMMY_MIGRATION].each do |path|
+  test "each tier emits exactly the tables it claims" do
+    TABLES_BY_TIER.each do |name, tables|
+      template = TEMPLATE_MIGRATIONS.find { |path| File.basename(path) == "#{name}.rb.erb" }
+
+      assert_equal tables.sort, table_names_in(template).sort,
+                   "#{name} does not emit the tables its flag promises"
+    end
+  end
+
+  test "no migration declares the same generated column twice inside one table" do
+    (TEMPLATE_MIGRATIONS + DUMMY_MIGRATIONS).each do |path|
       table_column_names_in(path).each do |table, columns|
         duplicates = columns.tally.select { |_column, count| count > 1 }.keys
         assert_empty duplicates,
@@ -582,9 +628,51 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     end
   end
 
-  test "the migration generated for a host executes against a scratch database" do
+  test "a default install emits only the tables a default install can put a row in" do
     run_generator %w[--skip-questions]
-    migration = Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb")).sole
+
+    written = Dir.glob(File.join(destination_root, "db/migrate/*.rb")).map { |path| File.basename(path) }
+
+    assert_equal 1, written.length, "a default install writes one migration, got #{written.inspect}"
+    assert_match(/_create_clickwrap_tables\.rb\z/, written.sole)
+  end
+
+  test "each optional tier is one flag away, and adds exactly one migration" do
+    run_generator %w[--skip-questions --with-persisted-presentations --with-integrity
+                     --with-retention-ops --with-external-actions]
+
+    written = Dir.glob(File.join(destination_root, "db/migrate/*.rb")).map { |path| File.basename(path) }
+
+    %w[create_clickwrap_tables create_clickwrap_presentation_tables create_clickwrap_integrity_tables
+       create_clickwrap_retention_tables create_clickwrap_external_action_tables].each do |name|
+      assert written.any? { |file| file.end_with?("_#{name}.rb") },
+             "#{name} was not emitted: #{written.inspect}"
+    end
+
+    # Not asked for, so not written. That is the whole point of the split.
+    refute(written.any? { |file| file.end_with?("_create_clickwrap_request_evidence_tables.rb") })
+  end
+
+  test "enabling a request-evidence field brings its table without a second flag" do
+    # An installation that records IP addresses into a table it never created is
+    # not a schema choice, it is a broken install — and the operator already
+    # answered the question that matters.
+    run_generator ["--record-ip-addresses-by-default",
+                   "--reason-for-recording-ip-addresses-by-default=Investigate disputed submissions",
+                   "--delete-recorded-ip-addresses-after-days=90"]
+
+    written = Dir.glob(File.join(destination_root, "db/migrate/*.rb")).map { |path| File.basename(path) }
+
+    assert written.any? { |file| file.end_with?("_create_clickwrap_request_evidence_tables.rb") },
+           "recording IP addresses must bring the annex table: #{written.inspect}"
+  end
+
+  test "the migrations generated for a host execute against a scratch database" do
+    run_generator %w[--skip-questions --with-persisted-presentations --with-request-evidence
+                     --with-integrity --with-retention-ops --with-external-actions]
+    migrations = Dir.glob(File.join(destination_root, "db/migrate/*.rb"))
+
+    assert_equal 6, migrations.length
 
     Dir.mktmpdir("clickwrap-generated-migration") do |directory|
       database = File.join(directory, "scratch.sqlite3")
@@ -593,12 +681,12 @@ class InstallGeneratorTest < Rails::Generators::TestCase
         RbConfig.ruby,
         "-e",
         scratch_migration_program,
-        migration,
-        database
+        database,
+        *migrations
       )
 
       assert status.success?, <<~MESSAGE
-        The migration produced by `clickwrap:install` did not execute on a clean database.
+        The migrations produced by `clickwrap:install` did not execute on a clean database.
         stdout:
         #{stdout}
         stderr:
@@ -678,7 +766,7 @@ class InstallGeneratorTest < Rails::Generators::TestCase
   end
 
   def migration_body(path)
-    File.read(path).match(/class CreateClickwrapTables\b.*\z/m).to_s
+    File.read(path).match(/class CreateClickwrap\w*\b.*\z/m).to_s
   end
 
   def table_column_names_in(path)
@@ -721,20 +809,29 @@ class InstallGeneratorTest < Rails::Generators::TestCase
       require "rails"
       require "active_record"
 
+      # ARGV.first is the scratch database; every remaining argument is one
+      # migration file, in the order `clickwrap:install` wrote them.
+      database, *migrations = ARGV
+
       class ClickwrapScratchApplication < Rails::Application
         # Never let Rails infer the gem checkout as this throwaway host's root.
         # Rails 7.1 would otherwise load the engine's config/routes.rb as the
         # application's routes before the Clickwrap engine itself was loaded.
-        config.root = File.dirname(ARGV.fetch(1))
+        config.root = File.dirname(ARGV.fetch(0))
         config.eager_load = false
         config.generators.orm :active_record, primary_key_type: :uuid
       end
 
       ClickwrapScratchApplication.initialize!
-      ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: ARGV.fetch(1))
+      ActiveRecord::Base.establish_connection(adapter: "sqlite3", database: database)
       ActiveRecord::Migration.verbose = false
-      load ARGV.fetch(0)
-      CreateClickwrapTables.new.migrate(:up)
+
+      migrations.each do |path|
+        load path
+        # 20260101000001_create_clickwrap_tables.rb -> CreateClickwrapTables
+        class_name = File.basename(path, ".rb").sub(/\A\d+_/, "").split("_").map(&:capitalize).join
+        Object.const_get(class_name).new.migrate(:up)
+      end
 
       expected = %w[
         clickwrap_documents clickwrap_document_versions clickwrap_policy_revisions

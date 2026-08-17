@@ -1,0 +1,194 @@
+# frozen_string_literal: true
+
+# CONCRETE rendering of lib/generators/clickwrap/templates/create_clickwrap_retention_tables.rb.erb.
+#
+# This is the SAME migration the install generator copies into a real host,
+# rendered to plain Ruby for the dummy app's test database. It is run by
+# `rake db:migrate:reset` across all three CI database legs (sqlite / postgres
+# / mysql), so the private helpers at the bottom are kept IDENTICAL to the
+# template's: they branch on the connection adapter to emit jsonb-vs-json,
+# MySQL's no-default-on-JSON caveat, and MEDIUMTEXT for document bodies.
+#
+# KEEP IN SYNC with the ERB template. test/generators/install_generator_test.rb
+# carries a drift test that compares the two, per tier, and fails the build the
+# moment they disagree — so "the migration the dummy proved" and "the migration
+# users get" can never diverge silently.
+#
+# The dummy installs EVERY tier, because the suite exercises every capability.
+# A default install emits only the first of these files.
+#
+# The migration version is pinned to [7.1] — the gemspec floor and the lowest
+# Rails in the test matrix.
+
+# Retention operations — `rails generate clickwrap:install
+# --with-retention-ops`, or added later with the same command.
+#
+# Legal holds and reviewed disposition plans are the operator tooling for
+# deleting evidence on schedule and pausing that schedule. Retention
+# PERIODS are core and live on the event itself; these two tables are the
+# workflow around them, and neither receives a row until an operator runs
+# the disposition or legal-hold tasks.
+class CreateClickwrapRetentionTables < ActiveRecord::Migration[7.1]
+  def change
+    primary_key_type, = primary_and_foreign_key_types
+
+    # ---------------------------------------------------------------------------
+    # clickwrap_legal_holds
+    #
+    # A hold pauses scheduled disposition. It requires a reason, an owner, and a
+    # review date, because an indefinite hold with no owner is how "we'll delete
+    # it later" becomes "we kept everything forever". Placement and release
+    # append linked events; this row changes only through the named release path.
+    # ---------------------------------------------------------------------------
+    create_table :clickwrap_legal_holds, id: primary_key_type do |t|
+      t.string :hold_scope, null: false, default: "event"
+      t.string :event_id, limit: 26
+      t.string :actor_reference
+      t.string :policy_key
+
+      t.text :reason, null: false
+      t.string :placed_by_reference, null: false
+      t.datetime :placed_at, precision: 6, null: false
+      t.datetime :review_at, precision: 6, null: false
+
+      t.datetime :released_at, precision: 6
+      t.string :released_by_reference
+      t.text :release_reason
+
+      t.datetime :created_at, precision: 6, null: false
+    end
+
+    add_index :clickwrap_legal_holds, [ :event_id, :released_at ],
+              name: "index_clickwrap_legal_holds_on_event"
+    add_index :clickwrap_legal_holds, [ :actor_reference, :released_at ],
+              name: "index_clickwrap_legal_holds_on_actor"
+    add_index :clickwrap_legal_holds, :review_at, name: "index_clickwrap_legal_holds_on_review_at"
+    add_index :clickwrap_legal_holds, [ :policy_key, :released_at ],
+              name: "index_clickwrap_legal_holds_on_policy"
+    add_clickwrap_check_constraint :clickwrap_legal_holds,
+                         "hold_scope IN (#{quoted_values(%w[event actor policy])})",
+                         name: "chk_clickwrap_holds_scope"
+
+
+    # ---------------------------------------------------------------------------
+    # clickwrap_disposition_plans
+    #
+    # Deletion is a two-step operation: plan, review, then apply. The plan is
+    # immutable, scoped, and expiring, and it is rechecked at apply time — a new
+    # hold, a changed policy, or a stale plan stops the run rather than deleting
+    # a broader set than the person reviewing it agreed to.
+    # ---------------------------------------------------------------------------
+    create_table :clickwrap_disposition_plans, id: :string, limit: 26 do |t|
+      t.string :kind, null: false
+      t.send(json_column_type, :disposition_scope, null: false)
+      t.send(json_column_type, :summary, null: false)
+      t.integer :item_count, null: false, default: 0
+
+      t.string :created_by_reference
+      t.text :reason
+
+      t.datetime :expires_at, precision: 6, null: false
+      t.datetime :applied_at, precision: 6
+      t.string :applied_by_reference
+      t.string :state, null: false, default: "open"
+      t.string :plan_digest, null: false
+      t.datetime :application_started_at, precision: 6
+      t.integer :application_attempt_count, null: false, default: 0
+      t.send(json_column_type, :application_recoveries, default: json_array_default)
+      t.send(json_column_type, :application_outcome, default: json_column_default)
+      t.datetime :superseded_at, precision: 6
+      t.string :superseded_by_reference
+      t.text :superseded_reason
+
+      t.timestamps precision: 6
+    end
+
+    add_index :clickwrap_disposition_plans, [ :state, :expires_at ],
+              name: "index_clickwrap_disposition_plans_on_state"
+    add_clickwrap_check_constraint :clickwrap_disposition_plans,
+                         "kind IN (#{quoted_values(%w[retention actor_privacy])})",
+                         name: "chk_clickwrap_disposition_plans_kind"
+    add_clickwrap_check_constraint :clickwrap_disposition_plans,
+                         "state IN (#{quoted_values(%w[open applying applied applied_with_errors superseded])})",
+                         name: "chk_clickwrap_disposition_plans_state"
+
+
+    add_clickwrap_foreign_key :clickwrap_legal_holds, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_legal_holds_event"
+  end
+
+  private
+
+  # Honor the host's configured primary key type (uuid vs bigint). Reads the
+  # same setting `rails g model` uses, so an app generated with
+  # `config.generators { |g| g.orm :active_record, primary_key_type: :uuid }`
+  # gets uuid clickwrap tables and uuid foreign keys, automatically.
+  #
+  # Note that clickwrap_events keeps a ULID string key regardless: its id is
+  # quoted verbatim in receipts and exports, so it has to be stable, sortable,
+  # and identical in every host.
+  def primary_and_foreign_key_types
+    config = Rails.configuration.generators
+    setting = config.options[config.orm][:primary_key_type]
+    primary_key_type = setting || :primary_key
+    foreign_key_type = setting || :bigint
+    [ primary_key_type, foreign_key_type ]
+  end
+
+  def json_column_type
+    return :jsonb if connection.adapter_name.downcase.match?(/postg/) # postgresql, postgis
+
+    :json
+  end
+
+  # MySQL 8+ doesn't allow default values on JSON columns. Returns an empty-hash
+  # default for SQLite/PostgreSQL, nil for MySQL. The models handle nil
+  # gracefully by defaulting to {} in their accessors.
+  def json_column_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    {}
+  end
+
+  # Same MySQL caveat as `json_column_default`, but for list-shaped columns.
+  def json_array_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    []
+  end
+
+  # Legal documents are routinely longer than MySQL's 64 KB TEXT limit, and a
+  # silently truncated agreement is the worst possible failure for this gem.
+  # `:mediumtext` maps to MEDIUMTEXT on MySQL (16 MB) and to ordinary TEXT
+  # everywhere else.
+  def text_column_type
+    return :mediumtext if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    :text
+  end
+
+  def quoted_values(values)
+    values.map { |value| connection.quote(value) }.join(", ")
+  end
+
+  # SQLite implements both foreign keys and check constraints by rebuilding a
+  # table. During a long install migration, Active Record can otherwise rebuild
+  # from a schema-cache entry captured before the indexes/columns immediately
+  # above were added. Refreshing around every rebuild keeps the SQLite result
+  # identical to PostgreSQL/MySQL instead of quietly resurrecting stale shape.
+  def add_clickwrap_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+    add_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+  end
+
+  def add_clickwrap_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+    add_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+  end
+
+  def refresh_clickwrap_table_schema!(table)
+    connection.schema_cache.clear_data_source_cache!(table.to_s)
+  end
+end

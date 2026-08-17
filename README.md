@@ -132,7 +132,17 @@ bin/rails db:migrate
 
 `bundle add clickwrap` would install version 0.0.0, a deliberately empty name placeholder on RubyGems — install from GitHub until the first real version is published there.
 
-The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
+The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. It emits only the tables your installation can actually write to; the capabilities that are off by default bring their own migration when you want them:
+
+```bash
+bin/rails generate clickwrap:install --with-request-evidence   # the IP / user-agent / geolocation annex
+                                     --with-integrity          # event chaining, anchoring, timestamps
+                                     --with-retention-ops      # legal holds and disposition plans
+                                     --with-external-actions   # the outbox for external handoffs
+                                     --with-persisted-presentations
+```
+
+Add any of them later by re-running the generator with the flag. Turning a capability on without its migration is caught at boot, by `bin/rails clickwrap:doctor`, and at the call itself — always with the exact command that fixes it. Enabling a request-evidence field brings the annex table automatically, because an installation that records IP addresses into a table it never created is not a schema choice. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
 
 Point the generated policy at the documents your app already owns (see the example above), add `has_clickwraps` to your user model, and drop `form.clickwrap` into your signup form:
 

@@ -58,6 +58,7 @@ module Clickwrap
       findings = []
       findings.concat(policy_findings)
       findings.concat(document_findings)
+      findings.concat(optional_table_findings)
       findings.concat(engine_mount_findings)
       findings.concat(gate_findings)
       findings.concat(request_evidence_findings)
@@ -132,6 +133,32 @@ module Clickwrap
 
       problem("the stored bytes for document #{definition} no longer match the digest recorded " \
               "when it was published, so evidence citing it cannot be reproduced")
+    end
+
+    # A default install emits only the tables it can put a row in; each further
+    # capability brings its own migration. So this reports two different facts,
+    # and never conflates them: a capability that is ON with its tables missing
+    # is a problem with a command attached, and a capability that is simply not
+    # installed is a fact about this installation, stated once so an operator
+    # reading at 03:00 does not go looking for a table that was never meant to
+    # be there.
+    def optional_table_findings
+      SchemaRequirements.reset!
+      missing = SchemaRequirements.missing_for_configuration
+
+      SchemaRequirements::FEATURES.map do |feature|
+        installed = SchemaRequirements.installed?(feature)
+
+        if installed.nil?
+          warning("could not check whether the #{feature.flag} tables exist (no database)")
+        elsif installed
+          ok("the #{feature.flag} tables are installed")
+        elsif missing.include?(feature)
+          problem(feature.explanation)
+        else
+          ok("the #{feature.flag} tables are not installed, and nothing configured needs them")
+        end
+      end
     end
 
     # The mount is not only about gates. Every presentation links each document

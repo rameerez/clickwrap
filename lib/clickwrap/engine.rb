@@ -166,6 +166,18 @@ module Clickwrap
       # read — and it has to be re-applied on every development reload, because
       # the model class is a fresh object each time.
       Clickwrap::RequestEvidence.apply_configured_encryption!
+
+      # `clickwrap:install` emits only the tables a default installation can
+      # actually put a row in; the rest come with their own flag. The one
+      # failure mode that creates is turning a capability on and forgetting its
+      # migration, and that must not be discovered by a capture failing in
+      # production. It is discovered here, with the exact command that fixes
+      # it. Answering needs a database, and "there is no database yet"
+      # (db:create, an asset build) is not a misconfiguration — the check
+      # simply does not fire.
+      Clickwrap::SchemaRequirements.reset!
+      missing = Clickwrap::SchemaRequirements.missing_for_configuration
+      raise Clickwrap::ConfigurationError, missing.map(&:explanation).join("\n\n") if missing.any?
     end
   end
 end

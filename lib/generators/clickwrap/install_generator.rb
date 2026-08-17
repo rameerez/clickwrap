@@ -132,6 +132,56 @@ module Clickwrap
                    desc: "Use the privacy-minimized, all-fields-off scaffold. " \
                          "Generator-only: it does not survive as a runtime concept."
 
+      # --- Optional tables ------------------------------------------------------
+      #
+      # Seven of the seventeen tables this gem knows about cannot receive a row
+      # until a matching configuration is turned on, and every one of those is
+      # off by default. Emitting them all anyway makes an installation's schema
+      # claim capabilities and data categories that installation does not have.
+      #
+      # Each flag adds one migration, and re-running the installer later with
+      # the flag adds it then. `clickwrap:hardening` is the precedent: an opt-in
+      # generator, not a switch inside a migration nobody re-reads.
+      OPTIONAL_TABLE_MIGRATIONS = {
+        with_persisted_presentations: "create_clickwrap_presentation_tables",
+        with_request_evidence: "create_clickwrap_request_evidence_tables",
+        with_integrity: "create_clickwrap_integrity_tables",
+        with_retention_ops: "create_clickwrap_retention_tables",
+        with_external_actions: "create_clickwrap_external_action_tables"
+      }.freeze
+
+      # What each omitted flag would have added, in one line, for the
+      # post-install message.
+      OPTIONAL_TABLE_SUMMARIES = {
+        with_persisted_presentations:
+          "--with-persisted-presentations   presentations retained before submission",
+        with_request_evidence:
+          "--with-request-evidence          IP address / user-agent / geolocation annex",
+        with_integrity:
+          "--with-integrity                 event chaining, anchoring, timestamp attestations",
+        with_retention_ops:
+          "--with-retention-ops             legal holds and reviewed disposition plans",
+        with_external_actions:
+          "--with-external-actions          the outbox for authorize_external_action!"
+      }.freeze
+
+      class_option :with_persisted_presentations,
+                   type: :boolean, default: false,
+                   desc: "Add the table for policies that retain pre-submit presentations"
+      class_option :with_request_evidence,
+                   type: :boolean, default: false,
+                   desc: "Add the IP address / user-agent / geolocation annex table " \
+                         "(implied when this run enables any of those fields)"
+      class_option :with_integrity,
+                   type: :boolean, default: false,
+                   desc: "Add the event-chain and anchoring/timestamp attestation tables"
+      class_option :with_retention_ops,
+                   type: :boolean, default: false,
+                   desc: "Add the legal-hold and reviewed-disposition tables"
+      class_option :with_external_actions,
+                   type: :boolean, default: false,
+                   desc: "Add the outbox table for Clickwrap.authorize_external_action!"
+
       class_option :actor_class,
                    type: :string,
                    desc: "The model that can act (User, Account, Member…) when it can't be inferred"
@@ -193,6 +243,10 @@ module Clickwrap
       def create_migration_file
         migration_template "create_clickwrap_tables.rb.erb",
                            File.join(db_migrate_path, "create_clickwrap_tables.rb")
+
+        requested_optional_table_migrations.each do |name|
+          migration_template "#{name}.rb.erb", File.join(db_migrate_path, "#{name}.rb")
+        end
       end
 
       def create_initializer
@@ -266,6 +320,7 @@ module Clickwrap
         step = 0
         say "  #{step += 1}. Run 'rails db:migrate' to create the clickwrap tables."
         say "     ⚠️  You must run migrations before starting your app!", :yellow
+        say_optional_tables
 
         say "  #{step += 1}. Declare which records can act:"
         say "       class #{actor_class_name || "User"} < ApplicationRecord"
@@ -329,6 +384,40 @@ module Clickwrap
       end
 
       private
+
+      # Named out loud, because a schema that quietly contains seven tables an
+      # installation can never write to is a schema that claims capabilities and
+      # data categories that installation does not have. Saying which ones were
+      # left out — and that one flag brings each back later — is what makes the
+      # omission a decision rather than a surprise.
+      def say_optional_tables
+        written = requested_optional_table_migrations
+        omitted = OPTIONAL_TABLE_MIGRATIONS.reject { |_option, name| written.include?(name) }
+        return if omitted.empty?
+
+        say "     Emitted #{written.length + 1} migration#{"s" unless written.empty?}. Not emitted, " \
+            "because nothing in this install can write to them:"
+        omitted.each_key { |option| say "       #{OPTIONAL_TABLE_SUMMARIES.fetch(option)}" }
+        say "     Add any of them later by re-running this generator with the flag."
+      end
+
+      # Which optional migrations this run writes. The request-evidence annex is
+      # implied whenever the run turns a request-evidence field on: an
+      # installation that records IP addresses into a table it never created is
+      # not a schema choice, it is a broken install, and the operator already
+      # answered the question that matters.
+      def requested_optional_table_migrations
+        OPTIONAL_TABLE_MIGRATIONS.filter_map do |option, name|
+          next name if options[option]
+          next name if option == :with_request_evidence && any_request_evidence_field?
+
+          nil
+        end
+      end
+
+      def any_request_evidence_field?
+        record_ip_addresses? || record_browser_user_agents? || any_ip_geolocation_field?
+      end
 
       # The step nothing else can stand in for. `form.clickwrap` renders the
       # policy and binds the submit action, but the form is only half the
