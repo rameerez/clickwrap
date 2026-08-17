@@ -53,6 +53,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `combined_statement_rendered_as_its_own_control`, which is where an ejected
   view lands after this change.
 
+- **Receipts record the sentence that was read.** `presentation` gained
+  `combined_sentence` and `combined_statements`, shown on the HTML receipt and
+  the engine's receipt screen. The acts say what was recorded; this says what
+  was on the screen. Both are absent — not null — on an itemized presentation,
+  so every receipt written before this change verifies byte for byte exactly as
+  it did.
+
 ### Added — `link:`, the page a person actually reads a document on
 
 - **`Clickwrap.document :terms, from: ..., link: "/legal/terms"`** presents and

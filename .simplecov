@@ -42,9 +42,13 @@ SimpleCov.start do
   # sits below the richest one. Raise both numbers whenever every leg has
   # cleared them for a while.
   #
-  # Currently 92.09 line / 72.60 branch on the leanest leg (sqlite), so this is
+  # Currently 92.10 line / 72.62 branch on the leanest leg (sqlite), so this is
   # about a point of room in each. If a legitimate change spends it, add the
   # tests rather than lowering these back.
+  #
+  # Measure it on a CLEAN coverage directory. SimpleCov merges resultsets within
+  # its merge timeout, so a full run following a `TEST=one_file.rb` run reports
+  # a number neither of them produced.
   minimum_coverage line: 91, branch: 71
 
   # Disambiguate parallel test runs
