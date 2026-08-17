@@ -15,7 +15,7 @@ class DatabaseHardeningTest < ActiveSupport::TestCase
 
     with_database_hardening do
       user = create_user
-      receipt = capture_clickwrap(
+      receipt = submit_clickwrap(
         :signup,
         actor: user,
         answers: { terms: "1", privacy_notice: "1" }
@@ -56,7 +56,7 @@ class DatabaseHardeningTest < ActiveSupport::TestCase
       assert_empty Clickwrap::EventDocument.where(event_id: event.id)
 
       deletable_user = create_user
-      deletable_receipt = capture_clickwrap(
+      deletable_receipt = submit_clickwrap(
         :signup,
         actor: deletable_user,
         answers: { terms: "1", privacy_notice: "1" }

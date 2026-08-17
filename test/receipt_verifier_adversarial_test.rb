@@ -8,7 +8,7 @@ require "test_helper"
 class ReceiptVerifierAdversarialTest < ActiveSupport::TestCase
   setup do
     @user = create_user
-    @receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    @receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     @body = @receipt.to_h
   end
 

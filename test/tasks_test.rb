@@ -37,7 +37,7 @@ class TasksTest < ActiveSupport::TestCase
     self.class.load_clickwrap_tasks!
 
     @user = create_user
-    @receipt = capture_clickwrap(:signup, actor: @user)
+    @receipt = submit_clickwrap(:signup, actor: @user)
   end
 
   # --- Publishing rides db:prepare -------------------------------------------
@@ -180,7 +180,7 @@ class TasksTest < ActiveSupport::TestCase
   end
 
   test "clickwrap:reacceptance:plan previews who would be asked to act again" do
-    capture_clickwrap(:current_terms, actor: @user, answers: { terms: "1" })
+    submit_clickwrap(:current_terms, actor: @user, answers: { terms: "1" })
 
     output = run_task("clickwrap:reacceptance:plan", "POLICY" => "current_terms")
 

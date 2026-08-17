@@ -14,7 +14,7 @@ class RetentionConcurrencyTest < ActiveSupport::TestCase
 
     user = create_user
     operator = create_security_operator
-    receipt = capture_clickwrap(:signup, actor: user)
+    receipt = submit_clickwrap(:signup, actor: user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(

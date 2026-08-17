@@ -9,7 +9,7 @@ class ReceiptTest < ActiveSupport::TestCase
 
   setup do
     @user = create_user
-    @receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    @receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
   end
 
   test "the canonical receipt carries the exact content, presentation, and acts" do
@@ -167,8 +167,8 @@ class ReceiptTest < ActiveSupport::TestCase
                                content: "<script>alert('x')</script>")
     Clickwrap.publish!
 
-    receipt = capture_clickwrap(:signup, actor: create_user,
-                                         answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: create_user,
+                                        answers: { terms: "1", privacy_notice: "1" })
 
     assert_no_match(/<script>alert/, receipt.to_html)
   end

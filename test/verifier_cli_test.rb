@@ -28,7 +28,7 @@ class VerifierCliTest < ActiveSupport::TestCase
 
   setup do
     @user = create_user
-    @receipt = capture_clickwrap(:signup, actor: @user)
+    @receipt = submit_clickwrap(:signup, actor: @user)
   end
 
   test "verifying a receipt without its cited artifacts is visibly incomplete and exits two" do

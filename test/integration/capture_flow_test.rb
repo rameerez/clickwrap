@@ -261,7 +261,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "receipt and consent-withdrawal screens require a real current actor" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     get "/legal/receipts/#{receipt.event_id}"
     assert_response :unauthorized
@@ -364,7 +364,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   # --- Reading a receipt -------------------------------------------------------
 
   test "an actor can read their own receipt" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     login_as @user
 
     get "/legal/receipts/#{receipt.event_id}"
@@ -377,7 +377,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "another actor's receipt is not found rather than forbidden" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     login_as @other_actor
 
     get "/legal/receipts/#{receipt.event_id}"
@@ -388,8 +388,8 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "the receipt list shows the viewer's own records and nobody else's" do
-    mine = capture_clickwrap(:signup, actor: @user)
-    theirs = capture_clickwrap(:signup, actor: @other_actor)
+    mine = submit_clickwrap(:signup, actor: @user)
+    theirs = submit_clickwrap(:signup, actor: @other_actor)
     login_as @user
 
     get "/legal/receipts"
@@ -410,8 +410,8 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     Clickwrap::ReceiptsController.any_instance.stubs(:page_size).returns(2)
     Clickwrap::ReceiptsController.any_instance.stubs(:batch_size).returns(2)
 
-    oldest = capture_clickwrap(:signup, actor: @user)
-    hidden = 3.times.map { capture_clickwrap(:signup, actor: @user) }
+    oldest = submit_clickwrap(:signup, actor: @user)
+    hidden = 3.times.map { submit_clickwrap(:signup, actor: @user) }
 
     Clickwrap.config.authorize_receipt_access_with = lambda do |_controller, receipt|
       receipt.event_id == oldest.event_id
@@ -434,13 +434,13 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
       controller.current_user == receipt.actor
     end
 
-    3.times { capture_clickwrap(:signup, actor: @user) }
+    3.times { submit_clickwrap(:signup, actor: @user) }
     login_as @user
 
     get "/legal/receipts" # warm every lazy load the first request performs
     small = count_queries { get "/legal/receipts" }
 
-    9.times { capture_clickwrap(:signup, actor: @user) }
+    9.times { submit_clickwrap(:signup, actor: @user) }
     large = count_queries { get "/legal/receipts" }
 
     # The steady state: one query for the page of events, one preload for their
@@ -452,7 +452,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "the JSON format returns the canonical receipt verbatim" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     login_as @user
 
     get "/legal/receipts/#{receipt.event_id}.json"
@@ -473,7 +473,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
     assert_equal "/legal/policies/current_terms", remediation_redirect_uri.path
     assert remediation_redirect_token.present?
 
-    capture_clickwrap(:current_terms, actor: @user)
+    submit_clickwrap(:current_terms, actor: @user)
     get "/billing"
 
     # A gate that blocks an action with no route to unblocking it is a dead end.
@@ -648,7 +648,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   # --- Withdrawing a consent ---------------------------------------------------
 
   test "withdrawing a consent takes one press, the same as granting it did" do
-    capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
     login_as @user
 
     get "/legal/consents/product_updates/withdrawal"
@@ -666,7 +666,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "withdrawal appends an event and leaves the historical grant exactly as it was" do
-    grant = capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    grant = submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
     login_as @user
 
     post "/legal/consents/product_updates/withdrawal"
@@ -678,7 +678,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "pressing withdraw a second time appends nothing and leaves the purpose withdrawn" do
-    capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
     login_as @user
 
     post "/legal/consents/product_updates/withdrawal"
@@ -699,7 +699,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
 
   test "the engine withdraws a consent inside the current tenant instead of searching globally" do
     organization = create_organization
-    capture_clickwrap(
+    submit_clickwrap(
       :marketing_preferences,
       actor: @user,
       tenant: organization,
@@ -714,7 +714,7 @@ class CaptureFlowTest < ActionDispatch::IntegrationTest
   end
 
   test "withdrawing something that is not withdrawable says so instead of pretending" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
     login_as @user
 
     post "/legal/consents/terms/withdrawal"

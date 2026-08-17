@@ -124,9 +124,9 @@ class PrivacyTest < ActiveSupport::TestCase
   test "an actor export uses the same authorization and redaction rules as a receipt export" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                http_request: fake_http_request,
-                                                answers: { regulated_action: "1" })
+    submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                               http_request: fake_http_request,
+                                               answers: { regulated_action: "1" })
 
     redacted = Clickwrap::Privacy.export_for(@user, requested_by: @user)
 
@@ -154,7 +154,7 @@ class PrivacyTest < ActiveSupport::TestCase
   end
 
   test "an export is keyed by the actor reference, which outlives the account row" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
     reference = @user.clickwrap_actor_reference
     @user.destroy
 
@@ -174,10 +174,10 @@ class PrivacyTest < ActiveSupport::TestCase
   test "planning an actor's disposition writes a reviewable plan and deletes nothing" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: fake_http_request,
-                                                          answers: { regulated_action: "1" })
-    held = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: fake_http_request,
+                                                         answers: { regulated_action: "1" })
+    held = submit_clickwrap(:signup, actor: @user)
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
                               review_at: 6.months.from_now)
 
@@ -210,7 +210,7 @@ class PrivacyTest < ActiveSupport::TestCase
   end
 
   test "planning an actor's disposition needs a reason naming the request it answers" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     error = assert_raises(Clickwrap::LifecycleError) do
       Clickwrap::Privacy.plan_disposition_for(@user, requested_by: @operator, because: "  ")

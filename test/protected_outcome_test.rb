@@ -49,7 +49,7 @@ class ProtectedOutcomeTest < ActiveSupport::TestCase
   end
 
   test "plain capture creates no fictional protected outcome" do
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :withdrawal_authorization,
       actor: @user,
       subject: @withdrawal,

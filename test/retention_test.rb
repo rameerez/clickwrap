@@ -21,7 +21,7 @@ class RetentionTest < ActiveSupport::TestCase
 
   test "a plan lists core events past their retention date and annex fields past theirs" do
     record_request_evidence_by_default!
-    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    receipt = submit_clickwrap(:signup, actor: @user, http_request: fake_http_request)
     annex = receipt.event.reload.request_evidence
 
     # The core event keeps for six years; the recorded IP address and user agent
@@ -51,8 +51,8 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "a plan excludes anything under a legal hold and reports the held count separately" do
-    held = capture_clickwrap(:signup, actor: @user)
-    ordinary = capture_clickwrap(:signup, actor: create_user)
+    held = submit_clickwrap(:signup, actor: @user)
+    ordinary = submit_clickwrap(:signup, actor: create_user)
 
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
                               review_at: 6.months.from_now)
@@ -87,7 +87,7 @@ class RetentionTest < ActiveSupport::TestCase
     end
 
     scheme = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme)
+    receipt = submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme)
 
     assert_nil receipt.event.reload.retain_core_event_until
     assert_equal "regulated_evidence_retention_ends", receipt.event.retention_rule_name
@@ -113,7 +113,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "the usable scope and application agree that a plan expires at its boundary" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     plan = nil
 
     travel_to 7.years.from_now do
@@ -134,7 +134,7 @@ class RetentionTest < ActiveSupport::TestCase
 
   test "core events, request evidence, and presentations become due at their exact deadlines" do
     record_request_evidence_by_default!
-    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    receipt = submit_clickwrap(:signup, actor: @user, http_request: fake_http_request)
     annex = receipt.event.reload.request_evidence
 
     travel_to annex.ip_address_delete_after, with_usec: true do
@@ -187,7 +187,7 @@ class RetentionTest < ActiveSupport::TestCase
     withdrawal = nil
 
     travel_to captured_at do
-      grant = capture_clickwrap(
+      grant = submit_clickwrap(
         :marketing_preferences,
         actor: @user,
         answers: { product_updates: "1" }
@@ -251,8 +251,8 @@ class RetentionTest < ActiveSupport::TestCase
   test "a plan never lists the presentation a receipt cites, and does list an abandoned one" do
     withdrawal = create_withdrawal(user: @user)
     abandoned = present_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         answers: { regulated_action: "1" })
 
     cited = Clickwrap::Presentation.find_by(nonce: receipt.event.presentation_manifest["nonce"])
     assert cited.accepted?
@@ -275,7 +275,7 @@ class RetentionTest < ActiveSupport::TestCase
 
   test "applying a plan disposes exactly what it listed and records every disposition" do
     record_request_evidence_by_default!
-    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    receipt = submit_clickwrap(:signup, actor: @user, http_request: fake_http_request)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(created_by: @operator,
@@ -312,7 +312,7 @@ class RetentionTest < ActiveSupport::TestCase
 
   test "a failed annex-disposition event rolls the value deletion back and a retry succeeds" do
     record_request_evidence_by_default!
-    receipt = capture_clickwrap(:signup, actor: @user, http_request: fake_http_request)
+    receipt = submit_clickwrap(:signup, actor: @user, http_request: fake_http_request)
     annex = receipt.event.reload.request_evidence
     original_ip_address = annex.ip_address
 
@@ -341,7 +341,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "a failed core-disposition event leaves the payload intact and a retry succeeds" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     Clickwrap::Testing.fail_next_event_write do
       assert_raises(Clickwrap::EventWriteFailed) do
@@ -370,7 +370,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "applying a plan that expired or was already applied is refused by name" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       applied = Clickwrap::Retention::Planner.new(created_by: @operator).call
@@ -407,7 +407,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "a crashed application can be reclaimed only after an explicit stale threshold and reason" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(
@@ -452,8 +452,8 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "recovering a partially applied plan rechecks every item instead of deleting it twice" do
-    first = capture_clickwrap(:signup, actor: @user)
-    second = capture_clickwrap(:signup, actor: create_user)
+    first = submit_clickwrap(:signup, actor: @user)
+    second = submit_clickwrap(:signup, actor: create_user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(
@@ -493,7 +493,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "applying destructive work requires a named operator reference" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
@@ -507,7 +507,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "a legal hold placed after the plan was reviewed stops that item at apply time" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
@@ -529,7 +529,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "an item whose retention rule no longer says it is due stops and is reported" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     travel_to 7.years.from_now do
       plan = Clickwrap::Retention::Planner.new(created_by: @operator).call
@@ -552,7 +552,7 @@ class RetentionTest < ActiveSupport::TestCase
   # --- Disposing the core event ----------------------------------------------
 
   test "disposing of a core event marks it disposed and leaves the row where it was" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     assert_difference -> { Clickwrap::Event.where(event_type: "disposition").count }, 1 do
       Clickwrap::Retention::Disposition.dispose_core_event!(receipt.event,
@@ -586,7 +586,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "disposing of a core event needs a reason and refuses while a legal hold is in effect" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     assert_raises(Clickwrap::LifecycleError) do
       Clickwrap::Retention::Disposition.dispose_core_event!(receipt.event, because: "   ")
@@ -605,7 +605,7 @@ class RetentionTest < ActiveSupport::TestCase
   end
 
   test "verifying a disposed core event says it was disposed of rather than that nothing happened" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap::Retention::Disposition.dispose_core_event!(receipt.event, because: "The six-year period ended")
 
     result = Clickwrap.verify(receipt.event_id)

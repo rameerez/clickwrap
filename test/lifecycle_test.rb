@@ -14,7 +14,7 @@ class LifecycleTest < ActiveSupport::TestCase
   # --- Consent ----------------------------------------------------------------
 
   test "consent can be withdrawn, and withdrawal appends rather than deletes" do
-    grant = capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    grant = submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
     assert @user.clickwraps.consented_to?(:product_updates)
 
     withdrawal = Clickwrap.withdraw!(:product_updates, actor: @user,
@@ -32,7 +32,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "withdrawal requires a plain-English reason" do
-    capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
 
     assert_raises(Clickwrap::LifecycleError) do
       Clickwrap.withdraw!(:product_updates, actor: @user, because: "  ")
@@ -46,8 +46,8 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "withdrawing consent does not touch an agreement" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
-    capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
 
     Clickwrap.withdraw!(:product_updates, actor: @user, because: "Changed their mind about marketing")
 
@@ -58,7 +58,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "an agreement cannot be withdrawn" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert_raises(Clickwrap::NotWithdrawableError) do
       Clickwrap.withdraw!(:terms, actor: @user, because: "Trying to withdraw a contract")
@@ -69,8 +69,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "a declaration expires without implying it was false when it was made" do
     scheme = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                                         answers: { independent_contractor: "1" })
+    receipt = submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                        answers: { independent_contractor: "1" })
 
     assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
@@ -91,8 +91,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "expiry is evaluated live rather than depending on a job having run" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                               answers: { independent_contractor: "1" })
+    submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                              answers: { independent_contractor: "1" })
 
     travel_to 13.months.from_now do
       # No sweep has run. The projection still says "active", and the answer is
@@ -105,8 +105,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "the expiry sweep appends the lifecycle event at the exact validity boundary" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                               answers: { independent_contractor: "1" })
+    submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                              answers: { independent_contractor: "1" })
     state = @user.clickwraps.declaration(:independent_contractor, subject: scheme)
 
     travel_to state.expires_at, with_usec: true do
@@ -123,8 +123,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "correcting a declaration appends a correction and leaves the original saying what it said" do
     scheme = create_withdrawal(user: @user)
-    original = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                                          answers: { independent_contractor: "1" })
+    original = submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
 
     correction = nil
     assert_difference -> { Clickwrap::Event.where(event_type: "correction").count }, 1 do
@@ -159,7 +159,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "an agreement cannot be corrected, because that is what a new version is for" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     error = assert_raises(Clickwrap::LifecycleError) do
       Clickwrap.correct_declaration!(:terms, actor: @user, because: "Trying to correct a contract")
@@ -170,8 +170,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "renewing starts a new validity period rather than extending the old one" do
     scheme = create_withdrawal(user: @user)
-    original = capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                                          answers: { independent_contractor: "1" })
+    original = submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
     first_expiry = @user.clickwraps.declaration(:independent_contractor, subject: scheme).expires_at
 
     renewal = nil
@@ -204,7 +204,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "a statement with no validity period cannot be renewed" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     error = assert_raises(Clickwrap::LifecycleError) do
       Clickwrap.renew!(:terms, actor: @user, because: "Trying to renew something that never expires")
@@ -214,8 +214,8 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "changing consent scope appends a scope change and keeps the original grant" do
-    grant = capture_clickwrap(:personal_newsletter, actor: @user,
-                                                    answers: { personal_newsletter: "1" })
+    grant = submit_clickwrap(:personal_newsletter, actor: @user,
+                                                   answers: { personal_newsletter: "1" })
 
     change = nil
     assert_difference -> { Clickwrap::Event.where(event_type: "scope_change").count }, 1 do
@@ -252,8 +252,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "only consent has a changeable scope" do
     scheme = create_withdrawal(user: @user)
-    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                               answers: { independent_contractor: "1" })
+    submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                              answers: { independent_contractor: "1" })
 
     error = assert_raises(Clickwrap::LifecycleError) do
       Clickwrap.change_consent_scope!(:independent_contractor, actor: @user, subject: scheme,
@@ -265,8 +265,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "a declaration is bound to its subject fingerprint" do
     scheme = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
-    capture_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
-                                               answers: { independent_contractor: "1" })
+    submit_clickwrap(:contractor_declaration, actor: @user, subject: scheme,
+                                              answers: { independent_contractor: "1" })
 
     assert @user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
@@ -281,8 +281,8 @@ class LifecycleTest < ActiveSupport::TestCase
   test "a one-time authorization is consumed and cannot be reused" do
     withdrawal = create_withdrawal(user: @user)
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                     answers: withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                    answers: withdrawal_answers) do |pending|
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -305,8 +305,8 @@ class LifecycleTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     other = create_withdrawal(user: @user)
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                     answers: withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                    answers: withdrawal_answers) do |pending|
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -319,8 +319,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "an authorization can be revoked with a reason" do
     withdrawal = create_withdrawal(user: @user)
-    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                answers: withdrawal_answers)
 
     Clickwrap.revoke!(:withdrawal, actor: @user, subject: withdrawal,
                                    because: "Suspected account compromise")
@@ -332,7 +332,7 @@ class LifecycleTest < ActiveSupport::TestCase
   # --- Reacceptance -----------------------------------------------------------
 
   test "publishing a new required version makes existing evidence no longer current" do
-    capture_clickwrap(:current_terms, actor: @user, answers: { terms: "1" })
+    submit_clickwrap(:current_terms, actor: @user, answers: { terms: "1" })
     assert @user.clickwraps.current_for?(:current_terms)
 
     publish_new_document_version!(:terms, version: "2026-12-01")
@@ -345,7 +345,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "a policy without require_current_version keeps its evidence current" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     publish_new_document_version!(:terms, version: "2026-12-01")
 
     # The application decides which change is material. Clickwrap enforces the
@@ -354,7 +354,7 @@ class LifecycleTest < ActiveSupport::TestCase
   end
 
   test "require_current_revision re-asks when the statement wording itself moved on" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert Clickwrap.verify(:signup, actor: @user, require_current_revision: true).success?,
            "evidence made under the current wording verifies"
@@ -387,7 +387,7 @@ class LifecycleTest < ActiveSupport::TestCase
   # unqualified yes. The four tests below pin both keywords, in both outcomes.
 
   test "an event id honors require_current_revision when the act was made under another one" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert Clickwrap.verify(@user.clickwraps.events.last.id, require_current_revision: true).success?,
            "evidence made under the current wording verifies from either end"
@@ -416,8 +416,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "an event id re-derives the subject fingerprint when a subject is passed" do
     withdrawal = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
-    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                answers: withdrawal_answers)
     event_id = @user.clickwraps.events.last.id
 
     assert Clickwrap.verify(event_id, subject: withdrawal).success?
@@ -435,8 +435,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "an event id verified with no subject still answers the question it was asked" do
     withdrawal = create_withdrawal(user: @user, covered_order_ids: "1,2,3")
-    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                answers: withdrawal_answers)
     event_id = @user.clickwraps.events.last.id
 
     withdrawal.update!(covered_order_ids: "1,2,3,4")
@@ -449,8 +449,8 @@ class LifecycleTest < ActiveSupport::TestCase
 
   test "an event whose policy is no longer declared says so instead of passing" do
     withdrawal = create_withdrawal(user: @user)
-    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                answers: withdrawal_answers)
     event_id = @user.clickwraps.events.last.id
 
     # "We can no longer check this" and "this is fine" must never be spelled
@@ -505,7 +505,7 @@ class LifecycleTest < ActiveSupport::TestCase
   # --- Append-only ------------------------------------------------------------
 
   test "an event cannot be updated or destroyed through ordinary ActiveRecord" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     event = receipt.event
 
     assert_raises(Clickwrap::EventWriteFailed) { event.update!(reason: "rewritten") }
@@ -550,9 +550,9 @@ class LifecycleTest < ActiveSupport::TestCase
     { withdrawal_requirements: "1", coverage_exclusivity: "1", withdrawal: "1" }
   end
   test "recorded_after? makes multi-step ordering API instead of ULID folklore" do
-    first = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    first = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     later_user = create_user
-    second = capture_clickwrap(:signup, actor: later_user, answers: { terms: "1", privacy_notice: "1" })
+    second = submit_clickwrap(:signup, actor: later_user, answers: { terms: "1", privacy_notice: "1" })
 
     earlier = Clickwrap.verify(:signup, actor: @user)
     later = Clickwrap.verify(:signup, actor: later_user)
@@ -586,8 +586,8 @@ class LifecycleTest < ActiveSupport::TestCase
   test "has_clickwrap_evidence reads a domain row's receipt aloud" do
     withdrawal = create_withdrawal(user: @user)
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                     answers: withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                    answers: withdrawal_answers) do |pending|
       withdrawal.clickwrap_event_id = pending.event_id
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
@@ -601,8 +601,8 @@ class LifecycleTest < ActiveSupport::TestCase
   test "has_clickwrap_evidence refuses a link belonging to another act" do
     withdrawal = create_withdrawal(user: @user)
     other = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:withdrawal_authorization, actor: @user, subject: other,
-                                                           answers: withdrawal_answers)
+    receipt = submit_clickwrap(:withdrawal_authorization, actor: @user, subject: other,
+                                                          answers: withdrawal_answers)
 
     withdrawal.clickwrap_event_id = receipt.event_id
 
@@ -613,8 +613,8 @@ class LifecycleTest < ActiveSupport::TestCase
   test "has_clickwrap_evidence never lets a linked event be replaced or removed" do
     withdrawal = create_withdrawal(user: @user)
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                     answers: withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                    answers: withdrawal_answers) do |pending|
       withdrawal.clickwrap_event_id = pending.event_id
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end

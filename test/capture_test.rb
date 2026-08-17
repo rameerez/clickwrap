@@ -12,7 +12,7 @@ class CaptureTest < ActiveSupport::TestCase
   # --- The ordinary path ------------------------------------------------------
 
   test "capture records one event with one statement per act" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert_equal "capture", receipt.event.event_type
     assert_equal "signup", receipt.policy_key
@@ -40,7 +40,7 @@ class CaptureTest < ActiveSupport::TestCase
     organization = create_organization
 
     error = assert_raises(Clickwrap::ConfigurationError) do
-      capture_clickwrap(:signup, actor: organization, answers: { terms: "1", privacy_notice: "1" })
+      submit_clickwrap(:signup, actor: organization, answers: { terms: "1", privacy_notice: "1" })
     end
 
     assert_match(/Organization/, error.message)
@@ -55,8 +55,8 @@ class CaptureTest < ActiveSupport::TestCase
     Clickwrap.config.actor_class_name = "Organization"
     organization = create_organization
 
-    assert capture_clickwrap(:signup, actor: organization,
-                                      answers: { terms: "1", privacy_notice: "1" }).event.persisted?
+    assert submit_clickwrap(:signup, actor: organization,
+                                     answers: { terms: "1", privacy_notice: "1" }).event.persisted?
 
     # A system actor, an anonymous actor, and a literal reference to an actor
     # in another system are not the host's actor class and never claimed to be.
@@ -66,8 +66,8 @@ class CaptureTest < ActiveSupport::TestCase
       Clickwrap::AnonymousActor.new("checkout_9f2c"),
       "external/actor-123"
     ].each do |actor|
-      assert capture_clickwrap(:signup, actor: actor,
-                                        answers: { terms: "1", privacy_notice: "1" }).event.persisted?,
+      assert submit_clickwrap(:signup, actor: actor,
+                                       answers: { terms: "1", privacy_notice: "1" }).event.persisted?,
              "#{actor.class.name} is its own kind of actor and must not be checked against the class"
     end
   end
@@ -76,7 +76,7 @@ class CaptureTest < ActiveSupport::TestCase
     Clickwrap.config.actor_class_name = "NoSuchActorModel"
 
     error = assert_raises(Clickwrap::ConfigurationError) do
-      capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+      submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     end
 
     assert_match(/NoSuchActorModel/, error.message)
@@ -84,8 +84,8 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "capture stores the resolved assertion text, not an I18n key" do
-    receipt = capture_clickwrap(:contractor_declaration, actor: @user, subject: create_withdrawal,
-                                                         answers: { independent_contractor: "1" })
+    receipt = submit_clickwrap(:contractor_declaration, actor: @user, subject: create_withdrawal,
+                                                        answers: { independent_contractor: "1" })
 
     statement = receipt.statements.first
     assert_equal "I declare that I provide these services as an independent contractor, not as an employee.",
@@ -94,7 +94,7 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "capture binds the exact document versions and digests" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     terms_document = receipt.documents.find { |document| document.document_key == "terms" }
     version = Clickwrap::Document.find_by(document_key: "terms").current_version
@@ -105,7 +105,7 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "capture updates the current-state projection" do
-    capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert @user.clickwraps.agreed_to?(:terms)
     assert @user.clickwraps.acknowledged?(:privacy_notice)
@@ -114,7 +114,7 @@ class CaptureTest < ActiveSupport::TestCase
 
   test "a required statement left unanswered is refused" do
     error = assert_raises(Clickwrap::AnswerInvalid) do
-      capture_clickwrap(:signup, actor: @user, answers: { terms: "1" })
+      submit_clickwrap(:signup, actor: @user, answers: { terms: "1" })
     end
 
     assert_equal "privacy_notice", error.statement_key
@@ -124,7 +124,7 @@ class CaptureTest < ActiveSupport::TestCase
   # --- Optional consent -------------------------------------------------------
 
   test "an optional consent left unselected creates no grant at all" do
-    receipt = capture_clickwrap(:marketing_preferences, actor: @user, answers: {})
+    receipt = submit_clickwrap(:marketing_preferences, actor: @user, answers: {})
 
     # Silence is not an affirmative refusal, and this gem will not record it as
     # one. The option was offered and not taken; that is all that happened.
@@ -134,7 +134,7 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "each optional consent purpose is granted separately" do
-    capture_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: @user, answers: { product_updates: "1" })
 
     assert @user.clickwraps.consented_to?(:product_updates)
     assert_not @user.clickwraps.consented_to?(:partner_offers)
@@ -143,7 +143,7 @@ class CaptureTest < ActiveSupport::TestCase
   test "protected work can read accepted answers without reaching into event rows" do
     observed = nil
 
-    capture_clickwrap_and(
+    submit_clickwrap_and(
       :research_contact,
       actor: @user,
       answers: { research_contact: "no" }
@@ -160,7 +160,7 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "pending answer helpers read unselected optional statements as silence" do
-    capture_clickwrap_and(:marketing_preferences, actor: @user, answers: {}) do |pending|
+    submit_clickwrap_and(:marketing_preferences, actor: @user, answers: {}) do |pending|
       assert_nil pending.answer_for(:product_updates)
       assert_not pending.answered?(:product_updates)
       assert_not pending.granted?(:product_updates)
@@ -170,7 +170,7 @@ class CaptureTest < ActiveSupport::TestCase
   end
 
   test "an explicit no is recorded as declined rather than as absence" do
-    capture_clickwrap(:research_contact, actor: @user, answers: { research_contact: "no" })
+    submit_clickwrap(:research_contact, actor: @user, answers: { research_contact: "no" })
 
     state = @user.clickwraps.consent(:research_contact)
     assert_equal "declined", state.state
@@ -179,7 +179,7 @@ class CaptureTest < ActiveSupport::TestCase
 
   test "an answer that was never offered as a choice is refused" do
     assert_raises(Clickwrap::AnswerInvalid) do
-      capture_clickwrap(:research_contact, actor: @user, answers: { research_contact: "maybe" })
+      submit_clickwrap(:research_contact, actor: @user, answers: { research_contact: "maybe" })
     end
   end
 
@@ -188,8 +188,8 @@ class CaptureTest < ActiveSupport::TestCase
   test "capture_and! commits the evidence and the protected action together" do
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                               answers: default_withdrawal_answers) do |pending|
+    receipt = submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                              answers: default_withdrawal_answers) do |pending|
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -203,8 +203,8 @@ class CaptureTest < ActiveSupport::TestCase
 
     assert_no_difference -> { Clickwrap::Event.count } do
       assert_raises(RuntimeError) do
-        capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                         answers: default_withdrawal_answers) do
+        submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        answers: default_withdrawal_answers) do
           raise "the domain action failed"
         end
       end
@@ -220,8 +220,8 @@ class CaptureTest < ActiveSupport::TestCase
     # or a provider handoff that succeeded while its evidence quietly did not.
     Clickwrap::Testing.fail_next_event_write do
       assert_raises(Clickwrap::EventWriteFailed) do
-        capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                         answers: default_withdrawal_answers) do |pending|
+        submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        answers: default_withdrawal_answers) do |pending|
           withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
         end
       end
@@ -235,8 +235,8 @@ class CaptureTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
     captured = nil
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                     answers: default_withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                    answers: default_withdrawal_answers) do |pending|
       captured = pending
       assert pending.event_id.present?
       assert_raises(Clickwrap::ReceiptNotCommitted) { pending.to_canonical_json }
@@ -250,8 +250,8 @@ class CaptureTest < ActiveSupport::TestCase
   test "the protected outcome is recorded from the host's configured lambda" do
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                               answers: default_withdrawal_answers) do |pending|
+    receipt = submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                              answers: default_withdrawal_answers) do |pending|
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 

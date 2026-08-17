@@ -337,14 +337,14 @@ class SecurityTest < ActiveSupport::TestCase
   test "the same actor cannot hold two live grants for one statement and subject" do
     withdrawal = create_withdrawal(user: @user)
 
-    capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                 answers: { withdrawal_requirements: "1",
-                                                            coverage_exclusivity: "1", withdrawal: "1" })
+    submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                answers: { withdrawal_requirements: "1",
+                                                           coverage_exclusivity: "1", withdrawal: "1" })
 
     assert_raises(Clickwrap::OneTimeAuthorizationConflict) do
-      capture_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                   answers: { withdrawal_requirements: "1",
-                                                              coverage_exclusivity: "1", withdrawal: "1" })
+      submit_clickwrap(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                  answers: { withdrawal_requirements: "1",
+                                                             coverage_exclusivity: "1", withdrawal: "1" })
     end
 
     states = Clickwrap::StatementState.for_actor(@user.clickwrap_actor_reference)
@@ -356,7 +356,7 @@ class SecurityTest < ActiveSupport::TestCase
   # --- Evidence integrity -----------------------------------------------------
 
   test "rewriting an event's row is detected by its digest" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     assert receipt.digest_verified?
 
     # Simulate a privileged actor going around the model's append-only guard.
@@ -368,7 +368,7 @@ class SecurityTest < ActiveSupport::TestCase
   end
 
   test "an ordinary retention run leaves a verifiable documented tombstone" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     # A hold is current control state rather than historical payload, so it does
     # not rewrite the event digest.
@@ -388,7 +388,7 @@ class SecurityTest < ActiveSupport::TestCase
   end
 
   test "a raw disposition marker cannot hide intact or altered evidence from verification" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     # The marker is deliberately outside the historical digest because a real
     # retention run writes it later. That makes the linked disposition event the
@@ -411,7 +411,7 @@ class SecurityTest < ActiveSupport::TestCase
   end
 
   test "a digest-valid non-disposition event cannot be used as a disposition proof" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     disposed_at = Clickwrap.now
     fake = Clickwrap::Lifecycle.append_lifecycle_event!(
       event: receipt.event,
@@ -441,7 +441,7 @@ class SecurityTest < ActiveSupport::TestCase
   end
 
   test "an actor deletion never cascades evidence away" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     reference = @user.clickwrap_actor_reference
 
     @user.destroy
@@ -503,7 +503,7 @@ class SecurityTest < ActiveSupport::TestCase
   # --- Leakage ----------------------------------------------------------------
 
   test "no prohibited claim appears anywhere in the shipped library or its output" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     surfaces = [receipt.to_canonical_json, receipt.to_html, Clickwrap::Doctor.new.report.to_s]
 
     Clickwrap::Vocabulary::PROHIBITED_CLAIM_PHRASES.each do |phrase|

@@ -18,7 +18,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   # --- Safe defaults ----------------------------------------------------------
 
   test "an ordinary policy records no IP address, user agent, or geolocation" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert_nil receipt.event.request_evidence
     assert_empty receipt.event.request_evidence_category_binding_digests
@@ -97,9 +97,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
     assert annex.present?
@@ -121,9 +121,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
 
@@ -139,9 +139,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
 
@@ -157,9 +157,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
     assert_equal "rails_request_remote_ip", annex.ip_address_reader_name
@@ -169,9 +169,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     assert receipt.event.reload.request_evidence.browser_user_agent_was_client_supplied?
   end
@@ -182,9 +182,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     Clickwrap.config.ip_geolocation_resolver = Clickwrap::IpGeolocation::NullResolver.new
     withdrawal = create_withdrawal(user: @user)
 
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
     assert annex.ip_geolocation_unavailable_reason.present?
@@ -213,8 +213,8 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     end
 
     error = assert_raises(Clickwrap::RequestEvidenceUnavailable) do
-      capture_clickwrap(:fail_closed_probe, actor: @user, http_request: nil,
-                                            answers: { withdrawal_requirements: "1" })
+      submit_clickwrap(:fail_closed_probe, actor: @user, http_request: nil,
+                                           answers: { withdrawal_requirements: "1" })
     end
 
     # The message names the policy, the category, and the reason — and never
@@ -241,8 +241,8 @@ class RequestEvidenceTest < ActiveSupport::TestCase
       retain_with :ordinary_agreement_evidence
     end
 
-    receipt = capture_clickwrap(:records_but_tolerates_probe, actor: @user, http_request: nil,
-                                                              answers: { withdrawal_requirements: "1" })
+    receipt = submit_clickwrap(:records_but_tolerates_probe, actor: @user, http_request: nil,
+                                                             answers: { withdrawal_requirements: "1" })
 
     fragment = receipt.to_h.dig("request_evidence", "ip_address")
     assert_equal "unavailable", fragment["state"]
@@ -252,9 +252,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "the recorded values are ciphertext at rest, and their provenance is not" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     annex = receipt.event.reload.request_evidence
     raw = ActiveRecord::Base.connection.select_one(
@@ -279,9 +279,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "coordinates are stored as strings, so the receipt shows what the provider said" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     # A decimal column would introduce a rounding step between what the provider
     # said and what the evidence shows, for a value the receipt serializes as a
@@ -292,7 +292,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "editing any retained annex fact breaks that category's event binding" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :regulated_authorization,
       actor: @user,
       subject: withdrawal,
@@ -318,7 +318,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     Clickwrap.config.find_request_evidence_binding_key_with = ->(key_id) { keys[key_id] }
     configure_static_resolver!
     first_withdrawal = create_withdrawal(user: @user)
-    first = capture_clickwrap(
+    first = submit_clickwrap(
       :regulated_authorization,
       actor: @user,
       subject: first_withdrawal,
@@ -328,7 +328,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
 
     Clickwrap.config.current_request_evidence_binding_key_id = "request-evidence-2026-09"
     second_withdrawal = create_withdrawal(user: @user)
-    second = capture_clickwrap(
+    second = submit_clickwrap(
       :regulated_authorization,
       actor: @user,
       subject: second_withdrawal,
@@ -349,7 +349,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "an unavailable encryption key is an unreadable annex finding instead of a crash" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :regulated_authorization,
       actor: @user,
       subject: withdrawal,
@@ -377,7 +377,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     Clickwrap.config.find_request_evidence_binding_key_with = ->(key_id) { keys[key_id] }
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :regulated_authorization,
       actor: @user,
       subject: withdrawal,
@@ -397,7 +397,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: @user)
 
     error = assert_raises(Clickwrap::ConfigurationError) do
-      capture_clickwrap(
+      submit_clickwrap(
         :regulated_authorization,
         actor: @user,
         subject: withdrawal,
@@ -415,9 +415,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "deleting a recorded IP address leaves the core event intact and verifiable" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     assert receipt.event.reload.digest_verified?
 
@@ -439,9 +439,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "each field is deleted independently" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     Clickwrap.delete_recorded_ip_address!(receipt, because: "Retention period ended")
 
@@ -454,9 +454,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "deletion requires a reason and appends its own event" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     assert_raises(Clickwrap::Error) do
       Clickwrap.delete_recorded_ip_address!(receipt, because: "")
@@ -470,9 +470,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "a legal hold stops disposition" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     receipt.place_on_legal_hold!(because: "Pending dispute 2026-184",
                                  placed_by: create_security_operator,
@@ -488,9 +488,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
   test "raw values never appear in the default receipt or in inspect output" do
     configure_static_resolver!
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     json = receipt.to_canonical_json
     assert_no_match(/203\.0\.113\.7/, json)
@@ -502,9 +502,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     operator = create_security_operator
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     exported = Clickwrap::Receipt.export(receipt, requested_by: operator,
                                                   because: "Investigating dispute 2026-184",
@@ -524,9 +524,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     operator = create_security_operator
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     exported = Clickwrap::Receipt.export(receipt, requested_by: operator,
                                                   because: "Investigating dispute 2026-184",
@@ -542,9 +542,9 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     configure_static_resolver!
     operator = create_security_operator
     withdrawal = create_withdrawal(user: @user)
-    receipt = capture_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
-                                                          http_request: @http_request,
-                                                          answers: { regulated_action: "1" })
+    receipt = submit_clickwrap(:regulated_authorization, actor: @user, subject: withdrawal,
+                                                         http_request: @http_request,
+                                                         answers: { regulated_action: "1" })
 
     exported = Clickwrap::Receipt.export(receipt, requested_by: operator,
                                                   because: "Investigating dispute 2026-184",

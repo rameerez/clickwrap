@@ -10,7 +10,7 @@ class ReviewRegressionsTest < ActiveSupport::TestCase
   setup { @user = create_user }
 
   test "consent granted personally stays withdrawable when an ambient organization appears" do
-    capture_clickwrap(:personal_newsletter, actor: @user, answers: { personal_newsletter: "1" })
+    submit_clickwrap(:personal_newsletter, actor: @user, answers: { personal_newsletter: "1" })
     assert @user.clickwraps.consented_to?(:personal_newsletter)
 
     # The withdrawing session has an ambient organization (the person joined

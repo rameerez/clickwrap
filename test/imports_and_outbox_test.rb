@@ -94,7 +94,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "a late historical import cannot reactivate consent withdrawn after it occurred" do
-    grant = capture_clickwrap(
+    grant = submit_clickwrap(
       :marketing_preferences,
       actor: @user,
       answers: { product_updates: "1" }
@@ -198,8 +198,8 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     # share their timestamp, so any ordering between them must come from the
     # durable recording sequence.
     travel_to Time.current, with_usec: true do
-      capture_clickwrap(:signup, actor: @user)
-      capture_clickwrap(:current_terms, actor: @user)
+      submit_clickwrap(:signup, actor: @user)
+      submit_clickwrap(:current_terms, actor: @user)
     end
 
     signup = Clickwrap.verify(:signup, actor: @user)
@@ -516,10 +516,10 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
     Clickwrap::Testing.fail_next_event_write do
       assert_raises(Clickwrap::EventWriteFailed) do
-        capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                         answers: { withdrawal_requirements: "1",
-                                                                    coverage_exclusivity: "1",
-                                                                    withdrawal: "1" }) do
+        submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        answers: { withdrawal_requirements: "1",
+                                                                   coverage_exclusivity: "1",
+                                                                   withdrawal: "1" }) do
           ran = true
           withdrawal.update!(state: "submitted")
         end
@@ -535,7 +535,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
     assert_no_clickwrap_event :withdrawal_authorization, actor: @user
 
     # Only the NEXT write is sabotaged, and the hook comes off afterwards.
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     assert receipt.event_id.present?
   end
 
@@ -544,10 +544,10 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
     Clickwrap::Testing.fail_next_domain_write do
       assert_raises(Clickwrap::Testing::DomainWriteFailed) do
-        capture_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
-                                                         answers: { withdrawal_requirements: "1",
-                                                                    coverage_exclusivity: "1",
-                                                                    withdrawal: "1" }) do
+        submit_clickwrap_and(:withdrawal_authorization, actor: @user, subject: withdrawal,
+                                                        answers: { withdrawal_requirements: "1",
+                                                                   coverage_exclusivity: "1",
+                                                                   withdrawal: "1" }) do
           withdrawal.update!(state: "submitted")
         end
       end
@@ -563,7 +563,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
 
     Clickwrap::Testing.freeze_time_at(moment) do
       assert_equal moment, Clickwrap.now
-      receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+      receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
       assert_equal moment.to_i, receipt.event.recorded_at_by_server.to_i
     end
 
@@ -574,7 +574,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   test "reset! is a no-op when nothing was installed" do
     Clickwrap::Testing.reset!
     Clickwrap::Testing.reset!
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     assert receipt.event_id.present?
   end
 
@@ -629,7 +629,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the module-level form of the collision-prone helpers works" do
-    receipt = Clickwrap::TestHelpers.capture_clickwrap(
+    receipt = Clickwrap::TestHelpers.submit_clickwrap(
       :signup, actor: @user, answers: { terms: "1", privacy_notice: "1" }
     )
 
@@ -646,7 +646,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "assert_clickwrap_receipt_verifies and the current/agreed assertions" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     assert_clickwrap_current :signup, actor: @user
     assert_clickwrap_agreed_to :terms, actor: @user
@@ -669,7 +669,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   # --- ReceiptVerifier --------------------------------------------------------
 
   test "the standalone verifier validates receipt internals and reports missing document artifacts" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
 
     # No hand-built stand-in: this is exactly the bytes `to_canonical_json`
     # produces, which is exactly what a host writes to a file.
@@ -684,7 +684,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the standalone verifier checks supplied document bytes and reports the ones it was not given" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     terms = Clickwrap::Document.find_by(document_key: "terms").current_version
 
     with_terms = Clickwrap::ReceiptVerifier.verify(
@@ -715,7 +715,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the standalone verifier detects an edited receipt" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     body = JSON.parse(receipt.to_canonical_json)
     body["actor"]["reference"] = "gid://dummy/User/999999"
 
@@ -726,7 +726,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the standalone verifier refuses an unknown schema rather than guessing" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     body = JSON.parse(receipt.to_canonical_json)
     body["schema"] = "clickwrap.receipt.v99"
 
@@ -737,7 +737,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the receipt reports both digests and says which one a file can check" do
-    receipt = capture_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: @user, answers: { terms: "1", privacy_notice: "1" })
     integrity = receipt.to_h["integrity"]
 
     # Two different values answering two different questions: one says this file
@@ -748,7 +748,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "the standalone verifier re-derives every lifecycle successor event" do
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :marketing_preferences,
       actor: @user,
       answers: { product_updates: "1" }
@@ -773,7 +773,7 @@ class ImportsAndOutboxTest < ActiveSupport::TestCase
   end
 
   test "a recomputed receipt digest cannot hide an edited lifecycle successor" do
-    receipt = capture_clickwrap(
+    receipt = submit_clickwrap(
       :marketing_preferences,
       actor: @user,
       answers: { product_updates: "1" }

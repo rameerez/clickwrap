@@ -85,8 +85,8 @@ class IntegrityTest < ActiveSupport::TestCase
   test "consecutive captures in one scope link to their predecessor and increment the sequence" do
     chain_event_history!
 
-    first = capture_clickwrap(:signup, actor: @user)
-    second = capture_clickwrap(:signup, actor: create_user)
+    first = submit_clickwrap(:signup, actor: @user)
+    second = submit_clickwrap(:signup, actor: create_user)
 
     first_event = first.event.reload
     second_event = second.event.reload
@@ -112,7 +112,7 @@ class IntegrityTest < ActiveSupport::TestCase
   end
 
   test "chaining is off unless it is configured" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     assert_nil receipt.event.reload.chain_scope
     assert_nil receipt.event.chain_sequence
@@ -125,9 +125,9 @@ class IntegrityTest < ActiveSupport::TestCase
     first_tenant = create_organization
     second_tenant = create_organization
 
-    one = capture_clickwrap(:signup, actor: @user, tenant: first_tenant)
-    two = capture_clickwrap(:signup, actor: create_user, tenant: second_tenant)
-    three = capture_clickwrap(:signup, actor: create_user, tenant: first_tenant)
+    one = submit_clickwrap(:signup, actor: @user, tenant: first_tenant)
+    two = submit_clickwrap(:signup, actor: create_user, tenant: second_tenant)
+    three = submit_clickwrap(:signup, actor: create_user, tenant: first_tenant)
 
     assert_not_equal one.event.reload.chain_scope, two.event.reload.chain_scope
 
@@ -147,9 +147,9 @@ class IntegrityTest < ActiveSupport::TestCase
   test "the walk passes on an intact chain and reports the first break when one is rewritten" do
     chain_event_history!
 
-    capture_clickwrap(:signup, actor: @user)
-    rewritten = capture_clickwrap(:signup, actor: create_user)
-    capture_clickwrap(:signup, actor: create_user)
+    submit_clickwrap(:signup, actor: @user)
+    rewritten = submit_clickwrap(:signup, actor: create_user)
+    submit_clickwrap(:signup, actor: create_user)
 
     intact = Clickwrap::Integrity::Chain.verify
     assert intact.success?
@@ -175,7 +175,7 @@ class IntegrityTest < ActiveSupport::TestCase
 
   test "the chain counts documented core dispositions without calling their deleted digests verified" do
     chain_event_history!
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     Clickwrap::Retention::Disposition.dispose_core_event!(
       receipt.event,
@@ -194,8 +194,8 @@ class IntegrityTest < ActiveSupport::TestCase
   test "an event whose stored digest is replaced stops linking to its successor" do
     chain_event_history!
 
-    first = capture_clickwrap(:signup, actor: @user)
-    second = capture_clickwrap(:signup, actor: create_user)
+    first = submit_clickwrap(:signup, actor: @user)
+    second = submit_clickwrap(:signup, actor: create_user)
 
     # A restored partial backup, or a row someone patched to make a digest
     # check pass, changes the stored digest itself. The successor recorded the
@@ -220,8 +220,8 @@ class IntegrityTest < ActiveSupport::TestCase
   test "deleting the newest event is detected against the durable chain head" do
     chain_event_history!
 
-    first = capture_clickwrap(:signup, actor: @user)
-    removed = capture_clickwrap(:signup, actor: create_user)
+    first = submit_clickwrap(:signup, actor: @user)
+    removed = submit_clickwrap(:signup, actor: create_user)
     connection = ActiveRecord::Base.connection
     connection.disable_referential_integrity do
       Clickwrap::Event.where(id: removed.event_id).delete_all
@@ -239,7 +239,7 @@ class IntegrityTest < ActiveSupport::TestCase
 
   test "deleting every event still leaves a detectable chain-head discrepancy" do
     chain_event_history!
-    removed = capture_clickwrap(:signup, actor: @user)
+    removed = submit_clickwrap(:signup, actor: @user)
 
     ActiveRecord::Base.connection.disable_referential_integrity do
       Clickwrap::Event.where(id: removed.event_id).delete_all
@@ -256,8 +256,8 @@ class IntegrityTest < ActiveSupport::TestCase
   test "a bounded walk reports that it started mid-chain instead of calling it a break" do
     chain_event_history!
 
-    capture_clickwrap(:signup, actor: @user)
-    capture_clickwrap(:signup, actor: create_user)
+    submit_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: create_user)
 
     result = Clickwrap::Integrity::Chain.verify(scope: "global/signup", from: 2)
 
@@ -271,7 +271,7 @@ class IntegrityTest < ActiveSupport::TestCase
 
   test "what a chain verification reports never claims more than it detects" do
     chain_event_history!
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     body = Clickwrap::Integrity::Chain.verify.to_h
 
@@ -333,7 +333,7 @@ class IntegrityTest < ActiveSupport::TestCase
   test "a verified timestamp is immutable, digest-bound, and independently checkable as a receipt record" do
     adapter = VerifiedTimestampAdapter.new
     Clickwrap.config.timestamp_receipts_with = adapter
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     attestation = Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
 
@@ -358,7 +358,7 @@ class IntegrityTest < ActiveSupport::TestCase
 
   test "a timestamp result for a different digest is recorded as failed and never upgrades the tier" do
     Clickwrap.config.timestamp_receipts_with = MismatchedTimestampAdapter.new
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     attestation = Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
 
@@ -373,7 +373,7 @@ class IntegrityTest < ActiveSupport::TestCase
     Clickwrap.config.timestamp_receipts_with = RaisingTimestampAdapter.new
     Clickwrap.config.report_after_commit_failure_with =
       ->(error, event) { reported << [error, event.id] }
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     Clickwrap::Integrity::Attestor.new(receipt.event).timestamp_event
 
@@ -388,7 +388,7 @@ class IntegrityTest < ActiveSupport::TestCase
     adapter = VerifiedAnchorAdapter.new
     chain_event_history!
     Clickwrap.config.anchor_event_history_with = adapter
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
 
     attestation = Clickwrap::Integrity::Attestor.new(receipt.event).anchor_event
 
@@ -398,7 +398,7 @@ class IntegrityTest < ActiveSupport::TestCase
   end
 
   test "missing timestamp attestations can be reconciled without duplicating recorded attempts" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap.config.timestamp_receipts_with = VerifiedTimestampAdapter.new
 
     first = Clickwrap.reconcile_missing_integrity_attestations!
@@ -413,7 +413,7 @@ class IntegrityTest < ActiveSupport::TestCase
   end
 
   test "failed attestations are retried only when the caller says so" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap.config.timestamp_receipts_with = RaisingTimestampAdapter.new
 
     first = Clickwrap.reconcile_missing_integrity_attestations!
@@ -427,9 +427,9 @@ class IntegrityTest < ActiveSupport::TestCase
   end
 
   test "anchor reconciliation touches only events that were actually chained" do
-    unchained = capture_clickwrap(:signup, actor: @user)
+    unchained = submit_clickwrap(:signup, actor: @user)
     chain_event_history!
-    chained = capture_clickwrap(:signup, actor: create_user)
+    chained = submit_clickwrap(:signup, actor: create_user)
     Clickwrap.config.anchor_event_history_with = VerifiedAnchorAdapter.new
 
     result = Clickwrap.reconcile_missing_integrity_attestations!
@@ -442,7 +442,7 @@ class IntegrityTest < ActiveSupport::TestCase
   # --- What the receipt is allowed to say -------------------------------------
 
   test "a receipt states the chained tier only when its event is actually chained" do
-    baseline = capture_clickwrap(:signup, actor: @user).to_h["integrity"]
+    baseline = submit_clickwrap(:signup, actor: @user).to_h["integrity"]
 
     assert_equal "baseline", baseline["tier"]
     assert_match(/detects accidental or ordinary modification/, baseline["detects"])
@@ -450,7 +450,7 @@ class IntegrityTest < ActiveSupport::TestCase
     assert_nil baseline["chain_scope"]
 
     chain_event_history!
-    chained = capture_clickwrap(:signup, actor: create_user).to_h["integrity"]
+    chained = submit_clickwrap(:signup, actor: create_user).to_h["integrity"]
 
     # The tier is read off what was actually recorded, never off the fact that
     # somebody turned a setting on, and the sentence changes with it.

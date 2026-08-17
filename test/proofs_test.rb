@@ -24,7 +24,7 @@ class ProofsTest < ActiveSupport::TestCase
     # One policy (config/clickwrap.rb), one macro (has_clickwraps), one helper
     # call — and this, the whole capture. Nothing about manifests, digests,
     # projections, or retention appears in the host's code path.
-    receipt = capture_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
 
     assert user.clickwraps.agreed_to?(:terms)
     assert user.clickwraps.acknowledged?(:privacy_notice)
@@ -33,7 +33,7 @@ class ProofsTest < ActiveSupport::TestCase
 
   test "proof A: terms and the privacy notice keep different meanings" do
     user = create_user
-    capture_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
+    submit_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
 
     terms = user.clickwraps.statement_states.for_statement("terms").first
     privacy = user.clickwraps.statement_states.for_statement("privacy_notice").first
@@ -90,7 +90,7 @@ class ProofsTest < ActiveSupport::TestCase
 
   test "proof A: deleting an account does not delete the evidence" do
     user = create_user
-    receipt = capture_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
+    receipt = submit_clickwrap(:signup, actor: user, answers: { terms: "1", privacy_notice: "1" })
 
     user.destroy
 
@@ -127,8 +127,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof B: the policy kind is declaration, not generic acceptance" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    receipt = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
-                                                         answers: { independent_contractor: "1" })
+    receipt = submit_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                        answers: { independent_contractor: "1" })
 
     assert_equal "declaration", receipt.statements.first.kind
     assert_equal "declared", receipt.statements.first.action
@@ -137,8 +137,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof B: scheme, validity, and fingerprint are server-owned" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    receipt = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
-                                                         answers: { independent_contractor: "1" })
+    receipt = submit_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                        answers: { independent_contractor: "1" })
 
     statement = receipt.statements.first
     assert statement.expires_at.present?, "validity comes from the policy, not from the browser"
@@ -150,8 +150,8 @@ class ProofsTest < ActiveSupport::TestCase
     user = create_user
     scheme = create_withdrawal(user: user)
 
-    receipt = capture_clickwrap_and(:contractor_declaration, actor: user, subject: scheme,
-                                                             answers: { independent_contractor: "1" }) do |pending|
+    receipt = submit_clickwrap_and(:contractor_declaration, actor: user, subject: scheme,
+                                                            answers: { independent_contractor: "1" }) do |pending|
       scheme.update!(state: "declared", authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -162,14 +162,14 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof B: expiry and renewal work without rewriting the original" do
     user = create_user
     scheme = create_withdrawal(user: user)
-    original = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
-                                                          answers: { independent_contractor: "1" })
+    original = submit_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                         answers: { independent_contractor: "1" })
 
     travel_to 13.months.from_now do
       assert_not user.clickwraps.declared?(:independent_contractor, subject: scheme)
 
-      renewed = capture_clickwrap(:contractor_declaration, actor: user, subject: scheme,
-                                                           answers: { independent_contractor: "1" })
+      renewed = submit_clickwrap(:contractor_declaration, actor: user, subject: scheme,
+                                                          answers: { independent_contractor: "1" })
 
       assert user.clickwraps.declared?(:independent_contractor, subject: scheme)
       assert_not_equal original.event_id, renewed.event_id
@@ -186,8 +186,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof C: several explicit assertions are recorded separately" do
     user = create_user
     withdrawal = create_withdrawal(user: user)
-    receipt = capture_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
-                                                           answers: withdrawal_answers)
+    receipt = submit_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
+                                                          answers: withdrawal_answers)
 
     kinds = receipt.statements.to_h { |s| [s.statement_key, s.kind] }
 
@@ -199,8 +199,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof C: the covered order set is fingerprinted into the evidence" do
     user = create_user
     withdrawal = create_withdrawal(user: user, covered_order_ids: "1,2,3")
-    capture_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
+                                                answers: withdrawal_answers)
 
     assert Clickwrap.verify(:withdrawal_authorization, actor: user, subject: withdrawal).success?
 
@@ -217,8 +217,8 @@ class ProofsTest < ActiveSupport::TestCase
     withdrawal = create_withdrawal(user: user)
     other = create_withdrawal(user: user)
 
-    capture_clickwrap_and(:withdrawal_authorization, actor: user, subject: withdrawal,
-                                                     answers: withdrawal_answers) do |pending|
+    submit_clickwrap_and(:withdrawal_authorization, actor: user, subject: withdrawal,
+                                                    answers: withdrawal_answers) do |pending|
       withdrawal.submit!(authorized_by_clickwrap_event: pending.event_id)
     end
 
@@ -231,8 +231,8 @@ class ProofsTest < ActiveSupport::TestCase
   test "proof C: service-boundary verification is available without a controller" do
     user = create_user
     withdrawal = create_withdrawal(user: user)
-    capture_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
-                                                 answers: withdrawal_answers)
+    submit_clickwrap(:withdrawal_authorization, actor: user, subject: withdrawal,
+                                                answers: withdrawal_answers)
 
     # Controller gates improve flow; service verification protects the action.
     # The same verifier is callable from a service or a job with no request.
@@ -256,7 +256,7 @@ class ProofsTest < ActiveSupport::TestCase
 
   test "consent withdrawal is exposed as a first-class action with its own route" do
     user = create_user
-    capture_clickwrap(:marketing_preferences, actor: user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: user, answers: { product_updates: "1" })
 
     state = user.clickwraps.consent(:product_updates)
     withdrawal_path = Clickwrap.policies["marketing_preferences"]
@@ -275,7 +275,7 @@ class ProofsTest < ActiveSupport::TestCase
     # The first production host bundled guide delivery and marketing into one required box. Here
     # each purpose is its own statement, each starts unselected, and taking one
     # does not take the other.
-    capture_clickwrap(:marketing_preferences, actor: user, answers: { product_updates: "1" })
+    submit_clickwrap(:marketing_preferences, actor: user, answers: { product_updates: "1" })
 
     assert user.clickwraps.consented_to?(:product_updates)
     assert_not user.clickwraps.consented_to?(:partner_offers)
@@ -284,13 +284,13 @@ class ProofsTest < ActiveSupport::TestCase
   test "an operator attestation records who asserted which operational fact" do
     operator = create_user(role: "operator")
 
-    receipt = capture_clickwrap(:manual_bank_transfer, actor: operator,
-                                                       locale: :en,
-                                                       capture_channel: :operator,
-                                                       answers: {
-                                                         beneficiary_matches_verified_identity: "1",
-                                                         bank_accepted_transfer: "1"
-                                                       })
+    receipt = submit_clickwrap(:manual_bank_transfer, actor: operator,
+                                                      locale: :en,
+                                                      capture_channel: :operator,
+                                                      answers: {
+                                                        beneficiary_matches_verified_identity: "1",
+                                                        bank_accepted_transfer: "1"
+                                                      })
 
     assert_equal "operator", receipt.event.capture_channel
     assert_equal %w[attestation attestation], receipt.statements.map(&:kind)

@@ -999,12 +999,14 @@ Clickwrap.publish!                           # ...and once per process
 ```
 
 ```ruby
-receipt = capture_clickwrap(:signup, actor: user, answers: { terms: true, privacy_notice: true })
+receipt = submit_clickwrap(:signup, actor: user, answers: { terms: true, privacy_notice: true })
 
 assert_clickwrap_current :signup, actor: user
 assert_clickwrap_agreed_to :terms, actor: user
 assert_clickwrap_receipt_verifies receipt
 ```
+
+`submit_clickwrap` is the test factory: it presents the policy through the real presenter, answers it, and captures — and it *raises* when the capture is refused, because in a test a failed capture is a failed test. That is deliberately a different verb from the controller's `capture_clickwrap`, which captures a submission a person actually sent and absorbs refusals into `false`. Same word for both would mean one name with two opposite answers to "what happens when this is refused".
 
 Integration tests can't fabricate a signed presentation token by hand — that's the point — so they read it off the rendered page the way a browser does:
 

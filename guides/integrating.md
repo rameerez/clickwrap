@@ -147,6 +147,19 @@ Clickwrap.publish!                           # ...and once per process, for
                                              # the runs Rails does not fork
 ```
 
+Model and service tests get evidence from `submit_clickwrap`, which presents
+the policy through the real presenter, answers it, and captures — raising when
+the capture is refused, because in a test a failed capture is a failed test:
+
+```ruby
+receipt = submit_clickwrap(:signup, actor: user, answers: { terms: true, privacy_notice: true })
+```
+
+It is deliberately a different verb from the controller's `capture_clickwrap`,
+which captures a submission a person actually sent and absorbs refusals into
+`false`. One name with two opposite answers to "what happens when this is
+refused" is not a helper.
+
 Integration tests then read the token off the rendered page, the way a
 browser does:
 

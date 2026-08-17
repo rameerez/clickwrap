@@ -16,7 +16,7 @@ module Clickwrap
   #
   # @example Using in tests
   #   test "signup records the terms agreement" do
-  #     receipt = capture_clickwrap(:signup, actor: @user,
+  #     receipt = submit_clickwrap(:signup, actor: @user,
   #                                 answers: { terms: true, privacy_notice: true })
   #
   #     assert_clickwrap_current :signup, actor: @user
@@ -38,7 +38,7 @@ module Clickwrap
   # ===========================================================================
   # EVERY HELPER HERE GOES THROUGH THE REAL PATH.
   #
-  # `capture_clickwrap` presents the policy through the actual Presenter, takes
+  # `submit_clickwrap` presents the policy through the actual Presenter, takes
   # the signed token it produced, builds an actual `Clickwrap::Submission` from
   # it, and calls the actual `Clickwrap.capture!`. It does not insert rows.
   #
@@ -293,17 +293,22 @@ module Clickwrap
     # creates no grant, and a helper that quietly granted an optional consent
     # would hide exactly the bug that distinction exists to catch.
     #
-    # Same name, different convention from the CONTROLLER helper: this is a
-    # test factory verb (like `create_user`), and a factory that cannot
-    # deliver raises — in a test, a failed capture is a failed test.
-    # `Clickwrap::ControllerHelpers#capture_clickwrap` follows `save`/`save!`
-    # instead and absorbs refusals, because in a controller a refused
-    # submission is a person to answer, not a bug. The two never share an
-    # object: this module lives on test cases, that one on controllers.
+    # A different verb from the CONTROLLER helper because it is a different
+    # act. This one SUBMITS a presentation it just built — it is a test factory
+    # verb, like `create_user`, and a factory that cannot deliver raises, since
+    # in a test a failed capture is a failed test.
+    # `Clickwrap::ControllerHelpers#capture_clickwrap` CAPTURES a submission a
+    # person actually sent, follows `save`/`save!`, and absorbs refusals,
+    # because in a controller a refused submission is a person to answer rather
+    # than a bug.
+    #
+    # They used to share the name `capture_clickwrap` and contradict each other
+    # about what "no" means. Both modules can end up on one object, and a
+    # helper whose failure mode depends on which module won is not a helper.
     #
     # @return [Clickwrap::Receipt]
-    def capture_clickwrap(policy_key, actor:, answers: {}, subject: nil, tenant: nil, locale: nil,
-                          capture_channel: :web_browser, http_request: nil, acting_for: nil)
+    def submit_clickwrap(policy_key, actor:, answers: {}, subject: nil, tenant: nil, locale: nil,
+                         capture_channel: :web_browser, http_request: nil, acting_for: nil)
       presentation = present_clickwrap(policy_key, actor: actor, subject: subject,
                                                    tenant: tenant, locale: locale,
                                                    acting_for: acting_for,
@@ -322,15 +327,15 @@ module Clickwrap
 
       committed_test_receipt(result)
     end
-    module_function :capture_clickwrap
-    public :capture_clickwrap
+    module_function :submit_clickwrap
+    public :submit_clickwrap
 
     # The same, with a protected action in the same transaction. Use it to
     # prove that your domain write and its evidence commit together.
     #
     # @return [Clickwrap::Receipt]
-    def capture_clickwrap_and(policy_key, actor:, answers: {}, subject: nil, tenant: nil,
-                              capture_channel: :web_browser, http_request: nil, acting_for: nil, &)
+    def submit_clickwrap_and(policy_key, actor:, answers: {}, subject: nil, tenant: nil,
+                             capture_channel: :web_browser, http_request: nil, acting_for: nil, &)
       presentation = present_clickwrap(policy_key, actor: actor, subject: subject, tenant: tenant,
                                                    acting_for: acting_for,
                                                    capture_channel: capture_channel)
@@ -349,8 +354,8 @@ module Clickwrap
 
       committed_test_receipt(result)
     end
-    module_function :capture_clickwrap_and
-    public :capture_clickwrap_and
+    module_function :submit_clickwrap_and
+    public :submit_clickwrap_and
 
     # Transactional test wrappers intentionally never commit. The production
     # API therefore returns PendingReceipt inside them, correctly, while tests
@@ -485,7 +490,7 @@ module Clickwrap
       unless respond_to?(:page)
         raise NoMethodError,
               "complete_clickwrap drives a rendered page and needs Capybara, so it works in a " \
-              "system test. In a model or integration test use capture_clickwrap, which goes " \
+              "system test. In a model or integration test use submit_clickwrap, which goes " \
               "through the same presenter and capture path without a browser."
       end
 

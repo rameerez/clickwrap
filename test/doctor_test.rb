@@ -130,7 +130,7 @@ class DoctorTest < ActiveSupport::TestCase
   # --- Data -------------------------------------------------------------------
 
   test "a document whose stored bytes no longer match its recorded digest is a problem" do
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
 
     Clickwrap::Document.find_by(document_key: "terms").current_version
                        .update_columns(content: "rewritten after it was published")
@@ -147,7 +147,7 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "an event whose bytes changed after it was written is a problem that names one of them" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap::Event.where(id: receipt.event_id).update_all(reason: "rewritten by hand")
 
     findings = Clickwrap::Doctor.new.report
@@ -163,7 +163,7 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "a documented core disposition is reported separately from a digest mismatch" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap::Retention::Disposition.dispose_core_event!(
       receipt.event,
       because: "The reviewed retention period ended"
@@ -179,7 +179,7 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "an unexplained disposition marker remains an integrity problem" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     Clickwrap::Event.where(id: receipt.event_id).update_all(core_event_disposed_at: Clickwrap.now)
 
     finding = Clickwrap::Doctor.new.report.find do |candidate|
@@ -192,7 +192,7 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "configured integrity work missing after commit is visible until it is reconciled" do
-    receipt = capture_clickwrap(:signup, actor: @user)
+    receipt = submit_clickwrap(:signup, actor: @user)
     adapter = Class.new do
       def timestamp(digest)
         { issued: true, token: "doctor-token", digest: digest, provider_name: "doctor_test" }
@@ -218,8 +218,8 @@ class DoctorTest < ActiveSupport::TestCase
   end
 
   test "records past a retention rule and holds past their review date are warnings" do
-    capture_clickwrap(:signup, actor: @user)
-    held = capture_clickwrap(:signup, actor: create_user)
+    submit_clickwrap(:signup, actor: @user)
+    held = submit_clickwrap(:signup, actor: create_user)
     held.place_on_legal_hold!(because: "Pending dispute 2026-184", placed_by: @operator,
                               review_at: 1.month.from_now)
 
@@ -277,7 +277,7 @@ class DoctorTest < ActiveSupport::TestCase
   test "the report never prints a phrase that would overclaim what it checked" do
     # Run the checks under the conditions that produce the most text: warnings,
     # problems, and the data findings all at once.
-    capture_clickwrap(:signup, actor: @user)
+    submit_clickwrap(:signup, actor: @user)
     Clickwrap::Document.find_by(document_key: "terms").current_version.update_columns(content: "rewritten")
 
     printed = travel_to(Date.new(2028, 1, 1)) { Clickwrap::Doctor.new.to_s.downcase }
