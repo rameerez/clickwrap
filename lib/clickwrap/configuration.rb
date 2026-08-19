@@ -228,10 +228,14 @@ module Clickwrap
       @encrypt_recorded_ip_geolocation = true
 
       # nil means "every policy that enables the field must supply its own
-      # rule". There is no keep-forever default anywhere in this gem.
+      # rule" — or, for by-default recording, that the host has said
+      # `keep_recorded_..._indefinitely!(because: "…")` out loud. Keeping
+      # forever is never silent: it is either the per-policy retention class's
+      # explicit business, or a named, reasoned sentence in the initializer.
       @delete_recorded_ip_addresses_after = nil
       @delete_recorded_browser_user_agents_after = nil
       @delete_recorded_ip_geolocation_after = nil
+      @keep_recorded_request_evidence_indefinitely = {}
 
       # Rails' request.remote_ip is the conventional reader. The host remains
       # responsible for configuring and testing trusted proxies correctly:
@@ -895,13 +899,22 @@ module Clickwrap
                 "application's reviewed, present-tense reason, or turn that default off."
         end
 
-        next unless delete_after.nil?
+        if delete_after.present? && keeps_recorded_request_evidence_indefinitely?(category)
+          raise ConfigurationError,
+                "Clickwrap is told both to delete recorded #{category} after " \
+                "#{delete_after.inspect} and to keep it indefinitely. Those are opposite " \
+                "decisions — keep exactly one."
+        end
+
+        next if delete_after.present? || keeps_recorded_request_evidence_indefinitely?(category)
 
         raise ConfigurationError,
-              "Clickwrap is set to record #{category} for every policy by default, but " \
-              "`delete_recorded_#{plural_for(category)}_after` is nil, so nothing would ever " \
-              "delete it. Set a reviewed period, or turn the default off and let each policy " \
-              "choose its own retention rule."
+              "Clickwrap is set to record #{category} for every policy by default, but nothing " \
+              "says how long to keep it. Either set a reviewed period with " \
+              "`delete_recorded_#{plural_for(category)}_after`, or keep it as long as the " \
+              "evidence it corroborates with " \
+              "`keep_recorded_#{plural_for(category)}_indefinitely!(because: \"…\")` — or turn " \
+              "the default off and let each policy choose its own retention rule."
       end
     end
 
@@ -911,6 +924,16 @@ module Clickwrap
       when :browser_user_agent then "browser_user_agents"
       else "ip_geolocation"
       end
+    end
+
+    def declare_indefinite_request_evidence!(category, because)
+      if because.to_s.strip.empty?
+        raise ConfigurationError,
+              "keep_recorded_#{plural_for(category)}_indefinitely! needs a `because:` " \
+              "explaining the reviewed decision."
+      end
+
+      @keep_recorded_request_evidence_indefinitely[category] = because
     end
 
     def validate_trusted_proxy_configuration!
@@ -1098,6 +1121,32 @@ module Clickwrap
     # The deliberate, named escape hatch referenced by `ensure_encryption_choice`.
     # It exists so that turning encryption off is a sentence a reviewer can find
     # in a diff, with the host's own reason attached, rather than a `false`.
+    # The named escape hatch for by-default request evidence with no deletion
+    # clock: request evidence exists to corroborate evidence that (since 0.2.0)
+    # keeps indefinitely by default, and a corroboration that expires before
+    # the thing it corroborates is a scheduled weakening of the record. Same
+    # rule as every escape hatch here: keeping forever must be a sentence a
+    # reviewer can find in a diff, with the host's own reason attached.
+    def keep_recorded_ip_addresses_indefinitely!(because:)
+      declare_indefinite_request_evidence!(:ip_address, because)
+    end
+
+    def keep_recorded_browser_user_agents_indefinitely!(because:)
+      declare_indefinite_request_evidence!(:browser_user_agent, because)
+    end
+
+    def keep_recorded_ip_geolocation_indefinitely!(because:)
+      declare_indefinite_request_evidence!(:ip_geolocation, because)
+    end
+
+    def keeps_recorded_request_evidence_indefinitely?(category)
+      @keep_recorded_request_evidence_indefinitely.key?(category.to_sym)
+    end
+
+    def reason_for_keeping_recorded_request_evidence_indefinitely(category)
+      @keep_recorded_request_evidence_indefinitely[category.to_sym]
+    end
+
     def deliberately_store_request_evidence_unencrypted!(because:)
       if because.to_s.strip.empty?
         raise ConfigurationError,

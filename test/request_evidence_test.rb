@@ -61,7 +61,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
       end
     end
 
-    assert_match(/nothing would ever\s+delete it/, error.message)
+    assert_match(/nothing says how long to keep it/, error.message)
   end
 
   test "enabling geolocation with no resolver fails at boot" do
