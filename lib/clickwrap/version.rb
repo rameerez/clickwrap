@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 module Clickwrap
-  VERSION = "0.1.1"
+  VERSION = "0.2.0"
 
   # The canonical schema version for receipts, event digests, and presentation
   # manifests. This is deliberately independent of VERSION: gem releases may

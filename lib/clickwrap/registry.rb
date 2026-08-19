@@ -9,11 +9,18 @@ module Clickwrap
   # loading the declaration files again. Seeing the same key twice inside one
   # load is therefore always ambiguous and is refused instead of letting file
   # order silently decide which policy governs a production action.
+  #
+  # A registry may carry a seed: built-in entries that are its floor rather
+  # than its contents. Clearing re-runs the seed, so a reload returns to the
+  # built-ins, never to nothing — which is what lets a gem-shipped default
+  # (the indefinite retention class) survive every `to_prepare`.
   class Registry
-    def initialize(kind)
+    def initialize(kind, &seed)
       @kind = kind
       @entries = {}
       @mutex = Mutex.new
+      @seed = seed
+      @seed&.call(self)
     end
 
     attr_reader :kind
@@ -47,7 +54,12 @@ module Clickwrap
     def size = @entries.size
     def empty? = @entries.empty?
     def each(&) = @entries.each_value(&)
-    def clear = @mutex.synchronize { @entries.clear }
+
+    def clear
+      @mutex.synchronize { @entries.clear }
+      @seed&.call(self)
+      self
+    end
 
     include Enumerable
   end

@@ -72,6 +72,16 @@ Clickwrap.document :handbook,
   from: Rails.root.join("app/content/legal/handbook.pdf")
 ```
 
+Markdown is a convention here, not a requirement. `from:` takes HTML pages (`.html`/`.htm`), plain text, JSON, and PDF just as readily — the media type is inferred from the extension or named with `media_type:` — and an HTML source is sanitized at publish through the same safe-list every rendering passes (semantic tags survive; scripts, styles, and event handlers never become part of legal evidence). A page that only exists at runtime — an ERB view, a CMS entry — publishes through a `resolver:`, a callable that hands over the exact bytes at publish time:
+
+```ruby
+Clickwrap.document :terms,
+  version: "2026-08-15",
+  media_type: "text/html",
+  resolver: ->(definition) { ApplicationController.render(template: "legal/terms", layout: false) },
+  link: "/legal/terms"
+```
+
 #### Reading that front matter yourself: `Clickwrap::FrontMatter`
 
 Your own pages usually need the same two answers, and it is the same block, so use the same reader rather than writing a third one:
@@ -146,7 +156,7 @@ Add the gem and run the installer:
 
 ```ruby
 # Gemfile
-gem "clickwrap", github: "rameerez/clickwrap"
+gem "clickwrap"
 ```
 
 ```bash
@@ -754,13 +764,17 @@ The [request evidence guide](guides/request-evidence.md) covers every field, the
 
 ## Retention, deletion, and legal holds
 
-Every policy chooses an application-defined retention class:
+**By default, evidence is kept indefinitely.** A policy that never says `retain_with` runs under the built-in `evidence_kept_indefinitely` class: no deletion clock on the core event, none on any request evidence. The direction is deliberate — keeping is reversible (a reviewed disposition can always run later), deletion is not, and the day contractual evidence matters is usually years past every convenient schedule. Deletion is the explicit, opt-in decision:
 
 ```ruby
 Clickwrap.retention :ordinary_agreement_evidence do
-  retain_core_event_for 6.years
-  delete_recorded_ip_address_after 90.days
-  delete_recorded_browser_user_agent_after 90.days
+  retain_core_event_indefinitely          # the default, said out loud
+  delete_recorded_ip_address_after 6.years
+  delete_recorded_browser_user_agent_after 6.years
+end
+
+Clickwrap.retention :short_lived_marketing_evidence do
+  retain_core_event_for 6.years           # a reviewed deletion schedule, opt-in
 end
 ```
 

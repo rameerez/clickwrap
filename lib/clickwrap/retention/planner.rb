@@ -131,6 +131,15 @@ module Clickwrap
 
           rule = retention_class.rule_for(:core_event)
           return Eligibility.new(rule: nil, unresolved_reason: "No core-event rule is defined.") if rule.nil?
+          if rule.indefinite?
+            # Never due, by design — the reason names the decision, not a gap.
+            # (Scopes skip indefinite classes, so this branch is the answer for
+            # anyone asking about one event directly, and a guard for the
+            # applier's re-check.)
+            return Eligibility.new(rule: "indefinite",
+                                   unresolved_reason: "This event's retention class keeps the core " \
+                                                      "event indefinitely; it is never due.")
+          end
           return resolve_host_event(rule.host_event_name, event) if rule.host_event?
 
           Eligibility.new(eligible_at: event.recorded_at_by_server + rule.duration,
@@ -249,7 +258,7 @@ module Clickwrap
 
         Clickwrap.retention_classes.each do |retention_class|
           rule = retention_class.rule_for(:core_event)
-          next if rule.nil?
+          next if rule.nil? || rule.indefinite?
 
           unscheduled = base_events.where(retain_core_event_until: nil, retention_class_key: retention_class.key)
 

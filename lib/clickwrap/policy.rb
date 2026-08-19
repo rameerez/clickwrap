@@ -29,7 +29,10 @@ module Clickwrap
                    authority_rule: nil, options: {})
       @key = key.to_s
       @statements = statements.freeze
-      @retention_class_key = retention_class_key&.to_s
+      # A policy that never says `retain_with` keeps its evidence indefinitely
+      # under the built-in class — the reversible default. Deletion clocks are
+      # the reviewed opt-in, declared with `Clickwrap.retention` and named here.
+      @retention_class_key = (retention_class_key || DEFAULT_RETENTION_CLASS_KEY).to_s
       @request_evidence = request_evidence || RequestEvidencePolicy.new(policy_key: @key)
       @persist_presentations_for = persist_presentations_for
       @persist_presentations_because = persist_presentations_because
@@ -238,12 +241,10 @@ module Clickwrap
     end
 
     def validate_retention!
-      return if retention_class_key
-
-      raise DefinitionError,
-            "Policy #{key} has no retention class. Add `retain_with :some_class` and define " \
-            "that class with `Clickwrap.retention`. Clickwrap will not default your evidence " \
-            "to forever, and it will not pick a period for you."
+      # Always present: the initializer defaults a silent policy to the
+      # built-in evidence_kept_indefinitely class. Kept as a method so the
+      # validation order below still reads as the full checklist.
+      raise DefinitionError, "Policy #{key} has no retention class." if retention_class_key.blank?
     end
 
     def validate_persisted_presentations!

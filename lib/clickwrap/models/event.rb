@@ -557,7 +557,9 @@ module Clickwrap
       return if retain_core_event_until.present? || retention_rule_name.present?
 
       rule = Clickwrap.retention_class!(retention_class_key).rule_for(:core_event)
-      return if rule.nil?
+      # An indefinite rule freezes nothing: no deadline, no named calculation.
+      # The blank schedule plus the class key IS the recorded decision.
+      return if rule.nil? || rule.indefinite?
 
       if rule.duration?
         self.retain_core_event_until = recorded_at_by_server + rule.duration
