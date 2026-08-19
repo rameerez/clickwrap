@@ -6,6 +6,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-19
+
+### Fixed — the composed sentence in a language that declines its articles
+
+- **Per-key sentence fragments.** Spanish cannot say "acepto %{documents}" for
+  every document — the article agrees with the noun ("los Términos", "la
+  Política"). The composer now looks up
+  `clickwrap.sentence.fragments.<kind>.<key>` before falling back to the
+  per-kind template, and the gem ships Spanish defaults for its standard keys.
+  An application adds its own in its locale files; no DSL change.
+- **One opening capital.** Fragment templates are written lowercase for the
+  middle of a sentence; the composer capitalizes exactly one letter — the
+  first — once, at build time, so the signed manifest and the rendered HTML
+  can never disagree. The Spanish signup now reads
+  "Acepto los Términos y Condiciones y he recibido la Política de Privacidad."
+  instead of "Acepto Términos y Condiciones y He recibido Política de
+  Privacidad."
+- **Checkbox optical alignment.** The box was mathematically centred on the
+  first line and still read as floating high: Latin text carries its mass
+  between cap-height and baseline, below the line box's midpoint. The offset
+  gains an optical eighth of an em, calibrated against rendered screenshots.
+
+## [0.1.0] - 2026-08-19
+
 ### Changed — the signup clickwrap is one line
 
 - **`form.clickwrap` renders ONE checkbox carrying ONE sentence** whenever every

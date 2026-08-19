@@ -383,6 +383,12 @@ module Clickwrap
 
     def build_combined(composable, fragments, connectives)
       control = composable.first
+      # Fragment templates are written for the middle of a sentence ("he
+      # recibido la …"), because every fragment but the first sits there. The
+      # sentence's opening capital is applied here, once, so the signed
+      # manifest text and the rendered HTML can never disagree about it.
+      fragments = [fragments.first.with(prefix: fragments.first.prefix.sub(/\A\p{Ll}/, &:upcase))] +
+                  fragments[1..]
 
       Combined.new(
         sentence: fragments.map(&:to_text).join(connectives[:joiner]) + connectives[:terminator],
@@ -433,7 +439,14 @@ module Clickwrap
     end
 
     def sentence_fragment(statement, connectives)
-      template = sentence_text(statement.kind)
+      # A language that needs to agree with its nouns — an article, a gendered
+      # participle — cannot say "acepto %{documents}" for every document. A
+      # per-key template carries those words for THIS document
+      # (clickwrap.sentence.fragments.agreement.terms: "acepto los
+      # %{documents}"); the per-kind template stays the fallback for keys
+      # nobody translated specifically.
+      template = sentence_text("fragments.#{statement.kind}.#{statement.key}") ||
+                 sentence_text(statement.kind)
       return nil if template.nil?
 
       prefix, suffix = template.split(DOCUMENTS_PLACEHOLDER, 2)

@@ -17,6 +17,52 @@ require "test_helper"
 class CombinedStatementTest < ActiveSupport::TestCase
   setup { @user = create_user }
 
+  # --- A language that declines its articles ------------------------------------
+
+  test "Spanish composes each document behind its own article, with one opening capital" do
+    Clickwrap.document(:terms, version: "2026-08-15", locale: :es, content: "Términos.",
+                               link: "/es/terminos")
+    Clickwrap.document(:privacy_notice, version: "2026-08-15", locale: :es, content: "Privacidad.",
+                                        link: "/es/privacidad")
+    Clickwrap.publish!
+    Clickwrap.policy :es_signup do
+      agree_to :terms, link_label: "Términos de Servicio"
+      acknowledge :privacy_notice, link_label: "Política de Privacidad"
+      retain_with :ordinary_agreement_evidence
+    end
+
+    combined = Clickwrap.present(:es_signup, actor: @user, locale: :es).combined
+
+    # "Acepto Términos y He recibido Política" is broken Spanish twice over —
+    # the missing articles and the capital H mid-sentence. The per-key
+    # fragment templates carry the article each document needs, the templates
+    # are written lowercase for the middle of the sentence, and the composer
+    # capitalizes exactly one letter: the first.
+    assert_equal "Acepto los Términos de Servicio y he recibido la Política de Privacidad.",
+                 combined.sentence
+    assert_equal ["Acepto los ", "he recibido la "], combined.fragments.map(&:prefix)
+  end
+
+  test "an application's own per-key fragment beats the generic template" do
+    Clickwrap.document(:terms, version: "2026-08-15", locale: :es, content: "Términos.",
+                               link: "/es/terminos")
+    Clickwrap.publish!
+    Clickwrap.policy :es_signup_override do
+      agree_to :terms, link_label: "Condiciones Generales"
+      retain_with :ordinary_agreement_evidence
+    end
+
+    ::I18n.backend.store_translations(
+      :es, { clickwrap: { sentence: { fragments: { agreement: { terms: "acepto las %{documents}" } } } } }
+    )
+
+    combined = Clickwrap.present(:es_signup_override, actor: @user, locale: :es).combined
+    assert_equal "Acepto las Condiciones Generales.", combined.sentence
+  ensure
+    restored = { clickwrap: { sentence: { fragments: { agreement: { terms: "acepto los %{documents}" } } } } }
+    ::I18n.backend.store_translations(:es, restored)
+  end
+
   # --- What composes -----------------------------------------------------------
 
   test "two ordinary statements compose into one sentence with the documents inside it" do
@@ -305,8 +351,11 @@ class CombinedStatementTest < ActiveSupport::TestCase
     # default-worded :signup policy in Spanish.
     assert_nil Clickwrap.present(:spanish_signup, actor: @user, locale: :es).combined
 
+    # The English labels are this dummy policy's, not the locale's — what
+    # the assertion pins is the Spanish template work: per-key articles and
+    # the single opening capital.
     combined = Clickwrap.present(:signup, actor: @user, locale: :es).combined
-    assert_equal "Acepto Terms of Service y He recibido Privacy Policy.", combined.sentence
+    assert_equal "Acepto los Terms of Service y he recibido la Privacy Policy.", combined.sentence
   end
 
   test "a locale with no connective words itemizes rather than composing half a sentence" do
