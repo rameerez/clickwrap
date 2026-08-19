@@ -718,9 +718,43 @@ Golden fixtures make a verifier regression for any released receipt schema fail 
 
 With the engine mounted, users can view and download their own receipts, and operator access is always host-authorized. Read the [receipts and verification guide](guides/receipts-and-verification.md) for exports, bundles, and what each verification tier does and doesn't establish.
 
-## Request evidence is off by default
+## Request evidence: record it — it's what cements the act to a person
 
-`clickwrap` always records its event ID, server time, capture channel, and policy version. It records **no** IP addresses, browser user-agents, or IP geolocation unless a policy names the field with a purpose and a retention rule:
+`clickwrap` always records its event ID, server time, capture channel, and policy version. That proves **what was offered and what came back**. But an agreement dispute is rarely about the words — it's "that wasn't me" — and the answer to that is request evidence: the IP address, the browser, and where in the world the request came from, bound into the same digest-linked record at the same instant. Years later, "this exact sentence was accepted from this address, on this client, from this city, at this second, in the transaction that created the account" is a different conversation from "the row says yes". **Our recommendation is to record IP + user agent + geolocation on every assent policy** — you already hold a purpose (defending the very agreement being made) and the evidence lives encrypted, in its own annex, deletable on its own schedule if your counsel ever decides so.
+
+What the gem refuses to do is turn it on *silently*. Every field is a separate named decision with a written purpose — there is deliberately no `maximum_evidence` switch — so the recommended posture is three explicit blocks in your initializer:
+
+```ruby
+# clickwrap-doc-test: syntax-only — the resolver needs trackdown installed
+Clickwrap.configure do |config|
+  config.record_ip_address_by_default = true
+  config.reason_for_recording_ip_addresses_by_default =
+    "Corroborate who performed each recorded act, to defend the agreement itself"
+  config.keep_recorded_ip_addresses_indefinitely!(
+    because: "Corroboration must live exactly as long as the evidence it corroborates")
+
+  config.record_browser_user_agent_by_default = true
+  config.reason_for_recording_browser_user_agents_by_default =
+    "Corroborate the client context of each recorded act"
+  config.keep_recorded_browser_user_agents_indefinitely!(
+    because: "Corroboration must live exactly as long as the evidence it corroborates")
+
+  config.record_ip_geolocation_country_by_default = true
+  config.record_ip_geolocation_region_by_default = true
+  config.record_ip_geolocation_city_by_default = true
+  config.reason_for_recording_ip_geolocation_by_default =
+    "Corroborate where each recorded act was performed from"
+  config.keep_recorded_ip_geolocation_indefinitely!(
+    because: "Corroboration must live exactly as long as the evidence it corroborates")
+  config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
+
+  config.review_default_request_evidence_configuration_on = Date.new(2027, 8, 1)
+end
+```
+
+(`keep_recorded_..._indefinitely!` matches the retention default since 0.2.0 — evidence keeps until deletion is an explicit reviewed act. A corroboration that expires before the agreement it corroborates is a scheduled weakening of the record; if your counsel wants a clock instead, `delete_recorded_..._after` is the same one-line decision in the other direction.)
+
+A single regulated surface can also name a field per policy instead of by default:
 
 ```ruby
 Clickwrap.policy :regulated_authorization do

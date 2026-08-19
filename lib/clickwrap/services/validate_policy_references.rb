@@ -110,13 +110,30 @@ module Clickwrap
           setting = policy.request_evidence.setting_for(category)
           next unless setting.record?
           next if setting.delete_after || setting.retain_until || retention_class.rule_for(category)
+          # The application-wide answer counts too: recording enabled in the
+          # initializer carries its disposal decision in the same place —
+          # either a global clock or the explicit, reasoned keep-indefinitely.
+          next if config_answers_disposal_for?(category)
 
           raise DefinitionError,
-                "Policy #{policy.key} records #{category}, but neither that policy nor retention " \
-                "class #{retention_class.key} says when to dispose of it. Add " \
-                "`delete_after:`/`retain_until:` to the policy or the matching plain-English " \
-                "request-evidence rule to the retention class."
+                "Policy #{policy.key} records #{category}, but nothing says when to dispose of " \
+                "it. Add `delete_after:`/`retain_until:` to the policy, a plain-English " \
+                "request-evidence rule (or `keep_recorded_#{category}_indefinitely`) to " \
+                "retention class #{retention_class.key}, or answer it application-wide in the " \
+                "initializer with `delete_recorded_..._after` or " \
+                "`keep_recorded_..._indefinitely!(because: \"…\")`."
         end
+      end
+
+      def config_answers_disposal_for?(category)
+        clock =
+          case category.to_sym
+          when :ip_address then Clickwrap.config.delete_recorded_ip_addresses_after
+          when :browser_user_agent then Clickwrap.config.delete_recorded_browser_user_agents_after
+          else Clickwrap.config.delete_recorded_ip_geolocation_after
+          end
+
+        clock.present? || Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
       end
 
       def validate_host_calculations!(policy, retention_class)

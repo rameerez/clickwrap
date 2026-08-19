@@ -483,10 +483,14 @@ module Clickwrap
 
     # --- Retention ------------------------------------------------------------
 
-    # Every recorded field leaves here with a disposal rule: a date, or the name
-    # of a host rule that will produce one. There is no keep-forever default
-    # anywhere in this gem, and a recorded field with neither is a configuration
-    # bug caught before the row is written rather than a row nobody ever deletes.
+    # Every recorded field leaves here with a disposal answer: a date, the name
+    # of a host rule that will produce one, or the explicit reviewed decision
+    # to keep it as long as the evidence it corroborates. Keeping forever is
+    # never a silent default — it is a named declaration in the retention class
+    # (`keep_recorded_..._indefinitely`) or the initializer
+    # (`keep_recorded_..._indefinitely!(because: "…")`) — and a recorded field
+    # with no answer at all is a configuration bug caught before the row is
+    # written rather than a row nobody ever decided about.
     #
     # `retain_until` names a host calculation instead of a duration because real
     # record-keeping schedules are not always durations — "five years, or three
@@ -500,6 +504,14 @@ module Clickwrap
       return { "#{category}_delete_after": now + class_rule.duration } if class_rule&.duration?
       return { "#{category}_retain_until_rule": class_rule.host_event_name.to_s } if class_rule&.host_event?
 
+      # Indefinite — declared in the class or application-wide — stamps
+      # nothing: the blank schedule plus the recorded declaration IS the
+      # disposal answer, exactly like an indefinite core event.
+      if class_rule&.indefinite? ||
+         Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
+        return {}
+      end
+
       raise ConfigurationError, missing_retention_message(category)
     end
 
@@ -510,11 +522,13 @@ module Clickwrap
     end
 
     def missing_retention_message(category)
-      "Clickwrap is about to record #{category} for policy #{policy_key} and nothing says when " \
-        "to delete it. Give the policy a rule — `delete_after:` with a reviewed period, or " \
-        "`retain_until:` naming a host retention calculation — or add a #{category} rule to " \
-        "retention class #{policy.retention_class_key.inspect}. Clickwrap has no keep-forever " \
-        "default and will not choose a period for you."
+      "Clickwrap is about to record #{category} for policy #{policy_key} and nothing says what " \
+        "should ever happen to it. Give the policy a rule — `delete_after:` with a reviewed " \
+        "period, or `retain_until:` naming a host retention calculation — add a #{category} " \
+        "rule (or `keep_recorded_#{category}_indefinitely`) to retention class " \
+        "#{policy.retention_class_key.inspect}, or answer it application-wide with " \
+        "`keep_recorded_..._indefinitely!(because: \"…\")`. Keeping forever is never silent, " \
+        "and Clickwrap will not choose for you."
     end
 
     # --- Failing closed -------------------------------------------------------

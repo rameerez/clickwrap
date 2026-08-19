@@ -205,12 +205,15 @@ module Clickwrap
               "as a data-collection purpose."
       end
 
-      if setting.delete_after.nil? && setting.retain_until.nil? && retention_class_key.nil?
+      if setting.delete_after.nil? && setting.retain_until.nil? && retention_class_key.nil? &&
+         !Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
         raise DefinitionError,
-              "Policy #{policy_key} records #{category} but never says when to delete it. " \
-              "Give it `delete_after:` with a duration, or `retain_until:` naming a host event " \
-              "rule, or attach a retention class with a rule for this category. Clickwrap has " \
-              "no keep-forever default."
+              "Policy #{policy_key} records #{category} but nothing says what should ever " \
+              "happen to it. Give it `delete_after:` with a duration, or `retain_until:` " \
+              "naming a host event rule, attach a retention class with a rule for this " \
+              "category, or answer it application-wide with " \
+              "`keep_recorded_..._indefinitely!(because: \"…\")`. Keeping forever is never " \
+              "silent, and Clickwrap will not choose for you."
       end
 
       return unless setting.delete_after && setting.delete_after.to_i <= 0

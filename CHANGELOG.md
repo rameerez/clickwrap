@@ -6,6 +6,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-19
+
+### Added — request evidence can keep pace with the evidence it corroborates
+
+- **`keep_recorded_{ip_addresses,browser_user_agents,ip_geolocation}_indefinitely!(because:)`.**
+  By-default request evidence used to demand a deletion clock, which — after
+  0.2.0 flipped core evidence to keep-indefinitely — scheduled the
+  corroboration (IP, user agent, geolocation) to expire before the agreement
+  it corroborates. The third option now exists and must be said out loud with
+  a reason, like every escape hatch here. Declaring both a clock and
+  keep-indefinitely is refused as opposite decisions.
+
+### Documentation
+
+- The request-evidence README section now argues FOR recording: IP + user
+  agent + geolocation are what cement a recorded act to a person when the
+  dispute is "that wasn't me", and the recommended posture is on-by-default
+  with the purpose written down. The discipline is unchanged — no silent
+  enablement, per-field decisions, encryption, reviewed proxy provenance.
+
 ## [0.2.0] - 2026-08-19
 
 ### Changed — evidence is kept indefinitely by default
