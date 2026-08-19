@@ -124,12 +124,15 @@ module Clickwrap
       end
     end
 
-    # Ship the gem's locale files. Host locale files with the same keys override
-    # these automatically (I18n's load order puts the app last), which is how a
-    # host rewords a statement without forking a view.
-    initializer "clickwrap.locales" do |app|
-      app.config.i18n.load_path += Dir[root.join("config", "locales", "**", "*.{rb,yml}").to_s]
-    end
+    # The gem's locale files ship through Rails::Engine's own :add_locales
+    # (every engine's `config/locales` is picked up automatically) — and NOT
+    # through a manual `app.config.i18n.load_path +=` on top of it. The manual
+    # append is not merely redundant: railties paths are UNSHIFTED before
+    # everything in `load_path`, so an appended copy of these files lands
+    # AFTER the host's own locales and quietly overrides them. Load order is
+    # the whole contract here — gem first, host last — because a host rewords
+    # a statement by shipping the same key in its own locale file, and the
+    # host's counsel must always get the last word.
 
     initializer "clickwrap.assets" do |app|
       app.config.assets.paths << root.join("app/assets/stylesheets") if app.config.respond_to?(:assets)

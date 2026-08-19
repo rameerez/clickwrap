@@ -88,14 +88,18 @@
 .clickwrap-statement__checkbox,
 .clickwrap-statement__radio {
   /* Sized in em so the box matches the sentence it belongs to instead of
-     towering over small text, and optically centered against the FIRST line
-     of the label: (line-height minus box) halved. Flex `baseline` cannot do
-     this — a checkbox aligns its bottom edge to the baseline and ends up
-     floating high. The rem fallback covers engines without the lh unit. */
+     towering over small text, and aligned against the FIRST line of the
+     label: (line-height minus box) halved, plus an optical eighth of an em.
+     The mathematical centre is not the visual one — Latin text carries its
+     mass between cap-height and baseline, below the line box's midpoint, so
+     a box centred by arithmetic reads as floating high (calibrated against
+     rendered screenshots at 400%). Flex `baseline` is still worse: a
+     checkbox aligns its bottom edge to the baseline and floats higher. The
+     em fallback covers engines without the lh unit. */
   width: 1em;
   height: 1em;
-  margin: 0.2em 0 0;
-  margin-top: calc((1lh - 1em) / 2);
+  margin: 0.325em 0 0;
+  margin-top: calc((1lh - 1em) / 2 + 0.125em);
   flex: 0 0 auto;
   accent-color: var(--clickwrap-focus);
 }

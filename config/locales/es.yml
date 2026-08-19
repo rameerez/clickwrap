@@ -22,13 +22,29 @@ es:
       acknowledgment:
         privacy_notice: "Doy por recibida la Política de Privacidad."
 
-    # La frase de una sola línea. En español el artículo concuerda con el
-    # documento ("los Términos", "la Política"), y solo la aplicación sabe qué
-    # documento nombra, así que el artículo vive en la etiqueta del enlace y no
-    # en estas plantillas — por eso `documents_joiner` es " y " y no " y el ".
+    # La frase de una sola línea. Las plantillas se escriben en minúscula y
+    # PARA EL MEDIO de la frase ("… y he recibido …"): la mayúscula inicial la
+    # pone el compositor, una sola vez, al primer fragmento.
+    #
+    # En español el artículo concuerda con el documento ("los Términos", "la
+    # Política"), así que cada clave estándar lleva su propia plantilla bajo
+    # `fragments`, con el artículo correcto. Una aplicación con documentos
+    # propios añade aquí los suyos (p. ej.
+    # `fragments.agreement.contrato_marco: "acepto el %{documents}"`); sin
+    # plantilla propia se usa la genérica, que es neutra y correcta aunque
+    # menos idiomática.
     sentence:
-      agreement: "Acepto %{documents}"
-      acknowledgment: "He recibido %{documents}"
+      fragments:
+        agreement:
+          terms: "acepto los %{documents}"
+        acknowledgment:
+          # La misma voz que la declaración detallada ("Doy por recibida la
+          # Política de Privacidad."): el mismo acto debe leerse igual
+          # compuesto que detallado. Nunca "he leído": la evidencia registra
+          # un acto afirmativo sobre un aviso ofrecido, no que alguien leyera.
+          privacy_notice: "doy por recibida la %{documents}"
+      agreement: "acepto %{documents}"
+      acknowledgment: "he recibido %{documents}"
       documents_joiner: " y "
       joiner: " y "
       terminator: "."
