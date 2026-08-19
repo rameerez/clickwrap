@@ -69,6 +69,21 @@ module Clickwrap
         assign_rule!(:ip_geolocation, host_event_name:)
       end
 
+      # Keeping the annex as long as the core event it corroborates, said in
+      # the retention class itself. A corroboration that expires before the
+      # evidence it corroborates is a scheduled weakening of the record.
+      def keep_recorded_ip_address_indefinitely
+        assign_rule!(:ip_address, indefinite: true)
+      end
+
+      def keep_recorded_browser_user_agent_indefinitely
+        assign_rule!(:browser_user_agent, indefinite: true)
+      end
+
+      def keep_recorded_ip_geolocation_indefinitely
+        assign_rule!(:ip_geolocation, indefinite: true)
+      end
+
       def compile = RetentionClass.new(key: @key, rules: @rules)
 
       private
