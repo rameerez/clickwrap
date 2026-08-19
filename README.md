@@ -319,6 +319,8 @@ other render.
 
 ## How it works
 
+Most Rails apps treat "user agreed" as `accepted_terms_at` plus a checkbox. That's enough until you have to answer: which exact text, which version, what the button said, whether the box started unchecked, and whether the action happened without that evidence.
+
 Most apps eventually accumulate an `accepted_terms_at` column, a `terms_version` string, a few hidden form fields, an `after_create` callback, and some IP columns. Each part looks reasonable alone. Together they produce partial writes, client-owned policy decisions, mutable history, and evidence only the original engineer can explain.
 
 `clickwrap` replaces that plumbing with one coherent primitive:
