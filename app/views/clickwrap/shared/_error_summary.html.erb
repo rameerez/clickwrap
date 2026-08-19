@@ -1,0 +1,39 @@
+<%#
+  The error summary, at the top of the block where a person looking for what
+  went wrong will find it.
+
+  role="alert" so assistive technology announces it when the failed submission
+  re-renders. tabindex="-1" so it can hold focus, and `autofocus` so the browser
+  moves focus here on load without a line of JavaScript — this whole file has to
+  work when the page never runs a script.
+
+  Each entry links to the control it is about, so the fix is one press away
+  rather than a scroll and a hunt. One control gets one entry, whether it answers
+  one statement or a whole composed sentence: several lines pointing at the same
+  checkbox would be a list of the page's internals rather than of a person's
+  problems. The message is TEXT: the styling underlines it, but nothing here
+  depends on a color being seen.
+
+  Locals: presentation, entries — [{ control_id:, message: }]
+%>
+<% if entries.any? %>
+  <div class="clickwrap-error-summary"
+       id="<%= "clickwrap_#{presentation.policy_key}_errors" %>"
+       role="alert"
+       tabindex="-1"
+       autofocus>
+    <h2 class="clickwrap-error-summary__heading">
+      <%= t("clickwrap.ui.error_summary_heading") %>
+    </h2>
+
+    <ul class="clickwrap-error-summary__list">
+      <% entries.each do |entry| %>
+        <li class="clickwrap-error-summary__item">
+          <a class="clickwrap-error-summary__link" href="#<%= entry[:control_id] %>">
+            <%= entry[:message] %>
+          </a>
+        </li>
+      <% end %>
+    </ul>
+  </div>
+<% end %>

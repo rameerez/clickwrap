@@ -1,0 +1,100 @@
+<%#
+  The reference presentation partial.
+
+  Everything that renders a policy goes through this file: `form.clickwrap`,
+  `form.clickwrap_fields`, and the engine's own standalone capture screen. It is
+  plain ERB with no framework, no JavaScript, and no dependency beyond Rails'
+  own tag helpers, because it has to work unchanged inside a Tailwind app, a
+  Bootstrap app, a ViewComponent app, and an app with a hand-written stylesheet.
+
+  Eject it and it is yours:
+
+    bin/rails generate clickwrap:views
+
+  Your copy at app/views/clickwrap/shared/_fields.html.erb shadows this one
+  automatically — the helper renders the partial by NAME, never by path.
+
+  The default shape is ONE line:
+
+    [ ] I agree to the Terms of Service and I acknowledge the Privacy Policy.
+
+  The presenter decides whether a policy can be offered that way and signs the
+  exact sentence into the manifest when it can. Everything that line could not
+  honestly absorb — an optional consent, a recorded yes/no, copy the application
+  wrote itself — follows it as a control of its own, and a policy with nothing
+  composable is entirely that. Both go through the same statement partial, which
+  is why `itemized_statements` is the list to walk and `statements` is not:
+  rendering a second control for a statement the line already answers offers a
+  choice nobody has.
+
+  What this partial deliberately does NOT contain is a hidden field carrying a
+  server-owned decision. No IP address, no browser user-agent, no geolocation,
+  no policy version, no document digest, no validity window, no retention rule.
+  The only hidden field here is the signed presentation token, which is the
+  server's own statement about what it offered — the browser answers the offer,
+  it never writes it.
+
+  Locals:
+    presentation    — a Clickwrap::Presenter::Result
+    submit          — { text:, options: } to render the action here, or nil
+    after           — markup the host rendered from the presentation itself
+                      (the `form.clickwrap_fields do |clickwrap|` block), or nil
+    errors          — { "statement_key" => "message" } from a failed capture
+    wrapper_options — HTML options for the wrapper element
+%>
+<%
+  errors = (local_assigns[:errors] || {}).to_h { |key, value| [key.to_s, value] }
+  submit = local_assigns[:submit]
+  after = local_assigns[:after]
+  wrapper_options = (local_assigns[:wrapper_options] || {}).symbolize_keys
+  wrapper_classes = ["clickwrap", "clickwrap-fields", wrapper_options.delete(:class)].compact
+
+  combined = presentation.combined
+  # One control shows one message, whether it answers one statement or three.
+  combined_error = combined && errors.values_at(*combined.statement_keys).compact.first
+  controls = [combined, *presentation.itemized_statements].compact
+
+  error_entries = controls.filter_map do |control|
+    message = control.equal?(combined) ? combined_error : errors[control.key]
+    next if message.blank?
+
+    { control_id: control.control_id, message: Array(message).join(" ") }
+  end
+%>
+<%= tag.div(**wrapper_options, class: wrapper_classes) do %>
+  <%= render "clickwrap/shared/error_summary",
+        presentation: presentation,
+        entries: error_entries %>
+
+  <%# The server's statement of what it offered, signed and short-lived. %>
+  <%= hidden_field_tag "clickwrap_submission[presentation_token]", presentation.token, id: nil %>
+
+  <div class="clickwrap-statements">
+    <% controls.each do |control| %>
+      <%= render "clickwrap/shared/statement",
+            statement: control,
+            error: control.equal?(combined) ? combined_error : errors[control.key] %>
+    <% end %>
+  </div>
+
+  <%# The action, rendered from the same presentation as the controls above it,
+      so the words recorded in the manifest are the words on the button. Document
+      links are above this point, always: a link that only appears after the call
+      to action has already been pressed is not a link to anything. %>
+  <% if submit %>
+    <div class="clickwrap-actions">
+      <%
+        button_options = (submit[:options] || {}).symbolize_keys
+        button_classes = ["clickwrap-submit", button_options.delete(:class)].compact
+      %>
+      <%= submit_tag submit[:text], **button_options, class: button_classes %>
+    </div>
+  <% end %>
+
+  <%# The host's own action, rendered by its own markup from this same
+      presentation. It sits here, after the controls and after the document
+      links, for exactly the reason above. %>
+  <% if after.present? %>
+    <div class="clickwrap-actions"><%= after %></div>
+  <% end %>
+<% end %>

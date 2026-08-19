@@ -1,0 +1,256 @@
+# frozen_string_literal: true
+
+# ==============================================================================
+# Clickwrap database hardening — OPT-IN, PostgreSQL only
+# ==============================================================================
+#
+# Clickwrap's models make unsupported mutation loud. This migration adds a
+# narrower database control for writes that bypass models: direct SQL, `delete`,
+# `delete_all`, `update_column`, and `update_all`.
+#
+# WHAT THIS CLAIMS, IN FULL
+#
+# It rejects unsupported UPDATE and DELETE paths while these triggers are
+# installed and the writer is not able to disable or replace them.
+#
+# WHAT IT DOES NOT CLAIM
+#
+# It does not make evidence impossible to alter. A database owner, superuser,
+# migration role, or anyone able to drop triggers can remove this control. It
+# does not authenticate a person, establish when an event happened, or make a
+# local digest independent of the database that stores it.
+#
+# WHAT REMAINS POSSIBLE
+#
+# * A new event may be finalized once while its INSERT transaction is open.
+# * Host records may be deleted, nulling only optional polymorphic pointers; the
+#   stable actor/subject/represented-party references remain unchanged.
+# * A request-evidence annex may be linked once.
+# * A legal-hold flag may change through Clickwrap's recorded hold lifecycle.
+# * Core payload may be removed only when a finalized linked disposition event
+#   already identifies the event and its original digest. Child statement and
+#   document rows may be deleted only after that marker exists.
+#
+# Optional personal request-evidence annex values remain separately disposable
+# in `clickwrap_request_evidence` on their reviewed schedules, so this migration
+# does not protect that table from its own named disposition operations.
+#
+# Reversible: `rails db:rollback` drops only the functions and triggers created
+# below. It changes no evidence rows.
+# ==============================================================================
+class ClickwrapDatabaseHardening < ActiveRecord::Migration<%= migration_version %>
+  # This is a generation-time snapshot of the runtime's named write sets. It is
+  # intentionally self-contained: a host must be able to rebuild a database
+  # from this migration after upgrading Clickwrap without asking a newer gem to
+  # reinterpret an older database contract.
+  EVENT_WRITE_SETS = {
+<%= event_write_sets_for_migration %>
+  }.transform_values { |columns| columns.map(&:to_s).sort.freeze }.freeze
+
+  EVIDENCE_CHILD_TABLES = %w[
+    clickwrap_event_statements clickwrap_event_documents
+  ].freeze
+
+  def up
+    return say_unsupported_adapter unless postgresql?
+
+    execute <<~SQL
+      CREATE OR REPLACE FUNCTION clickwrap_reject_evidence_write() RETURNS trigger AS $function$
+      BEGIN
+        RAISE EXCEPTION
+          'clickwrap: % rejects this %. Use a named Clickwrap lifecycle or disposition operation.',
+          TG_TABLE_NAME,
+          TG_OP
+          USING ERRCODE = 'restrict_violation';
+      END;
+      $function$ LANGUAGE plpgsql;
+    SQL
+
+    execute <<~SQL
+      CREATE OR REPLACE FUNCTION clickwrap_guard_event_update() RETURNS trigger AS $function$
+      BEGIN
+        -- An unfinalized row is visible only inside its INSERT transaction. The
+        -- application builds children/outcome and then changes event_digest from
+        -- NULL to a value exactly once before COMMIT.
+        IF OLD.event_digest IS NULL THEN
+          RETURN NEW;
+        END IF;
+
+        -- A hold is a mutable projection backed by immutable hold lifecycle
+        -- rows. No other event field may ride along with this update.
+        IF (#{jsonb_without("NEW", EVENT_WRITE_SETS.fetch("legal_hold"))})
+           IS NOT DISTINCT FROM
+           (#{jsonb_without("OLD", EVENT_WRITE_SETS.fetch("legal_hold"))}) THEN
+          RETURN NEW;
+        END IF;
+
+        -- The annex pointer is attached once; its keyed category digests were
+        -- already covered by the finalized event digest.
+        IF OLD.request_evidence_id IS NULL
+           AND NEW.request_evidence_id IS NOT NULL
+           AND (#{jsonb_without("NEW", EVENT_WRITE_SETS.fetch("request_evidence_link"))})
+               IS NOT DISTINCT FROM
+               (#{jsonb_without("OLD", EVENT_WRITE_SETS.fetch("request_evidence_link"))}) THEN
+          RETURN NEW;
+        END IF;
+
+        -- Deleting a host actor/subject/represented party may only null its
+        -- convenience pointer. Stable references and every covered fact stay.
+        IF (#{jsonb_without("NEW", EVENT_WRITE_SETS.fetch("pointer_nullification"))})
+           IS NOT DISTINCT FROM
+           (#{jsonb_without("OLD", EVENT_WRITE_SETS.fetch("pointer_nullification"))})
+           AND ((NEW.actor_type IS NULL AND NEW.actor_id IS NULL)
+                OR (NEW.actor_type IS NOT DISTINCT FROM OLD.actor_type
+                    AND NEW.actor_id IS NOT DISTINCT FROM OLD.actor_id))
+           AND ((NEW.represented_party_type IS NULL AND NEW.represented_party_id IS NULL)
+                OR (NEW.represented_party_type IS NOT DISTINCT FROM OLD.represented_party_type
+                    AND NEW.represented_party_id IS NOT DISTINCT FROM OLD.represented_party_id))
+           AND ((NEW.subject_type IS NULL AND NEW.subject_id IS NULL)
+                OR (NEW.subject_type IS NOT DISTINCT FROM OLD.subject_type
+                    AND NEW.subject_id IS NOT DISTINCT FROM OLD.subject_id)) THEN
+          RETURN NEW;
+        END IF;
+
+        -- Core disposition is a one-way transition whose linked, finalized
+        -- disposition event names both this event and its original digest.
+        IF OLD.core_event_disposed_at IS NULL
+           AND NEW.core_event_disposed_at IS NOT NULL
+           AND NEW.core_event_disposition_event_id IS NOT NULL
+           AND (#{jsonb_without("NEW", EVENT_WRITE_SETS.fetch("disposition"))})
+               IS NOT DISTINCT FROM
+               (#{jsonb_without("OLD", EVENT_WRITE_SETS.fetch("disposition"))})
+           AND NEW.actor_type IS NULL AND NEW.actor_id IS NULL
+           AND NEW.actor_reference = '' AND NEW.actor_snapshot = '{}'::jsonb
+           AND NEW.represented_party_type IS NULL AND NEW.represented_party_id IS NULL
+           AND NEW.represented_party_reference = ''
+           AND NEW.authority_source IS NULL AND NEW.authority_role IS NULL
+           AND NEW.authority_verified_at IS NULL AND NEW.authority_details = '{}'::jsonb
+           AND NEW.tenant_key = ''
+           AND NEW.subject_type IS NULL AND NEW.subject_id IS NULL
+           AND NEW.subject_key = '' AND NEW.subject_fingerprint IS NULL
+           AND NEW.authentication_method IS NULL AND NEW.authentication_context = '{}'::jsonb
+           AND NEW.idempotency_key IS NULL
+           AND NEW.http_request_id IS NULL AND NEW.http_route_name IS NULL
+           AND NEW.presentation_id IS NULL AND NEW.presentation_manifest IS NULL
+           AND NEW.presentation_manifest_digest IS NULL
+           AND NEW.protected_outcome IS NULL
+           AND NEW.provider_receipt IS NULL AND NEW.provider_verification IS NULL
+           AND NEW.reason IS NULL
+           AND EXISTS (
+             SELECT 1
+               FROM clickwrap_events disposition
+              WHERE disposition.id = NEW.core_event_disposition_event_id
+                AND disposition.event_type = 'disposition'
+                AND disposition.event_digest IS NOT NULL
+                AND disposition.protected_outcome
+                      -> 'core_event_disposition' ->> 'event_id' = OLD.id
+                AND disposition.protected_outcome
+                      -> 'core_event_disposition' ->> 'original_event_digest' = OLD.event_digest
+           ) THEN
+          RETURN NEW;
+        END IF;
+
+        RAISE EXCEPTION
+          'clickwrap: clickwrap_events rejects this UPDATE. Use a named Clickwrap lifecycle or disposition operation.'
+          USING ERRCODE = 'restrict_violation';
+      END;
+      $function$ LANGUAGE plpgsql;
+    SQL
+
+    execute <<~SQL
+      CREATE OR REPLACE FUNCTION clickwrap_guard_evidence_child_write() RETURNS trigger AS $function$
+      BEGIN
+        IF TG_OP = 'DELETE' AND EXISTS (
+          SELECT 1
+            FROM clickwrap_events source_event
+            JOIN clickwrap_events disposition
+              ON disposition.id = source_event.core_event_disposition_event_id
+           WHERE source_event.id = OLD.event_id
+             AND source_event.core_event_disposed_at IS NOT NULL
+             AND disposition.event_type = 'disposition'
+             AND disposition.event_digest IS NOT NULL
+             AND disposition.protected_outcome
+                   -> 'core_event_disposition' ->> 'event_id' = source_event.id
+             AND disposition.protected_outcome
+                   -> 'core_event_disposition' ->> 'original_event_digest' = source_event.event_digest
+        ) THEN
+          RETURN OLD;
+        END IF;
+
+        RAISE EXCEPTION
+          'clickwrap: % rejects this %. Evidence children may be deleted only by a documented core disposition.',
+          TG_TABLE_NAME,
+          TG_OP
+          USING ERRCODE = 'restrict_violation';
+      END;
+      $function$ LANGUAGE plpgsql;
+    SQL
+
+    install_event_triggers
+    install_child_triggers
+
+    say "clickwrap: PostgreSQL update/delete protection installed on finalized events and their evidence children."
+  end
+
+  def down
+    return unless postgresql?
+
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_guard_update ON clickwrap_events;"
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_delete ON clickwrap_events;"
+
+    EVIDENCE_CHILD_TABLES.each do |table|
+      execute "DROP TRIGGER IF EXISTS #{table}_guard_write ON #{table};"
+    end
+
+    execute "DROP FUNCTION IF EXISTS clickwrap_guard_event_update();"
+    execute "DROP FUNCTION IF EXISTS clickwrap_guard_evidence_child_write();"
+    execute "DROP FUNCTION IF EXISTS clickwrap_reject_evidence_write();"
+
+    say "clickwrap: PostgreSQL update/delete protection removed. No evidence rows were changed."
+  end
+
+  private
+
+  def install_event_triggers
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_guard_update ON clickwrap_events;"
+    execute <<~SQL
+      CREATE TRIGGER clickwrap_events_guard_update
+        BEFORE UPDATE ON clickwrap_events
+        FOR EACH ROW EXECUTE FUNCTION clickwrap_guard_event_update();
+    SQL
+
+    execute "DROP TRIGGER IF EXISTS clickwrap_events_reject_delete ON clickwrap_events;"
+    execute <<~SQL
+      CREATE TRIGGER clickwrap_events_reject_delete
+        BEFORE DELETE ON clickwrap_events
+        FOR EACH ROW EXECUTE FUNCTION clickwrap_reject_evidence_write();
+    SQL
+  end
+
+  def install_child_triggers
+    EVIDENCE_CHILD_TABLES.each do |table|
+      execute "DROP TRIGGER IF EXISTS #{table}_guard_write ON #{table};"
+      execute <<~SQL
+        CREATE TRIGGER #{table}_guard_write
+          BEFORE UPDATE OR DELETE ON #{table}
+          FOR EACH ROW EXECUTE FUNCTION clickwrap_guard_evidence_child_write();
+      SQL
+    end
+  end
+
+  def jsonb_without(row_name, columns)
+    (["to_jsonb(#{row_name})"] + columns.map { |column| "- #{connection.quote(column)}" }).join(" ")
+  end
+
+  def postgresql?
+    connection.adapter_name.to_s.downcase.match?(/postgres|postgis/)
+  end
+
+  def say_unsupported_adapter
+    say "clickwrap: no database-level update/delete protection was installed."
+    say "  This opt-in migration is implemented and tested only for PostgreSQL.", true
+    say "  SQLite has no separate runtime role; any writer can drop its own trigger.", true
+    say "  On MySQL, use a runtime role whose grants match your reviewed write paths.", true
+    say "  Model refusals and digest verification continue to work on every supported adapter.", true
+  end
+end

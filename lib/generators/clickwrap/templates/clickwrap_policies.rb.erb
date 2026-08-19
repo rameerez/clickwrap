@@ -1,0 +1,192 @@
+# frozen_string_literal: true
+
+# ==============================================================================
+# Clickwrap documents, policies, and retention classes
+# ==============================================================================
+#
+# This file is ordinary Ruby so it is reviewable in a pull request and deploys
+# with the code that depends on it. It is re-read on every boot and every
+# development reload, and a mistake is a boot failure with a sentence explaining
+# it — not a surprise the first time someone tries to sign up.
+#
+# Three kinds of declaration live here:
+#
+#   Clickwrap.document   versioned source and rendered bytes used in offers
+#   Clickwrap.policy     what the server offers and will accept
+#   Clickwrap.retention  how long each part of the evidence lives
+#
+# The browser never chooses any of it. Policy key, revision, document versions,
+# validity, subject binding, retention, and request-evidence fields are resolved
+# on the server and rechecked when the form comes back.
+# ==============================================================================
+
+# --- Documents ----------------------------------------------------------------
+#
+# A logical document (:terms) is separate from its immutable versions. Declaring
+# a version here does not publish it: `bin/rails clickwrap:publish` reads the
+# bytes once, digests them, and freezes a database snapshot. From then on the
+# snapshot is the evidence and the file is only where it came from.
+#
+# Every version has a LABEL YOU OWN, and the file that holds the words is where
+# that label belongs. A page with leading YAML front matter names its own
+# version, so there is no `version:` line here and no second copy of the label
+# to drift:
+#
+#   ---
+#   title: Terms of Service
+#   last_updated: <%= Date.today.iso8601 %>
+#   ---
+#
+# `last_updated:` is the usual key, because a page that tells readers when it
+# last changed already has one. `clickwrap_version:` wins when both are present,
+# which is how a same-day correction gets a fresh label while the date readers
+# see stays put. So changing a legal text is one edit in one file, then
+# `bin/rails clickwrap:publish` — and reusing a label over changed bytes is
+# refused rather than quietly accepted, which is what keeps the label and the
+# bytes describing the same document. A file with neither key and no explicit
+# `version:` fails the boot with a sentence; Clickwrap never invents a label.
+#
+# `version:` here stays the way to label a source that cannot carry front matter
+# — a PDF, an HTML fragment, or a `resolver:` whose bytes are only read at
+# publish time:
+#
+#   Clickwrap.document :handbook,
+#     version: "<%= Date.today.iso8601 %>",
+#     from: Rails.root.join("app/content/legal/handbook.pdf")
+#
+# Whether a change is material enough to require re-acceptance is your decision.
+# Clickwrap enforces the rule it is given; it does not decide materiality.
+
+<%- unless terms_document_names_its_own_version? -%>
+# <%= File.basename(terms_document_path) %> carries no version key yet. Move this label into the page's own
+# `last_updated:` front matter and delete the line, so the text names its version.
+<%- end -%>
+Clickwrap.document :terms,
+<%- unless terms_document_names_its_own_version? -%>
+  version: "<%= Date.today.iso8601 %>",
+<%- end -%>
+  from: Rails.root.join("<%= terms_document_path %>")
+
+<%- unless privacy_document_names_its_own_version? -%>
+# <%= File.basename(privacy_document_path) %> carries no version key yet. Move this label into the page's own
+# `last_updated:` front matter and delete the line, so the text names its version.
+<%- end -%>
+Clickwrap.document :privacy_notice,
+<%- unless privacy_document_names_its_own_version? -%>
+  version: "<%= Date.today.iso8601 %>",
+<%- end -%>
+  from: Rails.root.join("<%= privacy_document_path %>")
+
+# Several locales are several versions of the same logical document. Each is
+# published and digested separately, each names its own version in its own front
+# matter, and the receipt records which one the accepted server offer bound:
+#
+# Clickwrap.document :terms,
+#   locale: :es,
+#   effective_at: Time.utc(<%= Date.today.year %>, <%= Date.today.month %>, <%= Date.today.day %>),
+#   from: Rails.root.join("app/content/legal/terms.es.md")
+
+# --- Retention ----------------------------------------------------------------
+#
+# Clickwrap does not know how long your evidence should live and will not
+# pretend to. What it does is make a reviewed decision executable and auditable,
+# and keep two clocks apart:
+#
+#   the CORE EVENT   — what was agreed, by whom, to which version
+#   the ANNEX        — optional personal request evidence attached to it
+#
+# They are separate because they answer to different rules. Deleting the annex
+# removes the encrypted value and appends a disposition event; the agreement it
+# accompanied stays intact and still verifies. Nothing cascades: deleting an
+# actor account never silently destroys the record of what they agreed to.
+#
+# THE PERIODS BELOW ARE PLACEHOLDERS, NOT RECOMMENDATIONS. Replace them with
+# periods you have reviewed for your jurisdiction, your obligations, and your
+# disputes. `bin/rails clickwrap:retention:plan` shows what any of this would
+# delete before anything is deleted.
+
+Clickwrap.retention :ordinary_agreement_evidence do
+  retain_core_event_for 6.years
+
+  # These only matter if a policy or the initializer enables the field at all.
+  # A rule for something you never collect costs nothing and stops a future
+  # "we turned it on and forgot the clock".
+  delete_recorded_ip_address_after 90.days
+  delete_recorded_browser_user_agent_after 90.days
+  delete_recorded_ip_geolocation_after 90.days
+end
+
+# A regulated schedule that a duration cannot express — "the later of five years
+# after capture and three years after the subject closed" — names a host event
+# instead, and registers the calculation in config/initializers/clickwrap.rb:
+#
+# Clickwrap.retention :regulated_evidence do
+#   retain_core_event_until :regulated_evidence_retention_ends
+#   retain_recorded_ip_address_until :security_evidence_retention_ends
+#   retain_recorded_browser_user_agent_until :security_evidence_retention_ends
+#   retain_recorded_ip_geolocation_until :security_evidence_retention_ends
+# end
+
+# --- Policies -----------------------------------------------------------------
+#
+# A policy is a server-owned offer: exactly what the server will generate, and
+# exactly what it will accept back. One submitted policy produces one event and one
+# receipt, but each act inside it keeps its own kind, documents, wording,
+# answer, and lifecycle — "agreed to the Terms" and "acknowledged the Privacy
+# Notice" never flatten into one meaning.
+
+Clickwrap.policy :signup do
+  # `agree_to` means assent to contractual terms. The lifecycle it gets is the
+  # one assent needs: it stands until a new version supersedes it.
+  agree_to :terms
+
+  # `acknowledge`, NOT `agree_to`, and NOT `consent_to`.
+  #
+  # A privacy notice is information a person is entitled to receive. It is not a
+  # contract term they assent to, and it is not permission they grant: consent
+  # is one possible lawful basis among several, and most of what a notice
+  # describes usually rests on a different one. Presenting a notice as something
+  # to "agree" to misdescribes it, and treating the acknowledgment as blanket
+  # consent would let a checkbox stand in for permissions nobody asked for.
+  #
+  # So the receipt says what the application recorded: the server offered this
+  # exact notice version, and the person submitted an affirmative acknowledgment
+  # of receiving it. Anything you genuinely need consent for gets its own
+  # `consent_to`, its own purpose, its own unselected control, and its own
+  # withdrawal path — see the marketing example below.
+  acknowledge :privacy_notice
+
+  retain_with :ordinary_agreement_evidence
+end
+
+# --- An optional, separate marketing consent ----------------------------------
+#
+# Never bundled into signup, never preselected, and never required to create an
+# account. Leaving an optional control unselected creates no grant at all: the
+# receipt can show the option was offered and not taken, but silence is not
+# recorded as a refusal.
+#
+# Consent that cannot be withdrawn is not consent, so Clickwrap structurally
+# requires a withdrawal path. It still does not decide whether consent is the
+# right basis for what you are doing — that one is yours.
+#
+# Clickwrap.document :marketing_notice,
+#   from: Rails.root.join("app/content/legal/marketing.md")
+#
+# Clickwrap.policy :marketing_preferences do
+#   consent_to :product_updates,
+#     document: :marketing_notice,
+#     optional: true,
+#     withdrawal_path: "/settings/privacy"
+#
+#   retain_with :ordinary_agreement_evidence
+# end
+#
+# Withdrawal appends an event; it never edits or deletes the historical grant:
+#
+# Clickwrap.withdraw!(
+#   :product_updates,
+#   actor: current_user,
+#   http_request: request,
+#   because: "The user withdrew this purpose in privacy settings"
+# )

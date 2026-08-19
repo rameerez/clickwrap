@@ -1,0 +1,31 @@
+# frozen_string_literal: true
+
+# ==============================================================================
+# The :<%= policy_key %> policy
+# ==============================================================================
+#
+# A policy is a server-owned offer: exactly what the server will generate, and
+# exactly what it will accept back. It compiles at boot, so a mistake here is a
+# startup failure with an explanation rather than a surprise during a signup.
+#
+# Render it with:
+#
+#   <%%= form.clickwrap :<%= policy_key %>, submit: "Your call to action" %>
+#
+# Capture it with `Clickwrap.capture!`, or with `Clickwrap.capture_and!` when a
+# domain action must commit in the same transaction as its evidence.
+# ==============================================================================
+
+Clickwrap.policy :<%= policy_key %> do
+  # The verb controls the lifecycle, so the generator required you to choose it
+  # explicitly. The statement is the exact first-person sentence stored in the
+  # receipt; review both as product/legal copy, not as incidental labels.
+  <%= policy_verb %> :<%= statement_key %>,
+<% statement_options.each_with_index do |option, index| -%>
+    <%= option %><%= "," unless index == statement_options.length - 1 %>
+<% end -%>
+
+  # This class must already exist in a Clickwrap.retention declaration. The
+  # generator names it; Clickwrap never invents or silently defaults a period.
+  retain_with :<%= retention_class_key %>
+end

@@ -1,0 +1,439 @@
+# frozen_string_literal: true
+
+# ==============================================================================
+# Clickwrap
+# ==============================================================================
+#
+# Everything here is a decision about evidence: what gets recorded, who can read
+# it, how long it lives, and what the receipt is allowed to claim. The comments
+# explain the CONSEQUENCE of each setting rather than its syntax, because the
+# person reading this file in three years will be trying to answer a question
+# about something that happened, not looking up an argument type.
+#
+# ONLY DECISIONS ARE LIVE IN THIS FILE. Every setting left at the gem's default
+# appears commented, with its default value shown — the defaults are already the
+# safe posture (nothing personal is collected, annexes encrypted, receipt access
+# denied until granted), and restating them as live code would dress a few dozen
+# non-decisions up as decisions. `bin/rails clickwrap:doctor` prints the full
+# effective posture at any time.
+#
+# The one deliberate exception is the request-evidence block. Every
+# `record_*_by_default` line is live even when it says `false`, because each one
+# is an answer to a question this installer actually asked, and "we decided not
+# to collect this" is a decision worth reading rather than inferring from a
+# file that does not mention it.
+#
+# A policy can override the request-evidence defaults below, so a high-risk
+# authorization can collect more context without ordinary signup inheriting it.
+#
+# There is deliberately no `maximum_evidence`, `full_evidence`, `legal_proof`,
+# or regulation-named mode setting. No runtime flag can make a legal
+# determination for you, and an option that turns on a category of personal data
+# as a side effect of something else is exactly what this gem exists not to do.
+<%- if recipe -%>
+#
+# This file was scaffolded with `--request-evidence-recipe=<%= recipe %>`. The
+# recipe expanded into the individual settings below and then stopped existing:
+# it is a generator convenience, not a runtime mode, and nothing reads it again.
+<%- end -%>
+#
+# Documents, policies, and retention classes live in config/clickwrap.rb.
+# ==============================================================================
+
+Clickwrap.configure do |config|
+  # --- Identity ---------------------------------------------------------------
+  #
+  # Who can act, how a controller finds them, and how they are referenced in
+  # evidence. This is the mapping every receipt depends on, so it is the one the
+  # installer refuses to guess at when it is ambiguous.
+
+<%- if actor_class_name && !default_identity_settings? -%>
+  # DECISION — detected during install. Clickwrap checks every recorded actor
+  # against this class, so a wrong value here is refused at capture rather than
+  # attributing evidence to the wrong kind of record for years.
+  config.actor_class_name = "<%= actor_class_name %>"
+
+  # The controller method that returns the current actor. Rails 8's generated
+  # Authentication concern exposes `Current.user` rather than a `current_user`
+  # helper — if that is your stack, either define `current_user` or point this
+  # at the method you actually have.
+  config.current_actor_method_name = :<%= current_actor_method_name %>
+<%- elsif actor_class_name -%>
+  # Detected during install, and the same as the gem's defaults — so there is
+  # nothing to override. Clickwrap checks every recorded actor against this
+  # class, so if your actor model is not <%= actor_class_name %>, set it here:
+  #
+  # config.actor_class_name = "<%= actor_class_name %>"
+  # config.current_actor_method_name = :<%= current_actor_method_name %>
+<%- else -%>
+  # Clickwrap could not infer your actor class unambiguously, so it did not
+  # choose one for you: which record can act is a security-relevant identity
+  # mapping, and a wrong guess attributes years of evidence to the wrong kind of
+  # record. Uncomment and set both lines.
+  #
+<%= actor_class_reason_comment %>
+  #
+  # config.actor_class_name = "User"
+  # config.current_actor_method_name = :current_user
+<%- end -%>
+
+  # The engine's screens render inside your application: your layout, your
+  # authentication callbacks, your locale. They are only as protected as this
+  # controller is. Actor, tenant, and subject stay three separate facts and
+  # never collapse into one polymorphic id; returning nil for the tenant means
+  # "single tenant", which is correct for most applications:
+  #
+  # config.parent_controller_class_name = "ApplicationController"
+  # config.find_current_tenant_with = lambda do |controller|
+  #   controller.current_organization if controller.respond_to?(:current_organization)
+  # end
+
+  # How an actor is named and snapshotted in evidence. The defaults record a
+  # stable reference that outlives row deletion — the model's own
+  # `clickwrap_actor_reference`, then a GlobalID, then a `ClassName/id` string —
+  # and snapshot NOTHING. A snapshot is permanent, so it should carry fields
+  # someone chose rather than every column that existed that day: an email
+  # copied in here is still in the receipt after the account is deleted.
+  # Override only against a reviewed identifier scheme or a reviewed field list:
+  #
+  # config.identify_actor_with = ->(actor) { "account/#{actor.public_id}" }
+  # config.snapshot_actor_with = ->(_actor) { {} }
+
+  # Authentication is recorded as context, never as an identity claim: it says
+  # which application-supplied authentication state was in force, and nothing
+  # more. The default asks the controller for the current actor and records
+  # `{ method: :authenticated_session }` only when it gets one, so a signup form
+  # — where nobody is signed in yet — describes nothing rather than claiming a
+  # session that did not exist. Override it to ADD reviewed context:
+  #
+  # config.describe_authentication_with = lambda do |_controller|
+  #   session = Current.session
+  #   next {} unless session
+  #
+  #   { method: session.authentication_method, authenticated_at: session.created_at }
+  # end
+
+  # --- Documents and policies -------------------------------------------------
+
+<%- if renders_documents_through_markdown_rails? -%>
+  # DECISION — your legal pages are Markdown files this application already
+  # renders through markdown-rails, so Clickwrap renders them through that same
+  # registered renderer: the snapshot people accept is byte-identical to the
+  # page they read, by construction, and sanitizing stays in the pipeline those
+  # pages already trust rather than a second pass behind the digest.
+  config.document_renderer = :markdown_rails
+
+<%- end -%>
+  # Where published bytes live, how they become the representation people are
+  # offered, and where declarations are read from. `:database` needs nothing
+  # else to stay readable in ten years; the default renderer keeps the faithful
+  # escaped-text representation, `:markdown` renders through whichever Markdown
+  # library you already bundle, and `:markdown_rails` renders through your
+  # application's own registered renderer — which is what keeps a snapshot
+  # byte-identical to the public page of the same file. A custom renderer must
+  # return the exact bytes it offered, because Clickwrap stores their digest
+  # next to the source digest: "this Markdown file existed" and "this rendered
+  # representation was offered" stay two separate claims.
+  #
+<%- unless renders_documents_through_markdown_rails? -%>
+  # config.document_renderer = :markdown_rails
+<%- end -%>
+  # config.store_document_contents_in = :database
+  # config.document_resolver = nil
+  # config.policy_paths = [ "config/clickwrap.rb", "config/clickwrap/*.rb" ]
+
+  # Publishing rides `db:prepare`, so the deploy step everyone forgets stops
+  # existing: by the time the server takes traffic, every declared version has
+  # an immutable snapshot. It is idempotent, and a refusal — a reused version
+  # label over changed bytes — fails the deploy out loud instead of letting
+  # signups fail quietly some hours later. Set it to false to keep publishing a
+  # deliberate `bin/rails clickwrap:publish` step of your own. A required legal
+  # statement with no translation raises rather than render a raw I18n key
+  # beside a control someone is about to press:
+  #
+  # config.publish_documents_after_database_preparation = true
+  # config.raise_on_missing_translation = true
+
+  # How immutable document links open — never WHERE they point, which is signed
+  # into the presentation and refused if this hook tries to return `href:`. It
+  # is evaluated in the rendering view, so per-request helpers work:
+  #
+  # config.document_link_html_options_with = ->(_document) { { target: "_blank", rel: "noopener" } }
+
+  # Hotwire Native gets a declarative answer covering both halves — the signed
+  # href AND the link attributes. Inside a native authentication sheet, a
+  # same-host document link is routed by the app itself, which pops the sheet
+  # and takes the half-filled form with it; `:external_browser` absolutizes the
+  # link against your canonical host so the form is still there when the person
+  # comes back. `:same_screen` keeps ordinary same-host links for your own
+  # native path configuration to route. `open_in:` also takes a callable, for an
+  # app that needs both answers on different screens:
+  #
+  # config.hotwire_native_document_links = {
+  #   open_in: :external_browser,
+  #   canonical_host: "https://www.example.com"
+  # }
+
+  # --- Presentation and integrity ---------------------------------------------
+  #
+  # A signed presentation manifest binds the exact wording, versions, and call
+  # to action of the server-generated offer to the submission that followed. Its
+  # validity window is short by design — long enough for a slow reader, short
+  # enough to keep the substitution check meaningful — receipts digest with
+  # SHA-256, and the higher integrity tiers stay off until you bring an adapter.
+  # Each tier claims exactly what it supplies: the baseline detects ordinary
+  # mutation of the verified bytes, not someone who controls the database and
+  # the application.
+  #
+  # Chaining links each event to the previous one per tenant, which makes
+  # rewriting history detectable. Anchoring offers each committed chain position
+  # to an outside publication service, and a receipt upgrades only after the
+  # adapter verifies that exact publication. A timestamp adapter preserves
+  # exactly the assurance its provider supplies — Clickwrap's own
+  # `recorded_at_by_server` is named for what it is: this server's clock.
+  #
+  # The chaining and attestation tables ship with
+  # `rails generate clickwrap:install --with-integrity`.
+  #
+  # config.presentation_valid_for = 2.hours
+  # config.digest_canonical_receipts_with = :sha256
+  # config.chain_event_history_with = nil
+  # config.anchor_event_history_with = nil
+  # config.timestamp_receipts_with = nil
+
+  # Stamp every event with the code that wrote it, so a receipt can be traced to
+  # a deploy. Point these at whatever your deployment actually sets:
+  #
+  # config.application_version = -> { ENV["RELEASE_SHA"] }
+  # config.template_version = -> { nil }
+
+  # --- Authorization ----------------------------------------------------------
+
+  # DECISION — actors read their own receipts. The gem's default denies ALL
+  # receipt access until you write this check; the installer grants exactly
+  # self-service and nothing wider. A foreign id returns not found rather than
+  # leaking that it exists.
+  #
+  # The `present?` check is load-bearing: `receipt.actor` is legitimately nil
+  # for imported evidence and after an actor's account is deleted, and a
+  # signed-out viewer is nil too — a bare `==` would let nil equal nil and
+  # fail open on exactly those receipts.
+  config.authorize_receipt_access_with = lambda do |controller, receipt|
+    controller.<%= current_actor_method_name %>.present? &&
+      controller.<%= current_actor_method_name %> == receipt.actor
+  end
+
+  # Unredacted request evidence — the raw IP address, User-Agent, and
+  # IP-geolocation values — stays denied (the default) until you write a real
+  # check. Every granted access needs a human-readable reason and appends an
+  # access event, so "who read this and why" stays answerable. The shape a real
+  # one takes:
+  #
+  # config.authorize_unredacted_request_evidence_access_with =
+  #   ->(controller, _receipt, because) { controller.current_user&.security_operator? && because.present? }
+
+  # --- Request evidence: what is recorded by default --------------------------
+  #
+  # Clickwrap always records its own event id, the server time, the capture
+  # channel, the policy and application version, the configured actor and
+  # authentication source, and the HTTP request id when one is available. None
+  # of that is personal request evidence.
+  #
+  # The settings below are, and they are the one block in this file written out
+  # in full even when every answer is "no". Each one is a separate line because
+  # each one is a separate decision about what to keep about a person, and none
+  # of them turns on as a side effect of another.
+  #
+  # IP addresses and linked online identifiers can be personal data. Keeping
+  # them on your own infrastructure does not remove purpose, transparency,
+  # minimization, security, or retention duties. Provider-estimated geolocation
+  # is network context: not identity, not GPS, not a street address, and not
+  # proof that anyone was physically anywhere.
+<%- if records_any_request_evidence? -%>
+  #
+  # You enabled some of these during install. The generator required an explicit
+  # purpose and deletion period before writing this file; review both below. The
+  # annex table itself came with `--with-request-evidence`, which this install
+  # added for you.
+<%- else -%>
+  #
+  # Everything here is off, which is the safe default — and the annex table was
+  # not created at all. A single policy that genuinely needs a field can still
+  # name it (add the table with
+  # `rails generate clickwrap:install --with-request-evidence`), without
+  # ordinary signup inheriting the collection.
+<%- end -%>
+
+  config.record_ip_address_by_default = <%= record_ip_addresses? %>
+  config.record_browser_user_agent_by_default = <%= record_browser_user_agents? %>
+<%- ip_geolocation_fields.each do |field| -%>
+  config.record_ip_geolocation_<%= field %>_by_default = <%= record_ip_geolocation_field?(field) %>
+<%- end -%>
+
+  # --- Request evidence: why, how long, and how it is protected ---------------
+  #
+  # An enabled field with a blank purpose or no deletion rule is a configuration
+  # error at boot, not a warning. "We turned it on and never decided why" is the
+  # failure mode these settings exist to prevent. There is no keep-forever
+  # default anywhere in this gem, and deleting a value removes the encrypted
+  # annex entry and appends a disposition event — the historical agreement,
+  # declaration, or authorization stays intact and verifiable without it.
+
+<%- if record_ip_addresses? -%>
+  config.reason_for_recording_ip_addresses_by_default =
+    <%= reason_for_recording_ip_addresses.inspect %>
+  config.delete_recorded_ip_addresses_after = <%= delete_recorded_ip_addresses_after_days %>.days
+<%- end -%>
+<%- if record_browser_user_agents? -%>
+  config.reason_for_recording_browser_user_agents_by_default =
+    <%= reason_for_recording_browser_user_agents.inspect %>
+  config.delete_recorded_browser_user_agents_after = <%= delete_recorded_browser_user_agents_after_days %>.days
+<%- end -%>
+<%- if any_ip_geolocation_field? -%>
+  config.reason_for_recording_ip_geolocation_by_default =
+    <%= reason_for_recording_ip_geolocation.inspect %>
+  config.delete_recorded_ip_geolocation_after = <%= delete_recorded_ip_geolocation_after_days %>.days
+<%- end -%>
+<%- if records_any_request_evidence? -%>
+  # A date to look at this configuration again, so an enabled field does not
+  # quietly outlive the reason it was turned on. `clickwrap:doctor` reports an
+  # enabled field with no review date.
+  config.review_default_request_evidence_configuration_on = <%= review_date_literal %>
+<%- else -%>
+  # Nothing above is enabled, so there is nothing to give a purpose or a
+  # deletion period to. Enabling a field is never one line — the gem refuses an
+  # enabled field with no recorded purpose and no deletion rule — and it wants a
+  # review date so the decision gets looked at again by a person instead of
+  # outliving its reason:
+  #
+  # config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
+  # config.delete_recorded_ip_addresses_after = 90.days
+  # config.review_default_request_evidence_configuration_on = Date.new(<%= Date.today.year + 1 %>, 1, 1)
+<%- end -%>
+
+  # Your own reference to the assessment or basis you recorded elsewhere, if
+  # your jurisdiction and policy call for one. Clickwrap stores the string in
+  # the privacy inventory and the receipt; it does not choose a lawful basis,
+  # and it cannot tell you whether the one you chose is the right one:
+  #
+  # config.legal_basis_reference_for_recording_ip_addresses_by_default = nil
+  # config.legal_basis_reference_for_recording_browser_user_agents_by_default = nil
+  # config.legal_basis_reference_for_recording_ip_geolocation_by_default = nil
+
+  # Recorded values are encrypted at rest with Active Record encryption.
+  # Turning one of these off puts the raw value in plain text in your database,
+  # and therefore in every ordinary backup and database dump. It is allowed,
+  # because some applications have a reviewed reason, but it is never a quiet
+  # one-character change: Clickwrap refuses `false` until you have said why in
+  # `config.deliberately_store_request_evidence_unencrypted!(because: "…")`.
+  #
+  # config.encrypt_recorded_ip_addresses = true
+  # config.encrypt_recorded_browser_user_agents = true
+  # config.encrypt_recorded_ip_geolocation = true
+
+  # Server-observed, always. The browser cannot submit or replace these values,
+  # and a client-reported address is labeled as such rather than silently
+  # standing in for one Clickwrap saw.
+  #
+  # `request.remote_ip` is only as trustworthy as your proxy configuration. If
+  # you record IP addresses, verify and TEST `config.action_dispatch` trusted
+  # proxies behind your load balancer or CDN — otherwise you are recording a
+  # header a client controls:
+  # https://api.rubyonrails.org/classes/ActionDispatch/RemoteIp.html
+  #
+  # config.read_ip_address_from_http_request_with = ->(http_request) { http_request.remote_ip }
+  # config.read_browser_user_agent_from_http_request_with = ->(http_request) { http_request.user_agent }
+
+<%- if trusted_proxy_configuration_digest -%>
+  # DECISION — the reviewed trusted-proxy digest you supplied to the installer.
+  # It does not make the rules or the network path correct; it records which
+  # rules were in force beside every address recorded under them.
+  config.trusted_proxy_configuration_digest =
+    <%= trusted_proxy_configuration_digest.inspect %>
+<%- elsif records_ip_derived_request_evidence? -%>
+  # DECISION — this install records IP-derived evidence, so the digest is
+  # derived from the EFFECTIVE Rails rules (`config.action_dispatch.trusted_proxies`,
+  # or Rails' own defaults) rather than from a prose description of them. It
+  # does not make the rules correct; it records which rules were in force.
+  config.trusted_proxy_configuration_digest =
+    Clickwrap.trusted_proxy_configuration_digest_for_rails_application
+<%- else -%>
+  # A digest of the effective trusted-proxy rules, stored beside any recorded
+  # address. Nothing here records one, so there is nothing to stamp:
+  #
+  # config.trusted_proxy_configuration_digest =
+  #   Clickwrap.trusted_proxy_configuration_digest_for_rails_application
+<%- end -%>
+
+<%- if any_ip_geolocation_field? -%>
+  # DECISION — you enabled IP-geolocation fields and explicitly selected this
+  # resolver. Make its gem and data source available in every environment:
+  # Clickwrap refuses to boot with fields it has nothing to resolve, rather than
+  # recording blanks that later read as "no result".
+  #
+  # Only the fields authorized above are stored, never the whole result object,
+  # and every stored value keeps the provider, source, estimated state,
+  # resolution time, and any accuracy or database provenance the resolver
+  # supplies. A policy cannot keep the coordinates and drop the uncertainty
+  # needed to read them.
+  config.ip_geolocation_resolver = <%= ip_geolocation_resolver_class_name %>.new
+<%- else -%>
+  # Required before any IP-geolocation field can be enabled, here or in a
+  # policy. The official optional resolver requires trackdown >= 0.4 so the
+  # provider that actually answered and per-request source trust are preserved:
+  #
+  #   bundle add trackdown --version ">= 0.4"
+  #   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
+<%- end -%>
+
+  # Whether an unavailable resolver blocks capture or produces an `unavailable`
+  # state in the receipt. Blocking means a provider outage stops people from
+  # signing up; not blocking means some receipts honestly say the lookup failed.
+  # Receipts keep `not_configured`, `unavailable`, `recorded`, and `deleted`
+  # apart, so "we chose not to collect it" never blurs into "collection failed":
+  #
+  # config.fail_capture_when_ip_geolocation_is_unavailable = false
+
+  # --- Hooks ------------------------------------------------------------------
+  #
+  # These run only after the required evidence and the domain state have
+  # committed. A failure here is reported and can never undo the committed
+  # action — and a hook can never stand in for one either.
+  #
+  # config.after_event_is_committed = lambda do |event|
+  #   Marketing::StopProcessingJob.perform_later(event.actor_id) if event.consent_was_withdrawn?
+  # end
+
+  # DECISION — after-commit hook failures land in your error reporter instead of
+  # vanishing. The gem's default reports nothing, because it has no reporter to
+  # assume.
+  config.report_after_commit_failure_with = ->(error, _event) { Rails.error.report(error) }
+
+  # --- Development aids -------------------------------------------------------
+  #
+  # In development and test, every render is scanned for the mistakes a form can
+  # make silently: a preselected consent control, a consent sentence carrying
+  # two purposes, a document link below the submit button, a missing
+  # presentation token. Findings go to the log and never raise — a lint finding
+  # is a thing to look at, not a reason to stop a page from rendering — and it
+  # is off in production, because a production request has no business scanning
+  # its own HTML on the way out. `nil` means "decide from the environment":
+  #
+  # config.lint_presentations = nil
+
+  # --- Retention calculations -------------------------------------------------
+  #
+  # A duration alone cannot express every schedule, so a retention class can
+  # name a host event instead ("the later of five years after capture and three
+  # years after the subject was closed") and register the calculation here.
+  # Returning nil is a legitimate answer: it means the triggering event has not
+  # happened yet, so the record is reported as unresolved rather than given an
+  # invented date.
+  #
+  # config.calculate_retention_time_for :regulated_evidence_retention_ends do |event|
+  #   [
+  #     event.recorded_at_by_server + 5.years,
+  #     event.subject_liquidated_at&.+(3.years)
+  #   ].compact.max
+  # end
+end

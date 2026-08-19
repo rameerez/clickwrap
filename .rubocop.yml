@@ -1,0 +1,90 @@
+# MERGE our excludes with rubocop's defaults (vendor/, node_modules/, …) —
+# a bare Exclude key would REPLACE them.
+inherit_mode:
+  merge:
+    - Exclude
+
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  SuggestExtensions: false
+  Exclude:
+    # The dummy host app mirrors what a real application looks like, including
+    # migrations copied verbatim from the install generator's templates —
+    # don't lint a generated-code mirror against the gem's own style.
+    - test/dummy/**/*
+    # Generator templates are emitted into HOST apps (host style, and some
+    # carry ERB tags rubocop can't parse as Ruby).
+    - lib/generators/clickwrap/templates/**/*
+    # Appraisal-generated Gemfiles.
+    - gemfiles/*
+
+Style/StringLiterals:
+  EnforcedStyle: double_quotes
+
+Style/StringLiteralsInInterpolation:
+  EnforcedStyle: double_quotes
+
+# Hard size metrics fight readable, well-commented domain code and thorough
+# test classes; we optimize for the latter. A policy compiler that explains
+# every refusal in a full sentence is longer than one that raises "invalid",
+# and the long version is the product.
+Metrics:
+  Enabled: false
+
+# Evidence code carries short, standard names for the things it records.
+Naming/MethodParameterName:
+  AllowedNames: [at, by, id, ip, to, ua, key]
+
+# `has_clickwraps` is the macro and the product — it matches the ecosystem
+# grammar (has_sessions, has_credits, has_api_keys), not a predicate.
+Naming/PredicatePrefix:
+  AllowedMethods: [has_clickwraps, has_clickwrap_evidence]
+
+# Receipt and verification predicates read as questions about a recorded fact:
+# `recorded_ip_address?`, `ip_geolocation_was_estimated?`,
+# `browser_user_agent_was_client_supplied?`. Renaming them to satisfy a
+# prefix cop would break the plain-English naming contract these methods exist
+# to honor.
+Naming/PredicateMethod:
+  Enabled: false
+
+# %{policy} / %{document} are I18n interpolation tokens — annotated tokens
+# aren't a thing in I18n templates.
+Style/FormatStringToken:
+  EnforcedStyle: template
+
+# Adapter contracts (IP geolocation resolvers, anchors, timestamp providers)
+# fix keyword names even where a no-op implementation ignores them. The names
+# ARE the documented interface.
+Lint/UnusedMethodArgument:
+  AllowUnusedKeywordArguments: true
+
+Lint/UnusedBlockArgument:
+  AllowUnusedKeywordArguments: true
+
+# The codebase consistently names a rescued exception `error` — it reads as a
+# noun in the sentences these rescue blocks are written as.
+Naming/RescuedExceptionsVariableName:
+  PreferredName: error
+
+# Configuration's readers are grouped by section, matching the order and shape
+# of the generated initializer — which is the main thing a host ever reads
+# about this gem. Collapsing them into one declaration produces a single
+# thousand-character line and loses that structure entirely.
+Style/AccessorGrouping:
+  Exclude:
+    - lib/clickwrap/configuration.rb
+
+# `->(http_request) { http_request.remote_ip }` keeps the parameter name, and
+# the parameter name is the point: the naming contract says `http_request`, not
+# a bare `&:remote_ip` whose receiver is anybody's guess when a host overrides
+# the reader.
+Style/SymbolProc:
+  Exclude:
+    - lib/clickwrap/configuration.rb
+
+Layout/LineLength:
+  Max: 120
+  Exclude:
+    - clickwrap.gemspec # the long-form rubygems description is one line by design

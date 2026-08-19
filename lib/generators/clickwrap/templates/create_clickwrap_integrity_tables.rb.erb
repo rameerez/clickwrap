@@ -1,0 +1,157 @@
+# frozen_string_literal: true
+
+# The higher integrity tiers — `rails generate clickwrap:install
+# --with-integrity`, or added later with the same command.
+#
+# Per-tenant event chaining, external anchoring, and third-party
+# timestamping are each off until the host brings an adapter
+# (`config.chain_event_history_with`, `config.anchor_event_history_with`,
+# `config.timestamp_receipts_with`). Until then neither table can receive a
+# row.
+class CreateClickwrapIntegrityTables < ActiveRecord::Migration<%= migration_version %>
+  def change
+    primary_key_type, = primary_and_foreign_key_types
+
+    # ---------------------------------------------------------------------------
+    # clickwrap_chain_heads
+    #
+    # Optional tamper-evident chaining, off unless configured. The scope is per
+    # tenant or per aggregate, never one global chain: a single chain across
+    # unrelated tenants turns every capture into a queue behind every other one,
+    # and buys assurance nobody asked for at a cost everybody pays.
+    # ---------------------------------------------------------------------------
+    create_table :clickwrap_chain_heads, id: primary_key_type do |t|
+      t.string :chain_scope, null: false
+      t.string :last_event_id, limit: 26
+      t.string :last_event_digest
+      t.bigint :chain_sequence, null: false, default: 0
+
+      t.datetime :checkpointed_at, precision: 6
+      t.string :checkpoint_digest
+      t.string :anchor_reference
+      t.send(json_column_type, :anchor_receipt)
+
+      t.timestamps precision: 6
+    end
+
+    add_index :clickwrap_chain_heads, :chain_scope, unique: true,
+              name: "index_clickwrap_chain_heads_on_scope"
+    add_index :clickwrap_chain_heads, :last_event_id,
+              name: "index_clickwrap_chain_heads_on_last_event"
+
+
+    # ---------------------------------------------------------------------------
+    # clickwrap_integrity_attestations
+    #
+    # One row per attempt to have an outside party vouch for an exact event
+    # digest, carrying the provider's own result and this gem's verification of
+    # it as separate facts. An unverified issue is recorded as unverified.
+    # ---------------------------------------------------------------------------
+    create_table :clickwrap_integrity_attestations, id: primary_key_type do |t|
+      t.string :event_id, limit: 26, null: false
+      t.string :kind, null: false
+      t.string :state, null: false
+      t.string :provider_name, null: false
+      t.string :subject_digest, null: false
+      t.string :chain_scope
+      t.bigint :chain_sequence
+      t.string :provider_reference
+      t.send(json_column_type, :provider_result, null: false)
+      t.send(json_column_type, :verification, null: false)
+      t.send(json_column_type, :adapter_capabilities, null: false)
+      t.string :attestation_digest, null: false
+      t.datetime :attempted_at, precision: 6, null: false
+      t.datetime :provider_reported_at, precision: 6
+      t.datetime :created_at, precision: 6, null: false
+    end
+
+    add_index :clickwrap_integrity_attestations, [ :event_id, :kind, :attempted_at ],
+              name: "index_clickwrap_integrity_attestations_on_event"
+    add_clickwrap_check_constraint :clickwrap_integrity_attestations,
+                         "kind IN (#{quoted_values(%w[event_anchor third_party_timestamp])})",
+                         name: "chk_clickwrap_attestations_kind"
+    add_clickwrap_check_constraint :clickwrap_integrity_attestations,
+                         "state IN (#{quoted_values(%w[verified issued_unverified unavailable failed])})",
+                         name: "chk_clickwrap_attestations_state"
+
+    add_clickwrap_foreign_key :clickwrap_chain_heads, :clickwrap_events,
+                    column: :last_event_id, name: "fk_clickwrap_chain_heads_event"
+    add_clickwrap_foreign_key :clickwrap_integrity_attestations, :clickwrap_events,
+                    column: :event_id, name: "fk_clickwrap_attestations_event"
+  end
+
+  private
+
+  # Honor the host's configured primary key type (uuid vs bigint). Reads the
+  # same setting `rails g model` uses, so an app generated with
+  # `config.generators { |g| g.orm :active_record, primary_key_type: :uuid }`
+  # gets uuid clickwrap tables and uuid foreign keys, automatically.
+  #
+  # Note that clickwrap_events keeps a ULID string key regardless: its id is
+  # quoted verbatim in receipts and exports, so it has to be stable, sortable,
+  # and identical in every host.
+  def primary_and_foreign_key_types
+    config = Rails.configuration.generators
+    setting = config.options[config.orm][:primary_key_type]
+    primary_key_type = setting || :primary_key
+    foreign_key_type = setting || :bigint
+    [ primary_key_type, foreign_key_type ]
+  end
+
+  def json_column_type
+    return :jsonb if connection.adapter_name.downcase.match?(/postg/) # postgresql, postgis
+
+    :json
+  end
+
+  # MySQL 8+ doesn't allow default values on JSON columns. Returns an empty-hash
+  # default for SQLite/PostgreSQL, nil for MySQL. The models handle nil
+  # gracefully by defaulting to {} in their accessors.
+  def json_column_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    {}
+  end
+
+  # Same MySQL caveat as `json_column_default`, but for list-shaped columns.
+  def json_array_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    []
+  end
+
+  # Legal documents are routinely longer than MySQL's 64 KB TEXT limit, and a
+  # silently truncated agreement is the worst possible failure for this gem.
+  # `:mediumtext` maps to MEDIUMTEXT on MySQL (16 MB) and to ordinary TEXT
+  # everywhere else.
+  def text_column_type
+    return :mediumtext if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    :text
+  end
+
+  def quoted_values(values)
+    values.map { |value| connection.quote(value) }.join(", ")
+  end
+
+  # SQLite implements both foreign keys and check constraints by rebuilding a
+  # table. During a long install migration, Active Record can otherwise rebuild
+  # from a schema-cache entry captured before the indexes/columns immediately
+  # above were added. Refreshing around every rebuild keeps the SQLite result
+  # identical to PostgreSQL/MySQL instead of quietly resurrecting stale shape.
+  def add_clickwrap_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+    add_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+  end
+
+  def add_clickwrap_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+    add_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+  end
+
+  def refresh_clickwrap_table_schema!(table)
+    connection.schema_cache.clear_data_source_cache!(table.to_s)
+  end
+end

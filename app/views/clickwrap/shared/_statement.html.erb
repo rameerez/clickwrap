@@ -1,0 +1,105 @@
+<%#
+  ONE CONTROL: one checkbox or one choice group, one label carrying the exact
+  words the server offered, the documents it is about, and its own error.
+
+  It renders two things, the same way. A single statement — an optional consent,
+  a recorded yes/no, an assertion the application worded itself, anything a
+  policy's composed line could not honestly absorb — and the composed line
+  itself, which is one control standing for several statements at once. Both
+  answer the same questions about a control (name, id, required, choices, error)
+  and this file asks nothing else of them.
+
+  Rules this file exists to keep:
+
+    * a control means exactly what the server signed it means. The composed line
+      is one box for several statements ONLY because the manifest says which
+      ones and the server answers all of them from it; two boxes answering one
+      statement each is the shape nothing can reconstruct later;
+    * the control is REAL and starts EMPTY. There is no `checked` anywhere in
+      this file and there never will be: a pre-ticked box records the page's
+      default rather than a person's action;
+    * the label contains the words and is tied to the control, so pressing them
+      works and assistive technology announces them together;
+    * document links come BEFORE the action and carry the document's own name
+      (not "click here");
+    * `required` is progressive enhancement only. THE SERVER DECIDES. A browser
+      that ignores it, a client that never sends the field, and a script that
+      posts by hand all meet the same server-side check at capture — which is
+      also why nothing here prints the word "Required" beside a control.
+
+  Locals: statement, error
+%>
+<%
+  error = local_assigns[:error].presence
+  described_by = error ? statement.error_id : nil
+  statement_classes = ["clickwrap-statement", "clickwrap-statement--#{statement.kind}"]
+  statement_classes << "clickwrap-statement--invalid" if error
+%>
+<div class="<%= statement_classes.join(" ") %>">
+  <% if statement.choices.present? %>
+    <%# An explicit yes/no decision: every option unselected, so the answer is
+        one the person actually made rather than one the page made for them. %>
+    <%
+      fieldset_options = { class: "clickwrap-statement__choices" }
+      fieldset_options[:"aria-invalid"] = "true" if error
+      fieldset_options[:"aria-describedby"] = described_by if described_by
+    %>
+    <%= tag.fieldset(**fieldset_options) do %>
+      <legend class="clickwrap-statement__legend"><%= statement.assertion %></legend>
+
+      <% statement.choices.each_key do |choice| %>
+        <%
+          choice_id = "#{statement.control_id}_#{choice}"
+          choice_options = { id: choice_id, class: "clickwrap-statement__radio" }
+          choice_options[:required] = true if statement.requires_an_explicit_choice?
+          choice_options[:"aria-describedby"] = described_by if described_by
+        %>
+        <span class="clickwrap-statement__choice">
+          <%= radio_button_tag statement.control_name, choice, false, choice_options %>
+          <%= label_tag choice_id,
+                t("clickwrap.choices.#{choice}", default: choice.to_s.humanize),
+                class: "clickwrap-statement__choice-label" %>
+        </span>
+      <% end %>
+    <% end %>
+  <% else %>
+    <%
+      control_options = { id: statement.control_id, class: "clickwrap-statement__checkbox" }
+      control_options[:required] = true if statement.required?
+      control_options[:"aria-invalid"] = "true" if error
+      control_options[:"aria-describedby"] = described_by if described_by
+    %>
+    <div class="clickwrap-statement__control">
+      <%= check_box_tag statement.control_name, "1", false, control_options %>
+      <%= label_tag statement.control_id, clickwrap_statement_label(statement),
+            class: "clickwrap-statement__label" %>
+    </div>
+  <% end %>
+
+  <%# Only for a statement standing on its own. The composed line's links are
+      inside its sentence, so it has none to list here. %>
+  <% if statement.documents.any? %>
+    <ul class="clickwrap-documents">
+      <% statement.documents.each do |document| %>
+        <li class="clickwrap-documents__item"><%= clickwrap_document_link(document) %></li>
+      <% end %>
+    </ul>
+  <% end %>
+
+  <% if error %>
+    <%# Announced through aria-describedby above, and readable as ordinary text
+        here: the meaning is in the words, not in the color they are printed in. %>
+    <p class="clickwrap-statement__error" id="<%= statement.error_id %>">
+      <span class="clickwrap-statement__error-prefix"><%= t("clickwrap.ui.error_prefix") %></span>
+      <%= Array(error).join(" ") %>
+    </p>
+  <% end %>
+
+  <% if statement.withdrawal_path.present? %>
+    <p class="clickwrap-statement__withdrawal">
+      <%= link_to t("clickwrap.ui.withdrawal_link", purpose: statement.purpose_key.humanize.downcase),
+            statement.withdrawal_path,
+            class: "clickwrap-statement__withdrawal-link" %>
+    </p>
+  <% end %>
+</div>

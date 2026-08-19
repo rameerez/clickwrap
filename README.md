@@ -1,186 +1,347 @@
-# ☑️ `clickwrap` — trustworthy agreements, consent, declarations, and authorizations for Rails
+# ☑️ `clickwrap` - Make your Rails users accept your Terms and legal documents
 
-> [!IMPORTANT]
-> **README-first product contract.** `clickwrap` is not implemented or published yet. This README deliberately describes the finished gem we intend to build so we can work backward from the ideal developer experience. Every public promise below is an acceptance criterion, not a claim about code that exists today. Remove this notice only after the implementation and proof integrations satisfy it.
+[![Gem Version](https://badge.fury.io/rb/clickwrap.svg)](https://badge.fury.io/rb/clickwrap) [![Build Status](https://github.com/rameerez/clickwrap/workflows/Tests/badge.svg)](https://github.com/rameerez/clickwrap/actions)
 
-`clickwrap` is the missing evidence-and-assent layer for Rails.
+> [!TIP]
+> **🚀 Ship your next Rails app 10x faster!** I've built **[RailsFast](https://railsfast.com/?ref=clickwrap)**, a production-ready Rails boilerplate template that comes with everything you need to launch a software business in days, not weeks — including versioned Terms and Privacy Notice acceptance powered by this gem. Go [check it out](https://railsfast.com/?ref=clickwrap)!
 
-It makes ordinary Terms acceptance and its action one beautiful form-builder call:
+`clickwrap` makes your Rails users accept your Terms of Service, acknowledge your Privacy Notice, give (and withdraw) consent, make declarations, and authorize one-time actions — and keeps evidence of all of it that you can still reproduce and verify years later.
+
+✨ Perfect for SaaS signups, marketplaces, fintech payouts, health apps, and any Rails app where "the user agreed to this" needs to be provable long after the fact.
+
+Ordinary Terms acceptance is one line in your signup form:
 
 ```erb
 <%= form.clickwrap :signup, submit: "Create account" %>
 ```
 
-And it grows with you all the way to expiring declarations, withdrawable consent, one-time authorizations, exact historical receipts, transaction-bound evidence, retention, legal holds, and independently verifiable exports—without making the simple path feel complicated.
+…and it renders one line on the page. One checkbox, one sentence, your legal pages linked inside it:
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+No "Required" flag, no "(opens in a new tab)" printed beside every link, no version label sitting under a checkbox. Behind that single control, the receipt still records two separate acts — an *agreement* to the Terms and an *acknowledgment* of the Privacy Notice — with their own versions, digests, and lifecycles.
+
+And when an action is consequential enough that it must never happen without its evidence (a payout, a data handoff, a contract), the evidence and the action commit in the same database transaction:
 
 ```ruby
-receipt = Clickwrap.capture_and!(
-  :withdrawal_authorization,
-  actor: current_user,
-  subject: withdrawal,
-  http_request: request,
-  submission: clickwrap_submission
-) do |pending_receipt|
+Clickwrap.capture_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal,
+  http_request: request, submission: clickwrap_submission) do |pending_receipt|
   withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
 end
 ```
 
-If evidence cannot be recorded, the protected database action does not happen. If the action fails, the evidence does not pretend it succeeded.
+If the evidence can't be recorded, the action doesn't happen. If the action fails, the evidence doesn't pretend it succeeded.
 
-No JavaScript package. No Redis. No external account. No legal-document vendor. No required per-event API call. No required background job. Just Rails, your database, and an API that reads like plain English.
+No JavaScript package. No Redis. No background jobs. No external accounts or per-event API calls. No legal-document vendor. Just Rails, your database, and a DSL that reads like plain English.
 
-> [!TIP]
-> **Building a new Rails product?** [RailsFast](https://railsfast.com/?ref=clickwrap) ships the conventional signup integration, so new applications start with versioned Terms, a distinct Privacy Notice acknowledgment, atomic evidence, and receipts instead of inventing an `accepted_terms_at` column.
+> [!IMPORTANT]
+> **Status: built and tested, not yet proven in production.** Everything in this README is implemented and covered by the test suite, but the gem hasn't been through its planned production integrations, an unfamiliar-developer usability test, or legal review of its default wording yet. Treat it as a release candidate for evaluation — don't put it under a payout flow just yet. The [stability promise](#stability-and-upgrade-promise) applies from 0.1.0 onward.
 
-## The five-minute version
+## 👨‍💻 Example
 
-Install it:
+Define your documents and a policy in plain Ruby. Each document points at the file that *is* your legal text — and that file names its own version, in the front matter it probably already has. The top of `app/content/legal/terms.md`:
 
-```bash
-bundle add clickwrap
-bin/rails generate clickwrap:install
-bin/rails db:migrate
+```markdown
+---
+title: Terms of Service
+last_updated: 2026-08-15
+---
+
+# Terms of Service
 ```
 
-The installer detects Rails authentication versus Devise, integer versus UUID primary keys, and the database adapter. It generates adaptive migrations, one annotated initializer, a conventional signup policy, and the correct explicit authentication integration. It never invents legal text or silently guesses an ambiguous actor model.
-
-Point the generated policy at the exact documents your application already owns:
-
 ```ruby
+# clickwrap-doc-test: syntax-only — terms.md and privacy.md are files in your app
 # config/clickwrap.rb
 Clickwrap.document :terms,
-  version: "2026-08-15",
-  from: Rails.root.join("app/content/legal/terms.md")
+  from: Rails.root.join("app/content/legal/terms.md"),
+  link: "/legal/terms"
 
 Clickwrap.document :privacy_notice,
+  from: Rails.root.join("app/content/legal/privacy.md"),
+  link: "/legal/privacy"
+```
+
+`from:` is the bytes Clickwrap freezes, digests, and keeps as evidence. `link:` is where a *person* reads them — your own formatted page, with your typography and your navigation — and it is the path Clickwrap both renders and signs, so the receipt never cites a different target from the link somebody pressed. Leave `link:` off and the sentence links to the engine's rendering of the exact published version instead. (Your page shows whatever is current; that trade is yours to make, and it is written down in the declaration where a reviewer will see it.)
+
+Changing your Terms is then one edit in one file: new words, new `last_updated:`, publish. There is no second copy of the version label anywhere to drift — and a file carrying neither `clickwrap_version:` nor `last_updated:` fails the boot with a sentence instead of getting a label Clickwrap invented. Sources that can't carry front matter still name their label the explicit way:
+
+```ruby
+Clickwrap.document :handbook,
   version: "2026-08-15",
-  from: Rails.root.join("app/content/legal/privacy.md")
+  from: Rails.root.join("app/content/legal/handbook.pdf")
+```
+
+#### Reading that front matter yourself: `Clickwrap::FrontMatter`
+
+Your own pages usually need the same two answers, and it is the same block, so use the same reader rather than writing a third one:
+
+```ruby
+Clickwrap::FrontMatter.version_label_in(File.read(path))  # => "2026-08-15", or nil
+Clickwrap::FrontMatter.strip(File.read(path))             # the body, without the block
+```
+
+It reads a leading `---` block closed by `---` or `...`, takes simple top-level `key: value` lines only, and answers with `clickwrap_version:` when present, `last_updated:` otherwise — a same-day correction that still changes bytes needs a fresh label while the date readers see stays put. Two details are exactly where hand-rolled readers diverge, so they are worth naming: a quoted value has its quotes removed, and an unquoted trailing YAML comment is not part of the value, so `last_updated: 2026-11-01  # was 2026-08-15` is the label `2026-11-01`, precisely as YAML reads it.
+
+`strip` removes the block from the *rendered* representation only. The source digest still covers the exact file bytes, front matter included, because that is what the file was.
+
+Then say how long the evidence lives and what the server offers:
+
+```ruby
+Clickwrap.retention :ordinary_agreement_evidence do
+  retain_core_event_for 6.years
+end
 
 Clickwrap.policy :signup do
   agree_to :terms
   acknowledge :privacy_notice
+
+  retain_with :ordinary_agreement_evidence
 end
 ```
 
-Tell Clickwrap which records can act:
+(Yes, the payload-retention decision is mandatory — `clickwrap` will not silently
+default captured evidence or request evidence to "keep forever" and will not pick
+a period for you. A minimal, digest-linked disposition tombstone remains after a
+reviewed core deletion so the deletion itself does not become an unexplained hole.)
+
+Add one macro to your model:
 
 ```ruby
-# app/models/user.rb
 class User < ApplicationRecord
   has_clickwraps
 end
 ```
 
-Render the policy and its bound submit action:
+Render the line and the submit button as one bound presentation:
 
 ```erb
-<%= form_with model: resource do |form| %>
-  <%# email, password, etc. %>
-
-  <%= form.clickwrap :signup, submit: "Create account" %>
-<% end %>
+<%= form.clickwrap :signup, submit: "Create account" %>
 ```
 
-Publish immutable snapshots and boot the app:
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+From that moment on, you can ask readable questions everywhere:
+
+```ruby
+user.clickwraps.agreed_to?(:terms)              # => true
+user.clickwraps.acknowledged?(:privacy_notice)  # => true
+user.clickwraps.current_for?(:signup)           # => true
+```
+
+And every acceptance produces a receipt you can export and verify — even outside your app, without your app's source code:
+
+```ruby
+receipt = user.clickwraps.receipts.last
+receipt.verify.success?    # => true
+receipt.to_canonical_json  # canonical JSON for the standalone verifier
+receipt.to_html            # human-readable version of the same evidence
+```
+
+Sounds good? Let's get started!
+
+## Quick start
+
+Add the gem and run the installer:
+
+```ruby
+# Gemfile
+gem "clickwrap", github: "rameerez/clickwrap"
+```
+
+```bash
+bundle install
+bin/rails generate clickwrap:install
+bin/rails db:migrate
+```
+
+`bundle add clickwrap` would install version 0.0.0, a deliberately empty name placeholder on RubyGems — install from GitHub until the first real version is published there.
+
+The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. It emits only the tables your installation can actually write to; the capabilities that are off by default bring their own migration when you want them:
+
+```bash
+bin/rails generate clickwrap:install --with-request-evidence   # the IP / user-agent / geolocation annex
+                                     --with-integrity          # event chaining, anchoring, timestamps
+                                     --with-retention-ops      # legal holds and disposition plans
+                                     --with-external-actions   # the outbox for external handoffs
+                                     --with-persisted-presentations
+```
+
+Add any of them later by re-running the generator with the flag. Turning a capability on without its migration is caught at boot, by `bin/rails clickwrap:doctor`, and at the call itself — always with the exact command that fixes it. Enabling a request-evidence field brings the annex table automatically, because an installation that records IP addresses into a table it never created is not a schema choice. If your legal pages already live in the app, it points `from:` at those exact files and writes no `version:` line — the pages name their own versions. It never invents legal text and never silently guesses your actor model.
+
+Point the generated policy at the documents your app already owns (see the example above), add `has_clickwraps` to your user model, and drop `form.clickwrap` into your signup form:
+
+```erb
+<%= form.clickwrap :signup, submit: "Create account" %>
+```
+
+Then wire the door that creates the account, because the form is only half the circuit — some line has to write the account and its evidence in the same transaction:
+
+```ruby
+# Devise — app/controllers/users/registrations_controller.rb
+class Users::RegistrationsController < Devise::RegistrationsController
+  clickwraps_registration_with :signup
+end
+```
+
+```ruby
+# Rails authentication, an OAuth finish screen, a service object — any door
+# that builds the record itself.
+unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+  return render :new, status: :unprocessable_entity
+end
+```
+
+Do not skip that step. Leave it out and everything still *looks* right — the checkbox renders, the person ticks it, the account is created — and there is no evidence at all. It is the one omission this gem cannot warn you about at runtime, because an app with no door simply never calls it.
+
+Finally, publish immutable snapshots of your documents:
 
 ```bash
 bin/rails clickwrap:publish
 ```
 
-That is the whole conventional integration. The helper renders the initially unselected controls and the submit button as one presentation, so the exact call to action in the signed manifest is the one the user can press. The generated Rails-authentication or Devise adapter saves the account and required evidence in one database transaction.
+That's the only time you run that by hand: publishing rides `db:prepare`, so a deploy that runs
+it also freezes the snapshots for whatever you declared, before the server takes traffic
+(`config.publish_documents_after_database_preparation = false` if you'd rather own the step).
 
-At first render there is no persisted user yet. Clickwrap does not pretend otherwise: it binds the presentation to a short-lived prospective-actor registration flow, then the authentication adapter binds the resulting account to that presentation inside the same transaction. The receipt identifies the attribution method as account registration, not an authenticated session.
+That's it! Your app now records which exact document versions the server offered, which explicit
+answers it accepted, the bound presentation wording, and when—atomically with account creation.
+Let's see how it works.
 
-From that moment on:
+### What that one line renders
+
+One line:
+
+> ☐ I agree to the [Terms of Service](#) and I acknowledge the [Privacy Policy](#).
+
+One checkbox, one label, one sentence, with the documents linked *inside* it. The label **is** the
+line, so pressing the words toggles the control and a screen reader announces the sentence and the
+box together. There is no "Required" flag, no "(opens in a new tab)" printed beside every link, and
+no version label under the checkbox. (The `required` attribute is still there as progressive
+enhancement — **the server decides** — the "opens in a new tab" truth is still announced to screen
+readers when the link really does open one, and versions still appear on receipts, where somebody
+is actually reading the record.)
+
+Behind that single control the evidence is unchanged: two statements, two kinds, two document
+versions, two lifecycles. Ticking the box records an *agreement* to the Terms and an
+*acknowledgment* of the Privacy Notice; leaving it empty refuses both. The manifest signs the exact
+composed sentence and which statements the one control answered, so the substitution defense holds
+over the wording a person actually read.
+
+Clickwrap composes that line only when every statement in the policy is an ordinary, required,
+default-worded `agree_to` or `acknowledge`. Anything else keeps a control of its own, **below** the
+line:
 
 ```ruby
-user.clickwraps.agreed_to?(:terms)                  # => true
-user.clickwraps.acknowledged?(:privacy_notice)      # => true
-user.clickwraps.current_for?(:signup)               # => true
+Clickwrap.policy :signup do
+  # These two compose into the line.
+  agree_to :terms, link_label: "Terms of Service"
+  acknowledge :privacy_notice, link_label: "Privacy Policy"
 
-receipt = user.clickwraps.receipts.last
-receipt.event_id                                    # => "01K2..."
-receipt.verify.success?                             # => true
-receipt.to_canonical_json
-receipt.to_html
+  # This one gets its own box, below the line, with its withdrawal route.
+  consent_to :product_updates,
+    document: :marketing_notice,
+    optional: true,
+    withdrawal_path: "/settings/privacy"
+
+  retain_with :ordinary_agreement_evidence
+end
 ```
 
-Clickwrap preserves the exact document bytes and digests, policy revision, assertion and link text, choices, submit-button text, locale, presentation manifest, actor, authentication context, server time, lifecycle, and resulting protected action. Optional request evidence stays off until you explicitly ask for it.
+An optional consent is never folded in — bundling it would silently make it required, and unbundled
+consent is the whole point of the `consent_to` verb. Neither is a recorded yes/no, a statement with
+a withdrawal route, or copy your application wrote itself. And a policy with nothing composable —
+the operator attestation rails, the payout authorization — renders exactly as it always has, one
+control per act.
 
-Everything below is depth, not setup tax.
+Want the itemized shape anyway? One boolean, and it reaches the presenter, so the manifest signs
+the shape that was actually offered:
 
-If you came for one particular job:
-
-- start with [the form helper](#the-form-helper) for ordinary Rails forms;
-- use [`capture_and!`](#capture-evidence-and-the-protected-action-together) for consequential same-database actions;
-- read [consent](#consent-that-can-actually-be-withdrawn), [declarations](#expiring-and-corrected-declarations), or [one-time authorization](#narrow-one-time-authorizations) for richer lifecycles;
-- configure [optional request evidence](#optional-request-evidence-private-by-default) only after reading its privacy boundaries;
-- use [receipts](#receipts-answer-show-me-exactly-what-happened), [retention](#retention-deletion-and-legal-holds-are-first-class), and [integrity tiers](#progressive-honest-integrity) when the audit trail matters; or
-- jump to [the complete initializer](#the-generated-initializer-explains-itself) to see every default together.
-
----
-
-## Why this gem exists
-
-A checkbox is easy. Answering these questions three years later is not:
-
-- Which exact version did this person agree to?
-- What did the page actually say beside the control and submit button?
-- Was the checkbox initially empty and required on the server?
-- Did the account, payout, declaration, or provider handoff succeed without its evidence?
-- Was this consent later withdrawn?
-- Had this declaration expired?
-- Did this authorization cover this exact transaction, or was it replayed for another one?
-- Can an auditor reproduce the document without checking out historical application code?
-- Can optional personal request evidence be deleted without rewriting the historical event?
-- Can the exported receipt still be verified after several gem and Rails upgrades?
-
-Most applications eventually accumulate some combination of:
-
-```text
-accepted_terms_at
-terms_version
-an audit log
-a few hidden form fields
-an after_create callback
-some IP-address columns
-several domain-specific "confirmed_at" timestamps
+```erb
+<%= form.clickwrap :signup, submit: "Create account", combined: false %>
 ```
 
-Each part looks reasonable alone. Together they produce partial writes, client-owned policy decisions, mutable history, confused consent semantics, and evidence that only the original engineer can explain.
+The words are yours. `clickwrap.sentence.agreement` and `clickwrap.sentence.acknowledgment` are
+ordinary translations with `%{documents}` marking where the links go, and each document's link text
+comes from `link_label:` on the statement — which is how "Privacy Notice" becomes "Privacy Policy"
+without touching what the statement asserts.
 
-`clickwrap` turns that recurring plumbing into one coherent Rails primitive:
+Legal pages in Markdown? `config.document_renderer = :markdown` renders through whichever
+Markdown library you already bundle, and `:markdown_rails` renders through your application's
+*own* registered markdown-rails renderer — the exact pipeline your public `/legal` pages go
+through, so the snapshot people accept comes out byte-for-byte identical to the rendered text
+those pages serve, by construction rather than by careful copying.
 
-```text
-immutable document
-      +
-server-owned policy
-      +
-exact presentation
-      +
-explicit actor action
-      +
-atomic protected outcome
-      +
-append-only lifecycle
-      =
-reproducible receipt
+Wiring the gem into an existing production app — or handing the job to an AI agent? The
+[integrating guide](guides/integrating.md) is the step-by-step playbook from a full
+production migration, in the exact order that avoids every mistake we made.
+
+Hotwire Native? One setting answers both halves of the native question — the href
+*and* the link attributes:
+
+```ruby
+Clickwrap.configure do |config|
+  config.hotwire_native_document_links = {
+    open_in: :external_browser,
+    canonical_host: "https://www.example.com"
+  }
+end
 ```
 
-It is intentionally not a “one checkbox makes anything legal” gem. It provides excellent evidence mechanics. Your application and counsel still own the words, lawful basis, fairness, capacity, authority, jurisdiction, formalities, and retention decisions.
+Here's why that matters: on a native authentication sheet, a same-host document
+link is routed by the app itself, which pops the sheet and takes the half-filled
+signup form with it. `:external_browser` absolutizes the signed document path
+against your canonical host and opens it outside the WebView, so the form is
+still there when the person comes back. `:same_screen` keeps a plain same-host
+link for your own native path configuration to route (a document sheet inside a
+signed-in funnel, say).
+
+One app often needs both — the auth sheet must escape, the signed-in funnel
+routes its own sheet — so `open_in:` also takes a callable:
+
+```ruby
+config.hotwire_native_document_links = {
+  open_in: ->(controller) { controller.signing_up? ? :external_browser : :same_screen },
+  canonical_host: "https://www.example.com"
+}
+```
+
+It is asked once when the href is signed and once when the link is rendered,
+with the same controller both times, so the two halves of a link cannot
+disagree.
+
+Another client needs different attributes, or different ones per screen? Keep the
+gem's canonical partial and set `config.document_link_html_options_with`. It can
+add `data: { turbo: false }`, `target`, or `rel`; it cannot replace the immutable
+`href` that Clickwrap signs into the presentation. When the native setting above
+is set it answers native renders entirely, and this hook goes on answering every
+other render.
+
+## How it works
+
+Most apps eventually accumulate an `accepted_terms_at` column, a `terms_version` string, a few hidden form fields, an `after_create` callback, and some IP columns. Each part looks reasonable alone. Together they produce partial writes, client-owned policy decisions, mutable history, and evidence only the original engineer can explain.
+
+`clickwrap` replaces that plumbing with one coherent primitive:
+
+1. **Documents are immutable.** Publishing reads the exact bytes, digests them, and freezes a snapshot. A changed document requires a new version — the task refuses to reuse a version label for different bytes.
+2. **Policies are server-owned.** The browser may answer; it may never choose the policy, document version, validity, subject, or what gets recorded. Policies compile at boot and fail loudly when misconfigured.
+3. **Presentations are signed.** `form.clickwrap` creates a short-lived signed manifest of what the server generated for the form: documents, digests, statements, choices, and the submit button text. Stale, swapped, expired, or cross-account tokens are rejected at submit. A deploy between render and submit cannot record a version that was not bound to the accepted submission. This does not prove human perception or comprehension.
+4. **Capture is atomic.** Evidence and the protected database action commit together or not at all. Replays of the same submission return the original result instead of running twice.
+5. **Lifecycle history appends.** Through Clickwrap's public/model APIs, withdrawal, expiry, correction, and supersession append new events instead of rewriting the earlier event. Optional PostgreSQL hardening rejects additional direct database mutation paths; the integrity verifier detects covered changes rather than pretending a fully privileged database actor is impossible.
+6. **Receipts have a standalone verifier.** Canonical JSON ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)) with versioned schemas and SHA-256 digests can be checked by the bundled `clickwrap` CLI without booting Rails. The result distinguishes fully verified, failed, and incomplete checks; document-byte checks need the exported artifacts, and reviewed disposition is reported as disposition rather than ordinary verification.
 
 ## Six verbs, six honest meanings
 
-Not every checkbox is “consent,” and not every timestamp is a “signature.” Clickwrap gives each act the lifecycle it actually needs:
+Not every checkbox is "consent," and not every timestamp is a "signature." Each verb gets the lifecycle it actually needs:
 
-| Policy verb | Evidence kind | Meaning | Typical lifecycle |
-|---|---|---|---|
-| `agree_to` | `agreement` | Assent to contractual terms | agreed → superseded/new version |
-| `acknowledge` | `acknowledgment` | Affirmative receipt or awareness of a notice/risk | acknowledged → superseded/expired |
-| `consent_to` | `consent` | Purpose-specific permission where consent is the host’s chosen basis | granted → withdrawn/renewed/scope changed |
-| `declare` | `declaration` | A factual statement made by the actor | declared → corrected/superseded/expired |
-| `attest` | `attestation` | An operational fact affirmed by an authorized actor | attested → corrected/superseded |
-| `authorize` | `authorization` | Narrow permission bound to a protected action | authorized → consumed/revoked/expired |
+| Policy verb | Meaning | Typical lifecycle |
+|---|---|---|
+| `agree_to` | Assent to contractual terms | agreed → superseded by new version |
+| `acknowledge` | Affirmative receipt of a notice or risk | acknowledged → superseded / expired |
+| `consent_to` | Purpose-specific permission | granted → withdrawn / renewed |
+| `declare` | A factual statement made by the actor | declared → corrected / expired |
+| `attest` | An operational fact affirmed by an operator | attested → corrected / superseded |
+| `authorize` | Narrow permission bound to one protected action | authorized → consumed / expired |
 
 The DSL is intentionally verbal:
 
@@ -188,384 +349,205 @@ The DSL is intentionally verbal:
 Clickwrap.policy :example do
   agree_to :terms
   acknowledge :privacy_notice
-  consent_to :product_updates, optional: true
+  consent_to :product_updates, optional: true, withdrawal_path: "/settings/privacy"
   declare :information_is_accurate
   attest :bank_transfer_was_accepted
   authorize :withdrawal, one_time: true, valid_for: 10.minutes
+
+  retain_with :ordinary_agreement_evidence
 end
 ```
 
-The policy compiler rejects incoherent combinations at boot. A one-time authorization cannot be indefinite. Consent needs a withdrawal path. A declaration can expire without pretending the original statement was false. Withdrawing future consent never rewrites a historical agreement.
+The policy compiler rejects incoherent combinations at boot, in full sentences that tell you what's wrong and what to do about it: a one-time authorization can't be indefinite, consent needs a withdrawal path, and withdrawing future consent never rewrites a historical agreement.
 
-This taxonomy is product design, not statutory vocabulary. The host chooses the correct kind with appropriate legal/product review.
+## Protect an action with its evidence
 
-One submitted policy produces one root evidence event and one receipt, even when the policy contains several acts. Each act keeps its own kind, statement, documents, answer, and lifecycle under that root event. That gives the protected domain action one stable `event_id` to reference without flattening “agreed to Terms” and “acknowledged the Privacy Notice” into the same meaning.
+`capture_and!` is the gem's signature move. In one supported database transaction it verifies the presentation, appends the evidence event, yields to your domain action, records the outcome, and commits both together:
 
-## Documents are immutable, reproducible records
-
-Define a logical document once and publish as many immutable versions and locales as needed:
-
-```ruby
-Clickwrap.document :terms,
-  version: "2026-08-15",
-  locale: :en,
-  effective_at: Time.utc(2026, 8, 15),
-  from: Rails.root.join("app/content/legal/terms.en.md")
-
-Clickwrap.document :terms,
-  version: "2026-08-15",
-  locale: :es,
-  effective_at: Time.utc(2026, 8, 15),
-  from: Rails.root.join("app/content/legal/terms.es.md")
-```
-
-Publish them during development or deployment:
-
-```bash
-bin/rails clickwrap:publish
-```
-
-Publishing:
-
-- reads the exact bytes;
-- records media type and locale;
-- calculates a versioned digest;
-- snapshots the exact rendered representation when a source format is transformed for display;
-- records the renderer and sanitizer identity/version used for that representation;
-- freezes a database snapshot;
-- compiles and freezes every policy revision that references it; and
-- refuses to reuse a version label for different bytes.
-
-The task is idempotent. A changed document requires a new version. Export never fetches a mutable live URL and calls it historical evidence.
-
-Preview the plan without writing:
-
-```bash
-bin/rails clickwrap:publish:plan
-```
-
-The default database store is deliberately boring and complete. Larger applications can switch document bodies to content-addressed Active Storage or object-lock storage while keeping the same digest and receipt contract:
+Declare the exact post-action snapshot once. The callback receives the value
+returned by the protected-action block—not the pre-action subject—and
+`Clickwrap.protected_outcome` owns the stable reference and canonical
+fingerprint:
 
 ```ruby
-config.store_document_contents_in = :active_storage
-```
-
-Every storage adapter must return immutable bytes plus a verifiable digest. A URL alone is never a document version.
-
-Markdown, HTML, plain text, and attached files are evidence inputs, not trusted markup by accident. The reference renderer sanitizes display HTML. A custom renderer must return the exact rendered bytes it offered, and Clickwrap stores their digest alongside the original-source digest. That preserves the distinction between “this Markdown file existed” and “this rendered representation was offered.”
-
-## Policies are server-owned offers
-
-A policy declares what the server will present and accept. The browser may answer; it may never choose the policy, document version, validity, subject, retention, or request-evidence fields.
-
-```ruby
-Clickwrap.policy :driver_declaration do
-  declare :non_professional_driver,
-    document: :driver_declaration,
-    statement: "I declare that I drive privately and not as a professional driver.",
-    valid_for: 1.year,
-    subject_fingerprint_with: ->(scheme) { scheme.evidence_fingerprint }
+Clickwrap.policy :withdrawal_authorization do
+  authorize :withdrawal,
+    one_time: true,
+    valid_for: 10.minutes,
+    protected_outcome_version: "submitted-withdrawal-v1",
+    record_protected_outcome_with: lambda { |withdrawal|
+      Clickwrap.protected_outcome(
+        action: :submitted,
+        record: withdrawal,
+        state: withdrawal.status,
+        facts: {
+          amount_in_cents: withdrawal.amount_cents,
+          currency: withdrawal.currency,
+          destination_reference: withdrawal.destination_reference
+        }
+      )
+    }
 
   retain_with :regulated_evidence
 end
 ```
 
-Policies compile at boot. Clickwrap fails loudly for:
-
-- missing documents or locales;
-- duplicate statement keys;
-- invalid lifecycle options;
-- a consent policy without a configured withdrawal path;
-- a one-time authorization without expiry/consumption behavior;
-- request evidence without a named present purpose and retention decision;
-- a subject-bound policy without a subject fingerprint; or
-- a changed compiled policy reusing the same revision.
-
-Policy revisions are defined pleasantly in Ruby and persisted as frozen canonical snapshots. Historical receipts do not need current source code to explain what revision meant.
-
-Every human-facing value can be a literal, an I18n key, or a locale map. Clickwrap resolves it before presentation, fails closed when a required translation is missing, and stores the resolved text and locale—not merely an I18n key whose meaning may change later.
-
-### Reacceptance is explicit
-
-New document bytes do not silently reinterpret old evidence:
-
-```ruby
-Clickwrap.policy :current_terms do
-  agree_to :terms, require_current_version: true
-end
-```
-
-```ruby
-Clickwrap.required?(:current_terms, actor: user)     # => true after a new version publishes
-user.clickwraps.current_for?(:current_terms)         # => false
-```
-
-The application decides which change is material. Clickwrap enforces the rule it is given; it does not decide legal materiality.
-
-Before activating a new required version, operators can preview its effect:
-
-```bash
-bin/rails clickwrap:reacceptance:plan POLICY=current_terms
-```
-
-The plan reports affected actor counts and configured remediation routes without emailing anyone, changing current state, or calling the change “material.” Scheduled versions become presentable only at their explicit `effective_at`; correcting a published mistake means publishing a new version or stopping future presentation with an append-only operator reason, never replacing historical bytes.
-
-## Presentation manifests stop render-to-submit substitution
-
-`form.clickwrap` does more than render controls. It creates a short-lived presentation manifest bound to an actor or prospective-actor flow, subject, and tenant containing:
-
-- policy key and frozen revision;
-- document versions, locales, and digests;
-- exact statements, labels, link labels/targets, choices, required state, and CTA text;
-- actor, tenant, and subject bindings;
-- subject fingerprint;
-- template, application, and gem versions;
-- capture channel;
-- issue time, expiry, and one-use nonce; and
-- a canonical manifest digest.
-
-The browser receives a signed presentation token. On submit, Clickwrap verifies it against current server policy and rejects stale, swapped, expired, cross-account, cross-tenant, or cross-subject tokens.
-
-A deploy between GET and POST never causes the server to record a version the actor was not offered. The policy either honors that still-valid presentation or asks the user to review the new one.
-
-The default signed-manifest path performs no database write on GET. A high-assurance flow can explicitly retain pre-submit presentation attempts:
-
-```ruby
-Clickwrap.policy :regulated_authorization do
-  persist_presentations_before_submission_for 30.days,
-    because: "Investigate disputes about this regulated authorization"
-  authorize :regulated_action, one_time: true, valid_for: 10.minutes
-end
-```
-
-Persisted presentations carry their own purpose, access, abuse controls, and retention; an abandoned GET is labeled `presented_by_server`, never `accepted` or `seen_by_human`.
-
-The receipt says exactly what this proves: the server generated and accepted a particular presentation manifest. It does not claim the person read the document, understood it, saw particular pixels, or received a legally sufficient interface in every jurisdiction.
-
-### The form helper
-
-The strongest happy path is one line because the component owns both the controls and the action whose wording it records:
-
-```erb
-<%= form.clickwrap :signup, submit: "Create account" %>
-```
-
-Submit options remain ordinary Rails:
-
-```erb
-<%= form.clickwrap :signup,
-  actor: current_user,
-  subject: @organization,
-  locale: I18n.locale,
-  submit: {
-    text: "Create organization",
-    class: "button button--primary",
-    data: { turbo_submits_with: "Creating…" }
-  } %>
-```
-
-The helper renders:
-
-- real, initially unselected controls;
-- kind-appropriate first-person language;
-- obvious document links before the submit action;
-- stable label/control/error associations;
-- server errors and accessible error summaries;
-- the signed presentation token; and
-- no hidden IP address, browser user-agent, policy version, validity date, or other client-owned security decision.
-
-HTML `required` is progressive enhancement. Server validation is always authoritative.
-
-If your design system needs to render the action separately, use the deliberately explicit split API:
-
-```erb
-<%= form.clickwrap_fields :signup,
-  submit_button_text: "Create account" %>
-
-<%= form.submit "Create account" %>
-```
-
-The repeated text is intentional: it makes the evidence contract visible in code. Development and system-test assertions compare the declared text with the rendered submit control and reject a mismatch. The one-call API is preferred because it makes that class of drift impossible.
-
-### Use the ready-made standalone remediation screen
-
-Any policy can be completed outside its original flow:
-
-```ruby
-# config/routes.rb
-mount Clickwrap::Engine => "/agreements"
-```
-
-```ruby
-clickwrap_capture_path(:driver_declaration)
-```
-
-The engine provides actor-owned capture, receipt, consent-withdrawal, and document-history surfaces using your parent controller, layout, locale, and authorization callbacks. This makes a required agreement or declaration resolvable in place instead of becoming a dead end.
-
-### Eject or fully own the UI
-
-Copy the tested reference views:
-
-```bash
-bin/rails generate clickwrap:views
-```
-
-Your copies shadow the gem’s views. Tailwind, Bootstrap, ViewComponent, Phlex, custom design systems, and plain ERB are all welcome.
-
-For a completely custom surface, ask the presenter for primitives rather than recreating hidden inputs:
-
-```ruby
-presentation = Clickwrap.present(
-  :signup,
-  actor: current_user,
-  subject: nil,
-  locale: I18n.locale,
-  submit_button_text: "Create account"
-)
-```
-
-```erb
-<%= hidden_field_tag "clickwrap_submission[presentation_token]", presentation.token %>
-
-<% presentation.statements.each do |statement| %>
-  <%# Render statement.control_name, label, document links, choices and errors. %>
-<% end %>
-```
-
-The development linter compares the submitted manifest with the policy/presenter contract and warns about missing statements, preselected consent, absent links, controls placed after the CTA, or unregistered custom copy. It reports objective problems; it never prints “legally compliant.”
-
-## Capture evidence and the protected action together
-
-For an existing actor in a normal Rails controller:
-
 ```ruby
 def create
   withdrawal = current_user.withdrawals.build(withdrawal_params)
 
-  receipt = capture_clickwrap_and!(
-    :withdrawal_authorization,
-    actor: current_user,
-    subject: withdrawal
-  ) do |pending_receipt|
+  capture_clickwrap_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal) do |pending_receipt|
     withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
+    withdrawal # the exact completed result given to the outcome recorder
   end
 
   redirect_to withdrawal
 end
 ```
 
-The controller helper reads only the generated `clickwrap_submission` envelope and the current `http_request`. It delegates to the same public service API:
+If the event write fails, the action rolls back. If your block raises, the event rolls back. Repeating an identical submission returns the original result without running the block twice; a conflicting replay fails with a stable `Clickwrap::ReplayRejected`. That remains true when the successful action itself changes the fingerprinted subject: once the signed nonce committed, replay verifies the frozen event context and exact answers instead of requiring the old pre-action state to still exist.
+
+Link the row to the evidence that authorized it, so the connection survives years and engineers:
+
+```bash
+bin/rails generate clickwrap:link withdrawals && bin/rails db:migrate
+```
 
 ```ruby
-receipt = Clickwrap.capture_and!(
-  :withdrawal_authorization,
-  actor: current_user,
-  subject: withdrawal,
-  http_request: request,
-  submission: clickwrap_submission
-) do |pending_receipt|
-  withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
+class Withdrawal < ApplicationRecord
+  has_clickwrap_evidence policy: :withdrawal_authorization,
+                         statement: :withdrawal,
+                         actor: :user,
+                         subject: :self
+end
+
+capture_clickwrap_and!(:withdrawal_authorization, actor: current_user, subject: withdrawal) do |pending_receipt|
+  withdrawal.clickwrap_event_id = pending_receipt.event_id
+  withdrawal.save!
+  withdrawal
+end
+
+withdrawal.clickwrap_receipt.verify.success?   # one line, years later
+```
+
+When the protected domain row needs the person's submitted choice, read it
+from the pending receipt rather than parsing controller params a second time:
+
+```ruby
+capture_clickwrap_and!(:privacy_preferences, subject: membership) do |pending_receipt|
+  membership.show_on_public_profile =
+    pending_receipt.granted?(:public_profile_visibility)
+  membership.save!
 end
 ```
 
-Within one supported database transaction, Clickwrap:
+`answer_for`, `answered?`, `granted?`, and `declined?` read the validated,
+server-bound event being committed. An optional control left unselected returns
+`nil`/`false`; a statement name the policy never declared raises. Silence can
+therefore never become permission, while a typo cannot silently disable a
+feature. This keeps the browser's raw params out of protected domain logic.
 
-1. verifies actor, tenant, subject, presentation, policy, document digests, answers, expiry, and nonce;
-2. acquires the required idempotency/subject locks;
-3. appends the pending evidence event;
-4. yields its receipt to the protected domain action;
-5. records the resulting outcome and consumes one-time authorization where applicable;
-6. commits both together; and
-7. invokes optional notifications/analytics only after commit.
+This model-first deployment order is safe. Before the generated column exists,
+`has_clickwrap_evidence` stays inert and `clickwrap_receipt` returns `nil`; as
+soon as the migration adds `clickwrap_event_id`, every new row is fail-closed
+by default. That also lets historical data migrations replay schemas from
+before Clickwrap without loading a model method for a column that did not yet
+exist. It does not weaken current rows: after the column exists, missing,
+mismatched, or replaced links fail validation.
 
-If the event write fails, the protected action rolls back. If the block raises, the event rolls back. Repeating an identical idempotency key returns the original result without running the block twice. A conflicting replay fails with a stable `Clickwrap::ReplayRejected` result.
-
-The block receives a read-only `Clickwrap::PendingReceipt`. Its stable `event_id` can be stored by the domain row, but export/verification methods are unavailable until commit. `capture_and!` returns the finalized `Clickwrap::Receipt`; if the transaction rolls back, the pending object becomes invalid instead of masquerading as committed evidence.
-
-Atomic commit does not give Clickwrap permission to guess what a host method meant. Without a configured outcome snapshot, the receipt says only that the named policy, bound subject, evidence event, and block committed together. `record_protected_outcome_with` can add an exact post-action reference/state/fingerprint; it runs and validates inside the transaction, and a failure rolls the whole operation back.
-
-The transaction contract is documented precisely for ownership, nested transactions, savepoints, deadlock/serialization retries, idempotency, callbacks, and after-commit behavior. Automatic retries occur only when Clickwrap can prove the block is safe to retry; otherwise a stable retryable error returns control to the host. Clickwrap never promises atomicity across two independent systems.
-
-### Capture without a protected action
+And when a *person* causes the refusal — a stale token, a required box left unticked — every such case is one exception family carrying a sentence you can actually show them:
 
 ```ruby
-receipt = Clickwrap.capture!(
-  :current_terms,
-  actor: current_user,
-  http_request: request,
-  submission: clickwrap_submission
-)
-```
-
-### Devise and Rails authentication
-
-The installer detects the authentication stack and generates an explicit adapter—not a hidden `after_create` callback.
-
-For Devise, the generated controller reads:
-
-```ruby
-class Users::RegistrationsController < Devise::RegistrationsController
-  clickwraps_registration_with :signup
+def create
+  # ... capture_clickwrap_and! as above ...
+rescue Clickwrap::CaptureRefused => refusal
+  redirect_to new_withdrawal_path, alert: refusal.user_facing_message, status: :see_other
 end
 ```
 
-For Rails’ authentication generator, the generated registration command uses:
+Or drop the bang and let it read like `save`. `capture_clickwrap_and` and
+`capture_clickwrap` absorb exactly that family, return `false`, put the
+per-statement message beside the control it belongs to, and leave the whole
+refusal on `clickwrap_refusal`:
 
 ```ruby
-register_with_clickwrap :signup, user: @user do
-  @user.save!
+def create
+  receipt = capture_clickwrap_and(:withdrawal_authorization, subject: withdrawal) do |pending_receipt|
+    withdrawal.submit!(authorized_by_clickwrap_event: pending_receipt.event_id)
+  end
+
+  unless receipt
+    flash.now[:alert] = clickwrap_refusal.user_facing_message
+    return render :new, status: :unprocessable_entity
+  end
+
+  redirect_to withdrawal
 end
 ```
 
-Both integrations ensure account activation and required evidence commit together. Emails, sign-in, redirects, and after-commit side effects occur only after the transaction has succeeded. A failed evidence write never leaves a normal public account silently active.
+Nothing else is absorbed, by either form. Infrastructure failures stay outside that family and stay loud: an evidence write that fails refuses the protected action instead of being swallowed. So do lifecycle conflicts — a conflicting replay (`Clickwrap::ReplayRejected`) or an already-consumed one-time authorization (`Clickwrap::OneTimeAuthorizationConflict`) still raises, because "this was already done" needs a domain answer that no generic rescue can supply honestly.
 
-Signup is modeled honestly as a prospective-actor flow:
+That atomicity has one exact boundary: Clickwrap's event and the protected domain
+write must use the same database connection. If a host model uses another Rails
+database/connection, its transaction cannot commit atomically with Clickwrap's
+tables. Put Clickwrap on the same connection for database-local work; use an
+explicit outbox/reconciliation design for another database or service.
 
-1. the GET creates a short-lived, signed registration-flow identifier;
-2. the presentation token binds to that flow, the form object type, and any host-selected tenant—not to a fictional persisted or authenticated user;
-3. the adapter validates the submitted presentation before account activation;
-4. one transaction persists the account, binds its stable actor reference to the evidence, and commits both; and
-5. the receipt records `account_registration` attribution and the actual pre-registration authentication state.
+For capture without a protected action, use `Clickwrap.capture!`. For external providers (Stripe, identity services) that can't share your database transaction, use `Clickwrap.authorize_external_action!` — a pending authorization plus idempotent outbox, so a provider timeout never becomes a fictional success or a double debit.
 
-Email addresses, passwords, and raw signup fields are not copied into the token. A token from another browser flow, tenant, form object, or already-created account is rejected. Applications that own a custom registration service use the same primitive directly:
-
-```ruby
-receipt = Clickwrap.register!(
-  :signup,
-  prospective_actor: @user,
-  http_request: request,
-  submission: clickwrap_submission
-) do
-  @user.save!
-end
-```
-
-`register!` returns the same receipt type as `capture_and!`; the authentication adapters are thin conveniences over it.
-
-### External providers use an outbox, not pretend-ACID
-
-Stripe, identity services, timestamp providers, and remote signatures cannot share your database transaction. Use a pending authorization and idempotent outbox:
+Controllers get the ambient actor, tenant, request, authentication context, and
+submitted presentation automatically:
 
 ```ruby
-authorization = Clickwrap.authorize_external_action!(
+authorization = authorize_clickwrap_external_action!(
   :identity_provider_handoff,
-  actor: current_user,
   subject: verification,
-  http_request: request,
-  submission: clickwrap_submission
-)
-
-ProviderHandoffJob.perform_later(
-  authorization_id: authorization.id,
-  idempotency_key: authorization.idempotency_key
+  provider_name: "identity_provider"
 )
 ```
+
+If a migration requires a legacy/domain projection to commit with the event and
+pending outbox row, use the deliberately named local-transaction callback (or
+the equivalent block form):
 
 ```ruby
-authorization.record_provider_success_and_consume!(provider_receipt)
+authorization = authorize_clickwrap_external_action!(
+  :identity_provider_handoff,
+  subject: verification,
+  provider_name: "identity_provider",
+  after_pending_action_is_saved_inside_transaction: lambda do |pending_action:, pending_receipt:|
+    LegacyAuditLog.create!(
+      event_id: pending_receipt.event_id,
+      external_action_id: pending_action.id
+    )
+  end
+)
 ```
 
-That final method is one idempotent local transaction. Failures and ambiguous timeouts use `record_provider_failure!` and `record_provider_outcome_unknown!`; the reconciliation task can safely resolve them later. A provider timeout never becomes a fictional success or a second debit.
+It runs once, only on initial capture, inside that local database transaction;
+if it raises, all three local writes roll back. Never call the provider or do
+network work there. The provider call starts only after the helper returns.
+
+### One-time, subject-bound authorizations
+
+```ruby
+Clickwrap.policy :withdrawal_authorization do
+  acknowledge :withdrawal_requirements
+
+  declare :coverage_exclusivity,
+    subject_fingerprint_version: "covered-orders-v1",
+    subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_orders_fingerprint }
+
+  authorize :withdrawal,
+    one_time: true,
+    valid_for: 10.minutes,
+    requires: %i[withdrawal_requirements coverage_exclusivity]
+
+  retain_with :regulated_evidence
+end
+```
+
+The authorization is locked and consumed in the same transaction as the withdrawal. Another withdrawal, a changed subject, a stale declaration, or a concurrent replay cannot reuse it. This is the difference between "the user once accepted something" and "this exact evidence authorized this exact operation."
 
 ## Ask readable questions everywhere
 
@@ -573,35 +555,38 @@ The actor proxy is the everyday API:
 
 ```ruby
 user.clickwraps.current_for?(:signup)
-user.clickwraps.required_for?(:current_terms)
 user.clickwraps.agreed_to?(:terms)
-user.clickwraps.acknowledged?(:privacy_notice)
 user.clickwraps.consented_to?(:product_updates)
-user.clickwraps.declared?(:non_professional_driver, subject: scheme)
+user.clickwraps.declared?(:independent_contractor, subject: scheme)
 user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
 ```
 
-Every predicate has a structured form when “no” needs an explanation:
+When "no" needs an explanation, `verify` returns a structured result with a stable error symbol (`:declaration_expired`, `:consent_withdrawn`, `:wrong_subject`, …), a matching predicate, and a localized message — you never parse English to make an authorization decision. `Clickwrap.require!` raises a typed error carrying the same result. Service boundaries read aloud:
 
 ```ruby
-result = Clickwrap.verify(
-  :withdrawal_authorization,
-  actor: user,
-  subject: withdrawal
-)
+preparation = Clickwrap.verify(:withdrawal_preparation, actor: user,
+                               require_current_revision: true)
+declaration = Clickwrap.verify(:coverage_exclusivity, actor: user, subject: user,
+                               require_current_revision: true)
 
-result.success?              # => false
-result.error                 # => :declaration_expired
-result.message               # localized human explanation
-result.event_id
-result.details               # stable machine-readable facts, no surprise PII
+declaration.stale_policy_revision?         # legal reworded it → re-ask
+declaration.subject_fingerprint_mismatch?  # what it covers changed since capture
+declaration.recorded_after?(preparation)   # ordering enforced, not assumed
 ```
 
-Stable errors cover wrong actor/tenant/subject, stale policy, unseen document version, missing answer, expiry, withdrawal, predecessor/order, fingerprint mismatch, consumption, replay, and integrity failure.
+`recorded_after?` answers from a database-assigned recording sequence, so it stays true across actors, application processes, and same-microsecond writes — ULID lexical order is deliberately not used as chronology. Read its `false` carefully: it means "not after", **or** that one of the two has no sequence at all, which is the case for evidence recorded before the ordering migration and for a missing event. An upgrade cannot invent honest order for rows written before it, so `false` is the answer it gives rather than a guess. Branch on it as a guard (`return unless declaration.recorded_after?(preparation)`), never as proof of the opposite.
 
-The convention is consistent: predicates answer booleans, `verify` returns a result, and bang methods raise a typed error carrying that same result. Applications never need to parse an English error message to make an authorization decision.
+`require_current_revision: true` fails evidence recorded under a superseded policy revision, so "we changed the wording, everyone re-accepts" is one keyword instead of a hand-rolled revision comparison.
 
-### Controller gates that always have remediation
+The same call takes an event id, which is how you re-ask about one specific recorded act years later:
+
+```ruby
+Clickwrap.verify(event_id, subject: order_batch, require_current_revision: true)
+```
+
+Both keywords mean exactly what they mean above: `subject:` re-derives the fingerprint from the record as it is *now*, and `require_current_revision:` compares the act's recorded revision against the wording compiled today. That is the complete "is this old evidence still good?" question, so nothing needs to reach into `Clickwrap::PolicyRevision` or `Clickwrap::SubjectFingerprint` to ask it. If the policy is no longer declared at all, the result says `:unknown_policy` — "we can no longer check this" never gets spelled the same way as "this is fine".
+
+Controller gates redirect users to a ready-made remediation screen and bring them back when they're done:
 
 ```ruby
 class BillingController < ApplicationController
@@ -609,371 +594,163 @@ class BillingController < ApplicationController
 end
 ```
 
-The gate redirects HTML/Hotwire users to the mounted policy capture screen and returns them to the original safe destination after completion. API clients receive a structured `clickwrap_required` response with a presentation endpoint.
-
-A required gate must have a remediation route or an explicit host support fallback. Clickwrap refuses to compile a dead-end gate.
-
-Security-sensitive services should still verify at the domain boundary:
+### Reacceptance when documents change
 
 ```ruby
-Clickwrap.require!(
-  :withdrawal_authorization,
-  actor: user,
-  subject: withdrawal
-)
+Clickwrap.policy :current_terms do
+  agree_to :terms, require_current_version: true
+
+  retain_with :ordinary_agreement_evidence
+end
 ```
 
-Controller gates improve flow; service verification protects the action.
+Publish a new version and `current_for?` flips to `false` for everyone who accepted the old one. Preview the blast radius before you activate it:
+
+```bash
+bin/rails clickwrap:reacceptance:plan POLICY=current_terms
+```
 
 ## Consent that can actually be withdrawn
 
-Consent is purpose-specific, initially unselected, and separate from Terms or a Privacy Notice acknowledgment:
+Consent is purpose-specific, initially unselected, and separate from Terms:
 
 ```ruby
-Clickwrap.document :marketing_notice,
-  version: "2026-08-15",
-  from: Rails.root.join("app/content/legal/marketing.md")
-
 Clickwrap.policy :marketing_preferences do
-  consent_to :product_updates,
-    document: :marketing_notice,
-    optional: true,
-    withdrawal_path: "/settings/privacy"
-
-  consent_to :partner_offers,
-    document: :marketing_notice,
-    optional: true,
-    withdrawal_path: "/settings/privacy"
+  consent_to :product_updates, optional: true, withdrawal_path: "/settings/privacy"
+  consent_to :partner_offers,  optional: true, withdrawal_path: "/settings/privacy"
 
   retain_with :marketing_consent_evidence
 end
 ```
 
-Leaving an optional checkbox unselected creates no consent grant. The capture receipt can show that the option was offered and not granted, but it does not call silence an affirmative refusal. A policy that truly needs a recorded yes/no choice uses explicit unselected controls:
-
 ```ruby
-consent_to :research_contact,
-  choices: { yes: :grant, no: :decline },
-  require_an_explicit_choice: true,
-  withdrawal_path: "/settings/privacy"
+Clickwrap.withdraw!(:product_updates, actor: current_user, http_request: request,
+  because: "The user withdrew this purpose in privacy settings")
 ```
 
-```ruby
-Clickwrap.withdraw!(
-  :product_updates,
-  actor: current_user,
-  http_request: request,
-  because: "The user withdrew this purpose in privacy settings"
-)
-```
+Withdrawal appends an event — it never deletes or mutates the historical grant. Declarations work the same way: they expire, get corrected, or get superseded through linked lifecycle events, without pretending the original statement never happened.
 
-Withdrawal appends an event; it never deletes or mutates the historical grant. The policy’s post-commit hook can stop future processing or enqueue host-owned deletion work without making the original transaction depend on an analytics/job backend.
+Three of those transitions are new statements by the same person rather than administrative flags, so each one is captured through a real presentation and submission, exactly like the first statement was:
 
 ```ruby
-config.after_event_is_committed = lambda do |event|
-  Marketing::StopProcessingJob.perform_later(event.actor_id) if event.consent_was_withdrawn?
-end
+# The facts someone declared changed. A correction never implies the original
+# was false when it was made.
+Clickwrap.correct_declaration!(:contractor_status, actor: current_user, subject: engagement,
+  submission: clickwrap_submission,
+  because: "The person told us their circumstances changed")
+
+# A new validity period, starting now — never the old expiry pushed along, so a
+# stale expiry cannot quietly survive a renewal.
+Clickwrap.renew!(:contractor_status, actor: current_user, subject: engagement,
+  submission: clickwrap_submission,
+  because: "The person renewed their declaration before it lapsed")
+
+# Consent that now covers something narrower or wider. Rescoping is not
+# withdrawal: the permission stays active, under new terms.
+Clickwrap.change_consent_scope!(:product_updates, actor: current_user,
+  submission: clickwrap_submission,
+  because: "The person narrowed this permission in privacy settings")
 ```
 
-Clickwrap structurally requires an accessible withdrawal path. It does not decide whether consent is the correct lawful basis.
+Every one of them appends a linked event, leaves the earlier event exactly as it was recorded, and produces a receipt that verifies on its own.
 
-## Expiring and corrected declarations
+Seeds, imports, and admin-created accounts never fake a human click either — `Clickwrap.exempt!` records an explicit exemption with who created it and why, and exemptions never satisfy `agreed_to?`.
 
-```ruby
-Clickwrap.policy :driver_declaration do
-  declare :non_professional_driver,
-    document: :driver_declaration,
-    valid_for: 1.year,
-    subject_fingerprint_with: ->(scheme) { scheme.evidence_fingerprint }
-end
-```
-
-```ruby
-user.clickwraps.declared?(:non_professional_driver, subject: scheme)
-user.clickwraps.declaration(:non_professional_driver, subject: scheme).expires_at
-```
-
-Renewal always starts a new validity period. Correction, supersession, and expiry append linked lifecycle events:
-
-```ruby
-Clickwrap.correct_declaration!(
-  :non_professional_driver,
-  actor: user,
-  subject: scheme,
-  replaces: old_receipt,
-  http_request: request,
-  submission: clickwrap_submission
-)
-```
-
-The host retains domain-specific eligibility and declaration models. Clickwrap owns presentation, evidence, lifecycle, receipts, and verification—not your business rules.
-
-## Narrow, one-time authorizations
-
-```ruby
-Clickwrap.policy :withdrawal_authorization do
-  acknowledge :withdrawal_requirements
-
-  declare :ride_exclusivity,
-    subject_fingerprint_with: ->(withdrawal) { withdrawal.covered_rides_fingerprint }
-
-  authorize :withdrawal,
-    one_time: true,
-    valid_for: 10.minutes,
-    requires: %i[withdrawal_requirements ride_exclusivity],
-    record_protected_outcome_with: lambda { |withdrawal|
-      {
-        action: :submitted,
-        reference: withdrawal.to_gid.to_s,
-        fingerprint: withdrawal.evidence_fingerprint
-      }
-    }
-end
-```
-
-`capture_and!` locks and consumes the authorization in the same transaction as the withdrawal. Another withdrawal, changed ride set, stale declaration, wrong ordering, or concurrent replay cannot reuse it.
-
-This is the core difference between “the user once accepted something” and “this exact evidence authorized this exact operation.”
-
-## Operator attestations
-
-```ruby
-Clickwrap.policy :manual_bank_transfer do
-  attest :beneficiary_matches_verified_identity
-  attest :bank_accepted_transfer
-  authorize :record_transfer_as_sent, one_time: true
-end
-```
-
-Attestations preserve which authorized operator asserted which operational fact, under which role and authentication context, while the host owns permissions and domain state.
-
-## External agreements and imported receipts
-
-When Stripe, DocuSign, Ironclad, or another provider owns the presentation, do not pretend your application captured the click:
-
-```ruby
-Clickwrap.import_external_receipt!(
-  :connected_account_service_agreement,
-  actor: user,
-  provider_name: "stripe",
-  provider_event_id: account.id,
-  provider_receipt: account.service_agreement,
-  verified_with: :stripe_api,
-  verified_at: Time.current
-)
-```
-
-The event is labeled `external_receipt`, preserves provider provenance and validation status, and can participate in host verification without becoming a fictional local presentation.
-
-## Receipts answer “show me exactly what happened”
+## Receipts show exactly what the application recorded
 
 Every event has one canonical JSON receipt and one human-readable HTML projection:
 
 ```ruby
 receipt = Clickwrap.receipt(event_id)
-
 receipt.to_canonical_json
 receipt.to_html
-receipt.to_pdf              # optional renderer; never the source of truth
 receipt.verify
 ```
 
-An abbreviated receipt looks like:
+An abbreviated receipt:
 
 ```json
 {
   "schema": "clickwrap.receipt.v1",
   "event_id": "01K2Y8T5QY0N4V6N1H4G4CQY8J",
   "policy": { "key": "signup", "revision": "sha256:..." },
-  "actor": {
-    "type": "User",
-    "reference": "usr_...",
-    "attribution": { "method": "account_registration", "authenticated": false }
-  },
   "acts": [
     { "statement": "terms", "kind": "agreement", "action": "agreed" },
-    {
-      "statement": "privacy_notice",
-      "kind": "acknowledgment",
-      "action": "acknowledged"
-    }
+    { "statement": "privacy_notice", "kind": "acknowledgment", "action": "acknowledged" }
   ],
   "documents": [
-    { "key": "terms", "version": "2026-08-15", "locale": "en", "sha256": "..." },
     {
-      "key": "privacy_notice",
+      "key": "terms",
       "version": "2026-08-15",
       "locale": "en",
-      "sha256": "..."
+      "source_digest": "sha256:...",
+      "rendered_digest": "sha256:..."
     }
   ],
   "presentation": {
-    "manifest_sha256": "...",
+    "manifest_digest": "sha256:...",
     "submit_button_text": "Create account",
     "offered_at": "2026-08-15T12:34:56.123456Z"
   },
-  "outcome": { "type": "User", "reference": "usr_...", "status": "created" },
-  "request_evidence": {
-    "ip_address": { "state": "not_configured" },
-    "browser_user_agent": { "state": "not_configured" },
-    "ip_geolocation": { "state": "not_configured" }
-  },
-  "integrity": { "digest_algorithm": "sha256", "verified": true }
+  "integrity": { "digest_algorithm": "sha256", "receipt_digest": "sha256:..." }
 }
 ```
 
-The bundle can include exact document files, manifest, per-act lifecycle/predecessor graph, protected outcome, optional provider receipts, integrity/checkpoint verification, system explanation, and verifier version.
-
-`to_canonical_json` returns the verifiable core receipt and omits raw sensitive request evidence by default. Raw IP address, browser user-agent, and IP-geolocation values live in a separately encrypted evidence annex with its own digest, authorization, retention, hold, and disposition state. That boundary lets the core event remain immutable when a permitted retention process later removes the annex.
-
-Canonical receipts use versioned schemas and the [JSON Canonicalization Scheme (RFC 8785)](https://www.rfc-editor.org/rfc/rfc8785), plus a published Clickwrap profile for UTC timestamps, decimals, identifiers, binary digests, absent values, and extension names. They never depend on Ruby object serialization, YAML, database column order, or the current policy source. Unknown schema versions fail honestly instead of being “best effort” reinterpreted.
-
-### View and download
-
-With the engine mounted:
-
-```ruby
-clickwrap_receipt_path(receipt)
-```
-
-Actors can view their own receipts. Operator access is always host-authorized:
-
-```ruby
-config.authorize_receipt_access_with = lambda do |controller, receipt|
-  controller.current_user == receipt.actor || controller.current_user.admin?
-end
-```
-
-Foreign IDs return not found; existence is not leaked.
-
-### Export only the sensitive fields you intend
-
-```ruby
-Clickwrap.export_receipt(
-  receipt,
-  requested_by: current_operator,
-  because: "Investigate dispute 2026-184",
-  include_ip_address: false,
-  include_browser_user_agent: false,
-  include_ip_geolocation: false
-)
-```
-
-There is intentionally no vague `include_sensitive_context: true` switch. Unredacted operator access and export require host authorization plus a human-readable reason and append an access event. Actor self-service follows the host’s configured disclosure policy without revealing internal fraud/security fields by accident.
-
-### Verify inside or outside the application
-
-```ruby
-Clickwrap::Receipt.verify(canonical_json, documents: document_files)
-```
+Verify it inside the app, or completely outside it with the bundled CLI:
 
 ```bash
 clickwrap verify receipt.json --documents ./receipt-documents
 ```
 
-The standalone verifier does not need the host application’s source code. At the baseline tier it verifies schema, canonical bytes, digests, links, and bundled content consistency; it does not claim that a self-contained file could not have been fabricated by someone controlling every source. Independent anchors/provider signatures add the stronger origin/time evidence they actually supply. Golden fixtures ensure new releases continue verifying every historical receipt format.
+Golden fixtures make a verifier regression for any released receipt schema fail the test suite.
 
-## Optional request evidence, private by default
+With the engine mounted, users can view and download their own receipts, and operator access is always host-authorized. Read the [receipts and verification guide](guides/receipts-and-verification.md) for exports, bundles, and what each verification tier does and doesn't establish.
 
-Clickwrap always records its event ID, server time, capture channel, policy/application version, configured actor/authentication source, and HTTP request ID when available.
+## Request evidence is off by default
 
-It records none of these personal/request-derived fields unless the initializer or policy names them:
-
-- raw IP address;
-- raw browser User-Agent;
-- IP-geolocation country, region, city, postal code, coordinates, timezone, continent, metro code, or accuracy radius;
-- browser/device fingerprints; or
-- actual GPS/device location.
-
-Browser fingerprinting and GPS are never collected by the base gem. IP geolocation is provider-estimated network context—not identity, GPS, a street address, or proof that the person was physically there.
-
-Those defaults are evidence design, not fear of useful data. IP addresses and linked online identifiers can be personal data ([Breyer, C-582/14](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A62014CJ0582)); keeping them on first-party infrastructure does not remove purpose, lawful-basis, transparency, minimization, protection-by-default, security, retention, or high-risk-assessment duties ([GDPR Articles 5](https://eur-lex.europa.eu/eli/reg/2016/679/art_5/oj/eng), [6](https://eur-lex.europa.eu/eli/reg/2016/679/art_6/oj/eng), [13](https://eur-lex.europa.eu/eli/reg/2016/679/art_13/oj/eng), [25](https://eur-lex.europa.eu/eli/reg/2016/679/art_25/oj/eng), [32](https://eur-lex.europa.eu/eli/reg/2016/679/art_32/oj/eng), and [35](https://eur-lex.europa.eu/eli/reg/2016/679/art_35/oj/eng)). Clickwrap therefore supports rich capture while requiring a present, named posture.
-
-MaxMind expressly describes GeoIP as approximate and not capable of identifying a household, individual, or street address; Cloudflare describes its fields as location information for an IP address ([MaxMind accuracy guidance](https://support.maxmind.com/knowledge-base/articles/maxmind-geolocation-accuracy); [Cloudflare IP geolocation](https://developers.cloudflare.com/network/ip-geolocation/)). Clickwrap preserves that uncertainty instead of polishing an estimate into a stronger claim.
-
-### Enable exactly what one policy needs
+`clickwrap` always records its event ID, server time, capture channel, and policy version. It records **no** IP addresses, browser user-agents, or IP geolocation unless a policy names the field with a purpose and a retention rule:
 
 ```ruby
 Clickwrap.policy :regulated_authorization do
   authorize :regulated_action, one_time: true, valid_for: 10.minutes
 
-  review_request_evidence_configuration_on Date.new(2027, 8, 15)
-
   record_ip_address(
     encrypted: true,
     retain_until: :regulated_evidence_retention_ends,
-    because: "Investigate account compromise and disputes about this action",
-    legal_basis_reference: "LIA-SECURITY-2026-01"
+    because: "Investigate account compromise and disputes about this action"
   )
 
-  record_browser_user_agent(
-    encrypted: true,
-    retain_until: :regulated_evidence_retention_ends,
-    because: "Corroborate the client context used for this action",
-    legal_basis_reference: "LIA-SECURITY-2026-01"
-  )
-
-  record_ip_geolocation(
-    country: true,
-    region: true,
-    city: true,
-    postal_code: false,
-    latitude_and_longitude: true,
-    timezone: true,
-    continent: false,
-    metro_code: false,
-    accuracy_radius_in_kilometers: true,
-    using: :trackdown,
-    retain_until: :regulated_evidence_retention_ends,
-    because: "Corroborate anomalous access and investigate action disputes",
-    legal_basis_reference: "LIA-SECURITY-2026-01",
-    data_protection_impact_assessment_reference: "DPIA-2026-04"
-  )
+  retain_with :regulated_evidence
 end
 ```
 
-Every enabled IP-geolocation result carries provider name/source, estimated state, resolution time, unavailable reason, and any database/accuracy provenance the resolver supplies. A policy cannot keep provider-derived coordinates while stripping the uncertainty needed to interpret them.
+Recorded values live in a separately encrypted annex with their own retention, so
+they can be deleted later without rewriting the core event payload. Core payloads
+have their own reviewed disposition path and leave a digest-linked tombstone.
+There is deliberately no `gdpr_compliant_mode` or `maximum_evidence` switch —
+every field is named individually, in plain English.
 
-Receipts distinguish `not_configured`, `unavailable`, `recorded`, `redacted_for_this_viewer`, `deleted_after_retention`, and `held`. “Blank” is never allowed to blur “we chose not to collect it” into “collection failed.”
-
-The browser cannot submit or replace server-observed values. Clickwrap conventionally reads `request.remote_ip`, and the host must configure/test trusted proxies correctly; Rails documents the forwarding, trusted-proxy, and spoof-check assumptions in [`ActionDispatch::RemoteIp`](https://api.rubyonrails.org/classes/ActionDispatch/RemoteIp.html).
-
-Required request enrichment resolves before the evidence/domain transaction begins and is carried into it as verified input; it is never filled in later by analytics. A policy chooses explicitly whether an unavailable resolver blocks capture or produces an `unavailable` state. Network resolvers are supported, but local databases or already-verified edge metadata avoid holding a domain transaction open around a remote call.
-
-### Trackdown is the optional official resolver
+For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) 0.4 or newer is the optional official resolver:
 
 ```ruby
-bundle add trackdown
+Trackdown.configure do |trackdown|
+  trackdown.verify_request_came_through_trusted_cloudflare_path_with do |request|
+    request.env["my_app.cloudflare_origin_was_verified"] == true
+  end
+end
+
+config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 ```
 
-```ruby
-config.ip_geolocation_resolver =
-  Clickwrap::IpGeolocation::TrackdownResolver.new
-```
+Clickwrap passes the exact Rack request to Trackdown and records the provider that actually
+answered, its source and database provenance, and Trackdown's per-request trust result. It
+never treats CDN header presence as proof of a trusted path. The host must derive the Rack
+flag above from its real origin protection; Trackdown documents the supported patterns in
+[“Did the request really come through your CDN?”](https://github.com/rameerez/trackdown/blob/v0.4.0/README.md#did-the-request-really-come-through-your-cdn).
 
-`trackdown` remains optional. Clickwrap stores only the fields authorized by the active server policy, never the entire result object. Provider presence is not source trust: Cloudflare-derived fields are marked host-verified only when the application explicitly verifies that requests came through its trusted Cloudflare path.
+The [request evidence guide](guides/request-evidence.md) covers every field, the provenance model, and the privacy boundaries.
 
-`footprinted` remains analytics, not authoritative evidence. A sanitized event ID/policy/kind may be emitted to analytics after commit; analytics failure can never undo or substitute for the Clickwrap event.
-
-### Easy installer recipes without a fake compliance switch
-
-The installer can scaffold either starting point:
-
-```bash
-bin/rails generate clickwrap:install \
-  --request-evidence-recipe=privacy-minimized
-```
-
-```bash
-bin/rails generate clickwrap:install \
-  --request-evidence-recipe=evidence-rich
-```
-
-The second recipe asks about every field, purpose, encryption choice, access/export policy, trusted-source posture, and retention rule. It then writes every individual setting into the initializer and disappears. There is no runtime `gdpr_compliant_mode`, `maximum_evidence`, `track_everything`, or `legal_proof` option.
-
-Recipes are scaffolding, never compliance verdicts.
-
-## Retention, deletion, and legal holds are first-class
+## Retention, deletion, and legal holds
 
 Every policy chooses an application-defined retention class:
 
@@ -982,727 +759,576 @@ Clickwrap.retention :ordinary_agreement_evidence do
   retain_core_event_for 6.years
   delete_recorded_ip_address_after 90.days
   delete_recorded_browser_user_agent_after 90.days
-  delete_recorded_ip_geolocation_after 90.days
 end
 ```
 
-Event-based and “later of” rules are supported for regulated records:
-
-```ruby
-Clickwrap.retention :regulated_evidence do
-  retain_core_event_until :regulated_evidence_retention_ends
-  retain_recorded_ip_address_until :security_evidence_retention_ends
-  retain_recorded_browser_user_agent_until :security_evidence_retention_ends
-  retain_recorded_ip_geolocation_until :security_evidence_retention_ends
-end
-```
-
-```ruby
-config.calculate_retention_time_for :regulated_evidence_retention_ends do |event|
-  [
-    event.recorded_at_by_server + 5.years,
-    event.subject_liquidated_at&.+(3.years)
-  ].compact.max
-end
-```
-
-Clickwrap does not decide those periods. It makes reviewed policies executable and auditable.
-
-Preview every disposition before applying it:
+Disposition is previewed, planned, and applied explicitly — and rechecked at apply time, so a newly placed legal hold or changed policy stops a stale plan:
 
 ```bash
 bin/rails clickwrap:retention:plan
 bin/rails clickwrap:retention:apply PLAN=01K2Y8T5QY0N4V6N1H4G4CQY8J
 ```
 
-The plan is immutable, scoped, expiring, and rechecked at apply time. A newly placed hold, changed policy, changed eligibility, or stale plan stops disposition instead of deleting a broader set than the operator reviewed.
+Destructive methods say exactly what they delete (`Clickwrap.delete_recorded_ip_address!`), deletions append a disposition event, and deleting a user account never silently cascades evidence away. Each event keeps the schedule recorded when that event was created; linked lifecycle events do not inherit their root's elapsed time or get deleted merely because the root became due. Legal holds pause disposition and are recorded through named append/release transitions. Details in the [retention and legal holds guide](guides/retention-and-legal-holds.md).
 
-Destructive public methods name exactly what they remove:
+## Progressive integrity, honestly labeled
 
-```ruby
-Clickwrap.delete_recorded_ip_address!(receipt, because: "Retention period ended")
-Clickwrap.delete_recorded_browser_user_agent!(receipt, because: "Retention period ended")
-Clickwrap.delete_recorded_ip_geolocation!(receipt, because: "Retention period ended")
-```
+Start useful with an ordinary Rails database; add assurance without changing the capture API:
 
-Deletion removes the selected encrypted annex value, appends a disposition event, and changes the current receipt projection to `deleted`; it does not rewrite the historical agreement/declaration/authorization. Verification thereafter proves the immutable core event and its disposition history while reporting that the raw annex value is no longer available. A retained digest is described as a retained linkable digest, never automatically called anonymous.
+| Tier | What it adds |
+|---|---|
+| Baseline | Canonical receipts, immutable snapshots, SHA-256 digests, standalone verifier |
+| Database hardening | Adapter-specific update/delete protections |
+| Chained history | Per-tenant event chains and checkpoints |
+| Independent anchoring | A verified publication of an exact event-chain snapshot outside the primary database |
+| Third-party timestamps | A provider token over an exact event digest, with the adapter's verification result |
 
-### Legal holds
-
-```ruby
-receipt.place_on_legal_hold!(
-  because: "Pending dispute 2026-184",
-  placed_by: current_operator,
-  review_on: 6.months.from_now
-)
-
-receipt.release_legal_hold!(
-  because: "Dispute resolved",
-  released_by: current_operator
-)
-```
-
-A hold pauses scheduled disposition, requires a reason/owner/review date, and is itself append-only evidence.
-
-Deleting an actor account never silently cascades evidence. The installer uses restrictive/nullifying relationships plus a stable configured pseudonymous actor reference. Host retention policy decides what remains.
-
-### Privacy inventory and actor requests
-
-Clickwrap can describe what the application configured without pretending that configuration is lawful:
+Each tier states exactly what threat it addresses. A local hash is never called tamper-proof, server time is never called trusted time, and an IP address is never called identity. The [integrity guide](guides/integrity.md) has the threat model.
 
 ```bash
-bin/rails clickwrap:privacy:inventory
-bin/rails clickwrap:privacy:export ACTOR=gid://my-app/User/123
-bin/rails clickwrap:privacy:disposition:plan ACTOR=gid://my-app/User/123
+bin/rails clickwrap:verify        # verify continuously in production
 ```
 
-The inventory lists every policy, personal/request-derived field, stated purpose, host-supplied legal-basis reference, provider/source, encryption state, access callback, retention rule, unresolved host event, and review date. The actor export uses the same authorization/redaction rules as receipts. The disposition command only creates a reviewable plan; it does not decide whether an erasure request overrides retention duties, legal claims, or a hold.
+## Works with Devise, Rails authentication, Hotwire, and APIs
 
-Programmatic equivalents return structured results for a host-owned privacy workflow:
+The installer detects your authentication stack and prints the exact door line to add, with your own file path and class name filled in. You add it yourself: this is an explicit adapter you can read in your own controller, not a hidden `after_create` callback the gem installs behind your back.
 
 ```ruby
-Clickwrap::Privacy.inventory
-Clickwrap::Privacy.export_for(actor, requested_by: current_operator)
-Clickwrap::Privacy.plan_disposition_for(
-  actor,
-  requested_by: current_operator,
-  because: "Verified erasure request DSAR-2026-41"
-)
-```
-
-Correcting an actor’s current email/name or unlinking an account changes the host projection, not the historical snapshot. A host may append a correction/linkage event when needed; Clickwrap never silently edits what an old receipt recorded.
-
-## Progressive, honest integrity
-
-Clickwrap starts useful with an ordinary Rails database and lets serious applications add assurance without changing the capture API.
-
-| Tier | Capability | Honest claim |
-|---|---|---|
-| Baseline | Canonical receipts, immutable snapshots, versioned SHA-256 digests, append-only public API, independent verifier | Detects accidental/ordinary mutation of the verified bytes |
-| Database hardening | Constraints and adapter-specific update/delete protections | Rejects unsupported mutation paths within the documented database threat model |
-| Chained history | Per-tenant or per-aggregate event chains/checkpoints | Makes rewriting history detectable when checkpoints remain trustworthy |
-| Independent anchoring | Heads stored/published outside the primary database | Improves evidence against a privileged primary-database rewrite |
-| Trusted timestamp/provider | RFC 3161 or qualified trust-service receipt adapters | Preserves exactly the assurance and validation status supplied by that provider |
-
-Enable optional hardening explicitly:
-
-```bash
-bin/rails generate clickwrap:hardening --database
-bin/rails db:migrate
+# Devise
+class Users::RegistrationsController < Devise::RegistrationsController
+  clickwraps_registration_with :signup
+end
 ```
 
 ```ruby
-config.digest_canonical_receipts_with = :sha256
-config.chain_event_history_with = :sha256
-config.anchor_event_history_with = MyIndependentAnchor.new
-config.timestamp_receipts_with = MyRfc3161TimestampProvider.new
+# Rails authentication generator, or any hand-rolled signup door
+def create
+  @user = User.new(user_params)
+
+  unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    return render :new, status: :unprocessable_entity
+  end
+
+  start_new_session_for @user
+  redirect_to after_authentication_url
+end
 ```
 
-A local hash is never called tamper-proof. Server-recorded time is never called trusted time. An IP address is never called identity. Provider receipts are never upgraded into guarantees the provider did not make.
+Both make account activation and its evidence commit together, with a prospective-actor flow that's honest about the fact that no authenticated user exists yet at render time.
 
-Run verification continuously:
+The door helpers come in a pair, exactly like `save` and `save!`. The non-bang form absorbs a *refused* signup — a stale presentation, an unticked box, a validation the account failed — into the same human sentences the Devise adapter paints (inline beside the control, once on the record's `:base`) and returns `false`, ready for that 422 re-render. `register_with_clickwrap!` raises instead, for flows that handle the exceptions themselves. An infrastructure failure escapes *both* forms: a broken database is not a refusal to dress up as validation, so the sign-in, the welcome email, and the redirect that would normally follow simply do not happen. That's the difference between a refused signup and a live account nobody can explain.
 
-```bash
-bin/rails clickwrap:verify
-bin/rails clickwrap:verify EVENT_ID
-```
-
-## Multi-tenancy, actors, subjects, and authority
-
-The conventional actor is `User`, but nothing is hard-coded:
+During a legacy migration, keep a required dual-write inside that same
+transaction without replacing Devise's controller action:
 
 ```ruby
-Clickwrap.configure do |config|
-  config.actor_class_name = "Account"
-  config.current_actor_method_name = :current_account
+class Users::RegistrationsController < Devise::RegistrationsController
+  clickwraps_registration_with :signup,
+    after_account_is_saved_inside_transaction: :record_legacy_acceptance!
 
-  config.find_current_tenant_with = lambda do |controller|
-    controller.current_organization
+  private
+
+  def record_legacy_acceptance!(account:, pending_receipt:)
+    account.terms_acceptances.create!(
+      clickwrap_event_id: pending_receipt.event_id,
+      accepted_at: Time.current
+    )
   end
 end
 ```
 
-Actors, subjects, and tenants are separate:
+If that required legacy write fails, the account and Clickwrap evidence roll
+back with it. Remove the hook after parity and cutover are proved.
+
+Want the gem's controls but your own button markup? `form.clickwrap_fields` takes a block and hands you the signed presentation, so the wording is read rather than retyped:
+
+```erb
+<%= form.clickwrap_fields :signup, submit_button_text: "Create account" do |clickwrap| %>
+  <button type="submit" class="btn btn--primary"><%= clickwrap.submit_button_text %></button>
+<% end %>
+```
+
+`submit:` and `submit_button_text:` are a deliberate pair: `form.clickwrap :signup, submit: "Create account"` binds the words *and renders the button*, while `form.clickwrap_fields :signup, submit_button_text: "Create account"` binds the words and leaves the action to you.
+
+Everything is server-rendered HTML: full-page requests, Turbo Drive and Frames, no-JavaScript validation, and Hotwire Native all work with the same helper. JSON/API clients use `Clickwrap.present` to get the server-owned manifest and submit answers with the signed token. Views are ejectable with `bin/rails generate clickwrap:views`, or build fully custom UI on `Clickwrap.present` plus the view helpers — `clickwrap_presentation_token_field`, `clickwrap_statement_check_box`, `clickwrap_statement_radio_button`, and `clickwrap_submit_button` own the envelope name, the control names, and a call to action worded by the signed manifest itself, while you own every class and wrapper around them. The [integrating guide](guides/integrating.md#4-custom-surfaces--the-three-contracts) shows a full custom surface.
+
+### Works with `organizations`
+
+A human `User` can bind an `Organizations::Organization` without collapsing
+the two identities:
 
 ```ruby
-Clickwrap.capture!(
-  :logo_rights_declaration,
-  actor: current_user,
-  subject: @organization,
-  tenant: current_organization,
-  http_request: request,
-  submission: clickwrap_submission
-)
-```
-
-Actor snapshots include only configured fields. Clickwrap never serializes a whole user or domain object into evidence.
-
-Authentication, actor, organization, and subject are not collapsed into one polymorphic ID. A signed-in employee acting for an organization can be represented explicitly:
-
-```ruby
-Clickwrap.capture!(
-  :organization_terms,
-  actor: current_user,
-  acting_for: current_organization,
-  subject: contract,
-  authentication_context: clickwrap_authentication_context,
-  http_request: request,
-  submission: clickwrap_submission
-)
-```
-
-By default, the configured actor must match the authenticated principal. Delegation, guardianship, service-account action, and impersonation are rejected unless the policy and host authority adapter explicitly permit them. When permitted, the receipt preserves the authenticated principal, asserted actor, represented party, authority source, role, and verification time as separate facts; Clickwrap does not decide whether that authority is legally sufficient.
-
-### Anonymous actors
-
-Use a host-owned stable opaque identifier—not an IP address:
-
-```ruby
-actor = Clickwrap.anonymous_actor("checkout_#{signed_checkout_id}")
-```
-
-The host owns later account linking and identity/capacity decisions.
-
-### System-created records and explicit exemptions
-
-Seeds, imports, administrators, invitations, and service accounts must never “accept” by omitting a browser parameter or by fabricating a human click:
-
-```ruby
-Clickwrap.exempt!(
-  :signup,
-  actor: Clickwrap.system_actor("database_seed"),
-  subject: user,
-  because: "Generated demo account; no human signup occurred"
-)
-```
-
-The event is an `exemption`, not an agreement. Policies can permit or reject it explicitly. Every exemption records who/what created it and why.
-
-Exemptions never satisfy `agreed_to?`, `consented_to?`, or another human-action predicate unless a policy asks the separate `exempted_from?` question. There is no “missing checkbox means system account” inference.
-
-## Hotwire, Hotwire Native, APIs, and no-JavaScript flows
-
-The default helper is server-rendered HTML and works with:
-
-- normal full-page requests;
-- Turbo Drive and Turbo Frames;
-- validation re-renders with no JavaScript;
-- Hotwire Native web screens;
-- custom native/API presentations; and
-- operator/admin surfaces.
-
-No Stimulus controller is required for correctness. An optional tiny controller may improve disabled-submit affordances, but server validation and evidence capture work without it.
-
-### Hotwire Native
-
-Use the web component whenever possible. Legal-document links can open in the appropriate modal/sheet/external-browser context chosen by the host native shell. The same presentation token and receipt contract applies.
-
-Native path configuration remains host-owned. Mount/capture routes include both GET and form-action paths so validation stays in the intended navigation context.
-
-### JSON/API clients
-
-Present a policy through the same server-owned presenter:
-
-```ruby
-presentation = Clickwrap.present(
-  :signup,
-  actor: api_actor,
-  locale: :es,
-  capture_channel: :native_api,
-  submit_button_text: "Crear cuenta"
-)
-
-render json: presentation
-```
-
-The client renders the declared statements and returns only the signed token plus answers:
-
-```ruby
-Clickwrap.capture!(
-  :signup,
-  actor: api_actor,
-  capture_channel: :native_api,
-  submission: Clickwrap.submission_from(params),
-  client_reported_context: permitted_client_context
-)
-```
-
-`submission_from` reads only the signed presentation token and the answer keys/types declared by that manifest; unknown keys and malformed choices are rejected. Client-reported values remain explicitly labeled. They can never masquerade as server-observed IP address, server time, trusted identity, or provider-estimated IP geolocation.
-
-## Accessible defaults without a fake certification
-
-The reference helper and views ship with tested:
-
-- explicit labels and programmatic names;
-- initially unselected controls;
-- visible keyboard focus;
-- high-contrast conventional links;
-- `aria-invalid` and `aria-describedby` error relationships;
-- error summary and focus behavior;
-- keyboard operation;
-- non-color-only meaning;
-- no-JavaScript validation;
-- locale-aware document selection; and
-- review/correction support for consequential submissions.
-
-The whole host page still determines placement, clutter, contrast, action wording, accessibility, and notice quality. Clickwrap can lint known hazards; it cannot certify a host application as accessible or an agreement as enforceable.
-
-## Operations you can understand at 03:00
-
-```bash
-bin/rails clickwrap:doctor
-bin/rails clickwrap:publish:plan
-bin/rails clickwrap:publish
-bin/rails clickwrap:reacceptance:plan POLICY=current_terms
-bin/rails clickwrap:verify
-bin/rails clickwrap:export EVENT_ID
-bin/rails clickwrap:retention:plan
-bin/rails clickwrap:retention:apply PLAN=PLAN_ID
-bin/rails clickwrap:holds:review
-bin/rails clickwrap:privacy:inventory
-bin/rails clickwrap:reconcile_external_actions
-```
-
-`clickwrap:doctor` reports objective configuration and data facts:
-
-```text
-✓ 6 policies compiled
-✓ all referenced documents are published and digest-verified
-✓ signup has an atomic Devise integration
-✓ every required gate has a remediation route
-✓ request-derived personal data is off by default
-! withdrawal_authorization records IP geolocation city without a review date
-! Cloudflare source trust is unverified
-✓ no overdue disposition jobs
-✓ all checked event digests verify
-```
-
-It never prints “compliant,” “court-proof,” or “audit guaranteed.”
-
-Metrics and notifications use stable policy/kind/outcome names without raw personal data labels. Sensitive values never appear in ordinary logs, exceptions, `inspect`, notifications, or metrics.
-
-## Testing is a first-class API
-
-Include the helpers in Minitest:
-
-```ruby
-class ActiveSupport::TestCase
-  include Clickwrap::TestHelpers
+Clickwrap.policy :organization_terms do
+  agree_to :organization_terms
+  permit_acting_for_organization when_actor_is_at_least: :admin
+  retain_with :ordinary_agreement_evidence
 end
 ```
 
-Create real, internally consistent test evidence without knowing table details:
+```erb
+<%= form.clickwrap :organization_terms,
+      acting_for: current_organization,
+      submit: "Accept for #{current_organization.name}" %>
+```
+
+Authority is checked when the form is presented and reread from the membership
+inside the capture transaction. The receipt records the human actor,
+represented organization, actual role at both moments, authority criterion,
+source, and verification times separately. Clickwrap records the configured
+application-authorization fact; it does not decide whether that role is legally
+sufficient. The same integration can create a brand-new organization and its
+owner membership atomically through `create_represented_party_with_clickwrap`.
+See [Binding an organization through a human actor](guides/organizations.md).
+
+## Recipes
+
+Two situations come up in almost every real app. Here's exactly how to handle both.
+
+### "Accept the new Terms to continue" — wall the app until updated Terms are accepted
+
+You know how Apple Developer releases new terms every few months and walls off the entire dashboard until you accept them? Same pattern here: legal ships a new version of your Terms, and nobody uses your app again until they've agreed to it. Accepting the new version supersedes the old one — and you keep a receipt for every version each user ever agreed to, so you always know exactly who agreed to exactly what, and when.
+
+Bump the document version when the new text ships — in the file itself, beside
+the words that changed. The top of `app/content/legal/terms.md`:
+
+```markdown
+---
+title: Terms of Service
+last_updated: 2026-11-01
+---
+```
+
+It was `2026-08-15`; new words mean a new label. (A trailing `# comment` on
+that line is read as YAML reads it — not part of the label.)
+
+And require the current version in the policy:
 
 ```ruby
-receipt = capture_clickwrap(
-  :signup,
-  actor: user,
-  answers: { terms: true, privacy_notice: true }
-)
+# config/clickwrap.rb
+Clickwrap.policy :current_terms do
+  agree_to :terms, require_current_version: true
+
+  retain_with :ordinary_agreement_evidence
+end
+```
+
+Mount the built-in acceptance screen and wall the app:
+
+```ruby
+# config/routes.rb
+mount Clickwrap::Engine => "/agreements"
+```
+
+```ruby
+class ApplicationController < ActionController::Base
+  # Nobody gets past this until they've accepted the current Terms. Clickwrap's
+  # own acceptance, receipt, withdrawal, and document screens stay reachable
+  # automatically, so this cannot redirect-loop its remediation page.
+  requires_clickwrap :current_terms
+end
+```
+
+Publish the new version and every signed-in user gets redirected to the acceptance screen on their next request — and sent back to wherever they were going the moment they accept. Preview the blast radius before you activate it:
+
+```bash
+bin/rails clickwrap:reacceptance:plan POLICY=current_terms
+```
+
+What you get for free: the new acceptance supersedes the old one (`agreed → superseded`) without rewriting anything, and every receipt pins the exact version, locale, and byte digest of what each user agreed to — so "which exact Terms did this person accept, and when?" stays answerable years later.
+
+Want to wall off only *parts* of the app instead? Gates are per-controller and per-action, and different areas can require different policies:
+
+```ruby
+class BillingController < ApplicationController
+  requires_clickwrap :current_terms
+end
+
+class Api::DashboardController < ApplicationController
+  requires_clickwrap :developer_terms, only: %i[show update]
+end
+```
+
+### "I agree" before the account even exists — signup, Google sign-in
+
+At signup, people click "I agree" before they have an account with you: there's no `current_user` to hang the acceptance on yet, and the acceptance has to survive account creation. `clickwrap` models this honestly as a *prospective-actor* flow — the acceptance binds to a short-lived signed registration flow, then the account and its acceptance evidence commit in one database transaction, and the receipt records that this was an account registration (not an authenticated session).
+
+For plain email/password signup, the Devise and Rails-authentication adapters above already do all of this — `form.clickwrap :signup` in your signup form is the whole integration.
+
+For Google sign-in (OAuth, One Tap), the click happens on Google's side, so put the acceptance on a "finish creating your account" screen after the callback:
+
+```ruby
+# The OAuth callback doesn't create the account yet — it stashes what Google
+# said and sends the person to finish signing up.
+def google
+  session[:pending_oauth] = request.env["omniauth.auth"].slice("provider", "uid", "info")
+  redirect_to new_finish_signup_path
+end
+```
+
+```erb
+<%# The finish screen: name and email prefilled from Google, plus your Terms. %>
+<%= form_with model: @user, url: finish_signup_path do |form| %>
+  <%= form.clickwrap :signup, submit: "Create account" %>
+<% end %>
+```
+
+```ruby
+def create
+  @user = User.new(user_attributes_from(session[:pending_oauth]))
+
+  # Account + acceptance commit together, or neither happens. A refused
+  # submission re-renders the finish screen with the reason beside the control.
+  unless register_with_clickwrap(:signup, user: @user) { @user.save! }
+    return render :new, status: :unprocessable_entity
+  end
+
+  session.delete(:pending_oauth)
+  sign_in @user
+  redirect_to root_path
+end
+```
+
+The registration flow lives in your session and the presentation token is valid for two hours by default, so both comfortably survive the round-trip to Google and back. One thing `clickwrap` will not do, on purpose: record an agreement from the OAuth callback alone. "By continuing you agree" with no affirmative act isn't evidence of anything — a real acceptance step has to happen somewhere, and the finish screen is where it belongs.
+
+### One person accepts for the whole company — organization agreements
+
+Your customer is a company — but companies don't click checkboxes, people do. When an admin accepts your business terms "for Acme Inc.", two facts matter and must never blur into each other: the *organization* is the party the terms are for, and a *specific human* performed the acceptance on its behalf. Years later, the question is always the same: exactly which person accepted for the company, and what authority did they have when they did?
+
+Declare in the policy who is allowed to accept for an organization — membership alone is deliberately not enough:
+
+```ruby
+Clickwrap.policy :organization_terms do
+  agree_to :business_terms
+
+  permit_acting_for_organization when_actor_is_at_least: :admin
+
+  retain_with :ordinary_agreement_evidence
+end
+```
+
+Make the represented company conspicuous in the UI, and pass it as `acting_for:`:
+
+```erb
+<p>You are accepting these terms for <strong><%= current_organization.name %></strong>.</p>
+
+<%= form.clickwrap :organization_terms,
+      acting_for: current_organization,
+      submit: "Accept for #{current_organization.name}" %>
+```
+
+Then capture the acceptance and stamp the organization in one transaction, so the rest of your app can ask a plain domain question:
+
+```ruby
+def create
+  organization = current_organization
+
+  capture_clickwrap_and!(:organization_terms, acting_for: organization) do |pending_receipt|
+    organization.update!(terms_accepted_with_clickwrap_event_id: pending_receipt.event_id)
+  end
+
+  redirect_to organization_settings_path
+end
+```
+
+When the form is rendered, `clickwrap` verifies authority and signs that
+presentation-time source, role, criterion, and verification time into the
+manifest. At submit it requires a current membership in that exact
+organization and rereads and locks the membership role *inside* the capture
+transaction. An admin demoted between render and submit is refused; a still-
+authorized role change is recorded honestly as two different snapshots. A
+token rendered for one organization is rejected for another. The receipt keeps
+the human actor, represented organization, both authority checks, and the
+protected outcome as separate facts. An organizational acceptance never
+quietly answers a personal one, and vice versa:
+
+```ruby
+user.clickwraps.current_for?(:organization_terms, acting_for: organization)  # => true
+user.clickwraps.current_for?(:organization_terms)                            # => false
+```
+
+That receipt is exactly what you'll be asked to produce if the agreement is ever disputed: who accepted, for which company, in what role, verified when. Whether that role was *sufficient to bind the company* is a question for your counsel when they choose the `when_actor_is_at_least:` criterion — `clickwrap` records the facts that answer it. Works out of the box with the [`organizations`](https://github.com/rameerez/organizations) gem, or with your own authority model via a registered adapter. The [organizations guide](guides/organizations.md) has the full walkthrough.
+
+If the organization does not exist until this same form creates it, opt into
+that materially different flow explicitly:
+
+```ruby
+Clickwrap.policy :organization_creation do
+  declare :authority_and_content_rights,
+    statement: "I am authorized to create and act for this organization and may use the content I submit.",
+    document: nil,
+    protected_outcome_version: "created-organization-v1",
+    record_protected_outcome_with: ->(organization) {
+      Clickwrap.protected_outcome(
+        action: :created,
+        record: organization,
+        facts: { name: organization.name }
+      )
+    }
+
+  permit_acting_for_organization(
+    when_actor_is_at_least: :owner,
+    including_when_this_action_creates_the_organization: true
+  )
+
+  retain_with :ordinary_agreement_evidence
+end
+```
+
+```erb
+<%= form_with model: @organization do |form| %>
+  <%= form.clickwrap :organization_creation,
+        acting_for: @organization,
+        submit: "Create organization" %>
+<% end %>
+```
+
+```ruby
+create_represented_party_with_clickwrap(
+  :organization_creation,
+  represented_party: @organization
+) do |pending_receipt|
+  @organization.save!
+  @organization.add_member!(current_user, role: :owner)
+  @organization.update!(creation_clickwrap_event_id: pending_receipt.event_id)
+  @organization
+end
+```
+
+The form helper creates a server-owned browser-flow binding automatically. The
+manifest says authority is `not_yet_verifiable` because the membership does not
+exist yet; after the protected block returns the persisted organization and
+creates its owner membership, the adapter verifies them and Clickwrap rebinds the final GlobalID
+before commit. If any part fails, none of the organization, membership,
+evidence, or protected outcome commits. The explicit declaration is still what
+records the human's claim of pre-existing real-world authority: an owner role
+created by the transaction proves an application fact, not the truth or legal
+sufficiency of that claim.
+
+## Testing your integration
+
+Documents must be published in the test database too — presentations refuse unpublished documents in tests exactly as in production:
+
+```ruby
+# test/test_helper.rb
+class ActiveSupport::TestCase
+  include Clickwrap::TestHelpers
+  parallelize_setup { Clickwrap.publish! }  # once per parallel worker...
+end
+Clickwrap.publish!                           # ...and once per process
+```
+
+```ruby
+receipt = submit_clickwrap(:signup, actor: user, answers: { terms: true, privacy_notice: true })
 
 assert_clickwrap_current :signup, actor: user
 assert_clickwrap_agreed_to :terms, actor: user
-assert_clickwrap_acknowledged :privacy_notice, actor: user
 assert_clickwrap_receipt_verifies receipt
 ```
 
-System-test helpers drive the actual UI:
+`submit_clickwrap` is the test factory: it presents the policy through the real presenter, answers it, and captures — and it *raises* when the capture is refused, because in a test a failed capture is a failed test. That is deliberately a different verb from the controller's `capture_clickwrap`, which captures a submission a person actually sent and absorbs refusals into `false`. Same word for both would mean one name with two opposite answers to "what happens when this is refused".
+
+Integration tests can't fabricate a signed presentation token by hand — that's the point — so they read it off the rendered page the way a browser does:
 
 ```ruby
-complete_clickwrap :signup
-click_button "Create account"
+post user_registration_path, params: {
+  user: { email: "person@example.com", password: "a-real-password" },
+  **clickwrap_params_from(new_user_registration_path)   # GET the page, affirm everything
+}
+
+# Decline one statement instead:
+declined = clickwrap_params_from(new_user_registration_path, answers: { terms: false })
+
+# Choice statements submit their real rendered values. By default the helper
+# selects the first offered radio choice; name a different choice explicitly:
+contractor = clickwrap_params_from(
+  new_user_registration_path,
+  answers: { employment_kind: "contractor" }
+)
 ```
 
-Fault injection proves required atomicity:
+Checkbox statements default to their affirmative value. Radio statements
+default to the first choice rendered by the application, so tests exercise a
+value the server actually offered instead of a fabricated checkbox value.
+Pass the exact choice key when the choice matters. For a conventional
+`yes`/`no` radio group, `false` selects `no`; explicit choice keys remain the
+clearest option for domain-specific choices.
+
+If one page renders several independent Clickwrap forms, select the exact form;
+the helper refuses an ambiguous page instead of combining one form's token with
+another form's answers:
+
+```ruby
+submission = clickwrap_submission_params_from(
+  response,
+  form_css_selector: "form[action='/withdrawals/confirm']"
+)
+```
+
+Fault injection proves the atomicity claim in your own suite:
 
 ```ruby
 Clickwrap::Testing.fail_next_event_write do
-  assert_raises(Clickwrap::EventWriteFailed) do
-    perform_signup
-  end
+  assert_raises(Clickwrap::EventWriteFailed) { perform_signup }
 end
-
 assert_not User.exists?(email: "person@example.com")
-assert_no_clickwrap_event :signup
 ```
 
-Concurrency, duplicate-submit, stale-token, actor/subject swap, disposition, legal-hold, export round-trip, and legacy-import helpers ship with the gem. No tests make real provider network calls.
+## Configuration
 
-## The generated initializer explains itself
-
-The complete initializer is annotated in plain English. A representative configuration looks like:
+The generated initializer is fully annotated and every setting reads like a sentence. The essentials:
 
 ```ruby
 # config/initializers/clickwrap.rb
 Clickwrap.configure do |config|
   config.actor_class_name = "User"
   config.current_actor_method_name = :current_user
-  config.parent_controller_class_name = "ApplicationController"
-
-  config.find_current_tenant_with = lambda do |controller|
-    controller.current_organization if controller.respond_to?(:current_organization)
-  end
 
   config.authorize_receipt_access_with = lambda do |controller, receipt|
     controller.current_user == receipt.actor
   end
 
-  config.authorize_unredacted_request_evidence_access_with =
-    lambda do |controller, receipt, because|
-      controller.current_user&.security_operator? && because.present?
-  end
+  # Safe defaults: no IP address, browser user-agent, or IP geolocation is stored.
+  # Enable fields per policy, each with a plain-English purpose and retention rule.
 
-  config.identify_actor_with = ->(actor) { actor.to_gid.to_s }
-  # Add only reviewed fields your receipts truly need; never serialize the model.
-  config.snapshot_actor_with = ->(_actor) { {} }
-  config.describe_authentication_with = lambda do |controller|
-    { method: :authenticated_session, authenticated_at: controller.session[:authenticated_at] }
-  end
-
-  config.store_document_contents_in = :database
-  config.digest_canonical_receipts_with = :sha256
-  config.chain_event_history_with = nil
-  config.anchor_event_history_with = nil
-  config.timestamp_receipts_with = nil
-  config.application_version = -> { ENV["RELEASE_SHA"] }
-
-  # Safe defaults: no raw network/browser/geolocation data is stored.
-  config.record_ip_address_by_default = false
-  config.record_browser_user_agent_by_default = false
-  config.record_ip_geolocation_country_by_default = false
-  config.record_ip_geolocation_region_by_default = false
-  config.record_ip_geolocation_city_by_default = false
-  config.record_ip_geolocation_postal_code_by_default = false
-  config.record_ip_geolocation_latitude_and_longitude_by_default = false
-  config.record_ip_geolocation_timezone_by_default = false
-  config.record_ip_geolocation_continent_by_default = false
-  config.record_ip_geolocation_metro_code_by_default = false
-  config.record_ip_geolocation_accuracy_radius_in_kilometers_by_default = false
-
-  # If a default above becomes true, fill in the matching plain-English
-  # reason and a retention rule below. The policy compiler rejects an
-  # enabled default whose purpose or retention is blank.
-  config.reason_for_recording_ip_addresses_by_default = nil
-  config.reason_for_recording_browser_user_agents_by_default = nil
-  config.reason_for_recording_ip_geolocation_by_default = nil
-  config.legal_basis_reference_for_recording_ip_addresses_by_default = nil
-  config.legal_basis_reference_for_recording_browser_user_agents_by_default = nil
-  config.legal_basis_reference_for_recording_ip_geolocation_by_default = nil
-  config.review_default_request_evidence_configuration_on = nil
-
-  config.encrypt_recorded_ip_addresses = true
-  config.encrypt_recorded_browser_user_agents = true
-  config.encrypt_recorded_ip_geolocation = true
-
-  # Nil means every policy that enables the field must supply its own rule.
-  config.delete_recorded_ip_addresses_after = nil
-  config.delete_recorded_browser_user_agents_after = nil
-  config.delete_recorded_ip_geolocation_after = nil
-
-  config.read_ip_address_from_http_request_with =
-    ->(http_request) { http_request.remote_ip }
-
-  config.read_browser_user_agent_from_http_request_with =
-    ->(http_request) { http_request.user_agent }
-
-  config.ip_geolocation_resolver = nil
-  config.fail_capture_when_ip_geolocation_is_unavailable = false
-
-  # Runs only after required evidence and domain state have committed.
-  # Hook failures are reported but can never undo the committed action.
+  # Optional hooks run only after evidence and domain state have committed:
   config.after_event_is_committed = ->(event) { }
-  config.report_after_commit_failure_with = ->(error, event) { Rails.error.report(error) }
 end
 ```
 
-Every public setting validates its value and reads like a sentence. Class names are resolved lazily for Rails autoloading. Security-critical ambiguity fails at boot instead of becoming a surprising runtime default. A policy-level request-evidence declaration overrides these application defaults, so a high-risk authorization can collect more context without making ordinary signup inherit it.
+Only your decisions are live in that file. Every setting left at the gem's default appears commented with its value, under prose explaining what it does, so a reader can tell at a glance which lines somebody chose. The one deliberate exception is the request-evidence block: each `record_*_by_default` line is written even when it says `false`, because each is an answer to a question the installer asked, and "we decided not to collect this" is worth reading rather than inferring from a file that does not mention it.
 
-## Generators
+Class names are strings resolved lazily for autoloading, and ambiguity fails at boot instead of becoming a surprising runtime default. Optional external integrations are explicit: anchoring and timestamping are off (`nil`) until an adapter is configured; optional hook procs have working no-op defaults; and geolocation/document integrations run only when their corresponding policy or storage choice asks for them.
 
-```bash
-bin/rails generate clickwrap:install
-bin/rails generate clickwrap:policy driver_declaration
-bin/rails generate clickwrap:document terms
-bin/rails generate clickwrap:views
-bin/rails generate clickwrap:hardening --database
-bin/rails generate clickwrap:upgrade
-```
+### The presentation linter
 
-The installer:
-
-- detects integer/UUID keys and supported database features;
-- detects Rails authentication and Devise without making either a hard dependency;
-- stops and explains itself when actor/tenant mappings are ambiguous;
-- asks before wiring signup or mounting routes;
-- asks separately about every request-evidence field;
-- writes plain-English purposes and retention placeholders that must be reviewed;
-- never overwrites host files without normal Rails generator conflict handling; and
-- prints a post-install checklist for documents, semantics, privacy, retention, trusted proxies, full-page UI review, and tests.
-
-Upgrade generators create new migrations. Released migrations are never silently edited underneath an application.
-
-## Migrate without inventing history
-
-### From FinePrint
-
-Preview first:
-
-```bash
-bin/rails clickwrap:import:fine_print:plan
-```
-
-Then import:
-
-```bash
-bin/rails clickwrap:import:fine_print
-```
-
-FinePrint contract versions and signatures become explicit `imported_legacy` events. Fields FinePrint did not record—presentation manifest, IP address, CTA, protected action—remain `unknown` or `not_collected`; Clickwrap never synthesizes them.
-
-### From `accepted_terms_at`
+In development and test, every render is scanned for the mistakes a form can make silently — a preselected consent control, a consent sentence carrying two purposes, a document link below the submit button, a missing presentation token. Findings go to the log as warnings and never raise: a lint finding is a thing to look at, not a reason to stop a page from rendering. It is off in production, because a production request has no business scanning its own HTML on the way out.
 
 ```ruby
-Clickwrap.import_legacy!(
-  :terms,
-  actor: user,
-  occurred_at: user.accepted_terms_at,
-  known: {
-    document_version: user.terms_version
-  },
-  unknown: %i[
-    exact_document_bytes
-    presentation
-    assertion
-    submit_button_text
-    request_evidence
-  ],
-  because: "Imported from users.accepted_terms_at"
-)
+config.lint_presentations = false   # or true to run it in another environment
 ```
 
-Imports are append-only, provenance-labeled, idempotent, dry-runnable, and report every unknown. Historical weakness remains visible instead of being laundered into modern certainty.
+`nil` (the default) means "decide from the environment".
 
-## Extension seams, not dependency soup
+## Operations
 
-The core has small adapter contracts for:
-
-- document storage;
-- actor/tenant resolution;
-- identity/authentication snapshots;
-- IP geolocation;
-- independent checkpoints/anchors;
-- RFC 3161 or trust-service timestamps;
-- external clickwrap/signature providers;
-- object-lock/WORM storage;
-- PDF rendering;
-- authorization;
-- error reporting;
-- notifications; and
-- post-commit analytics/auditing.
-
-Every optional adapter has a no-op default and explicit capability reporting. Installing Clickwrap never pulls in Redis, Sidekiq, Devise, Trackdown, Active Storage, a PDF library, a cloud SDK, or an external service unless the application chooses that integration.
-
-ActiveSupport notifications are available for instrumentation:
-
-```ruby
-ActiveSupport::Notifications.subscribe("event_committed.clickwrap") do |event|
-  # event payload contains stable IDs and categories, not raw request evidence
-end
+```bash
+bin/rails clickwrap:doctor              # objective health report, never prints "compliant"
+bin/rails clickwrap:publish             # freeze document snapshots (idempotent; also rides db:prepare)
+bin/rails clickwrap:verify              # verify event digests
+bin/rails clickwrap:retention:plan      # preview disposition
+bin/rails clickwrap:privacy:inventory   # every configured personal-data field, purpose, and rule
+bin/rails clickwrap:import:fine_print   # migrate from FinePrint without inventing history
 ```
 
-Required writes are never delegated to notifications. Hooks are for observers, not authorization.
+Migrating from FinePrint or a bare `accepted_terms_at` column? Clickwrap's importer appends provenance-labeled events through its supported API: fields the old system never recorded stay `unknown` instead of being laundered into modern certainty. Direct database privileges remain outside that API's boundary. See the [migration guide](guides/migrating.md).
 
-## What Clickwrap does, what your application owns, and what the receipt proves
+## Will this hold up in court?
 
-| Area | Clickwrap provides | Your application/counsel owns | Receipt/evidence |
-|---|---|---|---|
-| Documents | immutable versions, bytes/digests, locales, publication | text, translation, fairness, legal approval, materiality | exact stored version and digest |
-| Presentation | tested controls/helper, manifest, token, stale/replay checks | whole-page placement/design, final CTA, accessibility review | server-generated manifest and accepted answers |
-| Actor | configured reference and authentication snapshot | identity proofing, capacity, authority, guardian/organization rules | exactly which configured actor/context was recorded |
-| Agreements | version/current-state mechanics | enforceability, governing law, substantive terms | agreement event and historical version |
-| Privacy notice | acknowledgment mechanics | transparency content and lawful basis for processing | notice version and acknowledgment event |
-| Consent | purposes, grant/withdrawal/renewal lifecycle | whether consent is the correct basis and whether it is freely given | exact grant/withdrawal history |
-| Declarations | statement snapshot, expiry/correction/supersession | truth, eligibility, domain validation | what was declared, when, for which subject |
-| Authorizations | scope, fingerprint, freshness, one-time consumption | domain permission and external-provider consequences | exact evidence-to-outcome binding |
-| Request evidence | explicit capture, provenance, encryption/redaction/disposition | necessity, lawful basis, disclosure, trusted proxy/source, period | selected fields and honest source/state |
-| Integrity | canonical digests, verification, optional chains/adapters | keys, infrastructure, access controls, backups, operational procedures | verification result and bounded assurance tier |
-| Retention | executable rules, holds, dry-run disposition | legally appropriate periods and case-specific holds | retention/hold/disposition history |
+Here's the honest version, in plain words, because you deserve better than marketing copy on this question.
 
-Clickwrap is engineering infrastructure, not legal advice or a compliance certificate.
+Electronic form alone is not a reason to deny a contract legal effect under the US E-SIGN Act
+([15 U.S.C. § 7001](https://www.law.cornell.edu/uscode/text/15/7001)), and the EU's eIDAS
+regulation says an electronic signature may not be denied legal effect or admissibility solely
+because it is electronic or not qualified ([Regulation 910/2014, Article 25](https://eur-lex.europa.eu/eli/reg/2014/910/2024-05-20/eng)).
+That does not decide what happens around the control in a particular downstream application:
 
-## What Clickwrap deliberately does not become
+**Courts read your whole page, not your checkbox.** In *Berman v. Freedom Financial Network* (a 2022 Ninth Circuit decision, [opinion](https://cdn.ca9.uscourts.gov/datastore/opinions/2022/04/05/20-16900.pdf)), the terms lost: the notice was in tiny gray font, the links to the terms didn't look like links, and the button said "Continue" without mentioning them — even though an acceptance flow existed. Other federal appeals courts run the same whole-interface analysis (*[Tejon v. Zeus Networks](https://media.ca11.uscourts.gov/opinions/pub/files/202411114.pdf)*, *[Toth v. Everly Well](https://www.ca1.uscourts.gov/sites/ca1/files/opnfiles/23-1727P-01A.pdf)*). Placement, font size, contrast, clutter, the words on the button: all decided by *your* page. `clickwrap` renders one accessible, initially-unselected component and records exactly what that component said — it cannot see, or fix, the rest of your screen.
 
-Clickwrap does not:
+**The words in your documents matter more than the click.** In the EU, an unfair term in a consumer contract doesn't bind the consumer even when the assent flow was otherwise effective ([Directive 93/13/EEC](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=celex%3A31993L0013)). A strong record of acceptance does not change the underlying term. The gem records your words; it can't make them fair.
 
-- draft or approve your legal documents;
-- choose a GDPR lawful basis or special-category condition;
-- decide whether a document change is material;
-- guarantee enforceability, admissibility, accessibility, or audit acceptance;
-- verify identity, age, capacity, guardianship, or organizational authority;
-- provide KYC, sanctions screening, fraud scoring, or biometrics;
-- become a cookie CMP, tracker scanner, or script blocker;
-- become DocuSign, Ironclad, a notary, a qualified trust-service provider, or a contract lifecycle platform;
-- call a local hash tamper-proof;
-- call an IP address identity or IP geolocation physical location;
-- require forced scrolling or claim it proves reading;
-- require a sprawling admin/document-authoring suite; or
-- hide collection behind `compliant: true` or `maximum_evidence: true`.
+**Who acted, and in which capacity.** `clickwrap` records the actor and the authentication and
+authority facts your application supplies; it does not establish identity, capacity, or legal
+authority. For an organization, it keeps the human actor distinct from the represented party and
+records the role or permission criterion your application checked—[see the recipe](#one-person-accepts-for-the-whole-company--organization-agreements).
 
-Adapters let those systems contribute provider receipts without changing what Clickwrap itself claims.
+**Your jurisdiction and your document type.** The US E-SIGN Act expressly excludes categories
+including wills, specified family-law matters, and specified notices
+([15 U.S.C. § 7003](https://www.law.cornell.edu/uscode/text/15/7003)). In the EU, a
+*qualified* electronic signature has the equivalent legal effect of a handwritten signature;
+Article 25 separately says other electronic signatures may not be denied legal effect or
+admissibility solely because they are electronic or not qualified
+([eIDAS Article 25](https://eur-lex.europa.eu/eli/reg/2014/910/2024-05-20/eng)).
+This gem does not produce or claim a qualified electronic signature.
 
-## FinePrint and Clickwrap solve different-sized problems
+**And GDPR consent is its own animal.** Consent has to be demonstrable and withdrawable ([GDPR Article 7](https://eur-lex.europa.eu/eli/reg/2016/679/art_7/oj/eng)) — `clickwrap` gives you both mechanics — but merely acknowledging a privacy notice is not consent (regulator guidance from Spain's AEPD, [FAQ 02.48](https://www.aepd.es/preguntas-frecuentes/2-tus-obligaciones-como-responsable-del-tratamiento/6-el-deber-de-informacion/FAQ-0248-sobre-si-el-usuario-tiene-que-dar-consentimiento-a-clausula-de-privacidad)). That's why `acknowledge` and `consent_to` are different verbs here, with different lifecycles.
 
-[FinePrint](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/README.md#L7-L25) is established Rails prior art for versioned contracts, signatures, gates, and views. Clickwrap should never market itself as the first Rails agreement gem.
+Notice what's left after all of that: **evidence**. Those opinions examine what interface the
+application offered and what action it recorded—not whether checkboxes are valid in the abstract.
+Which exact version of the terms did the server bind to the form? What did the presentation
+manifest say beside the control? Was the control initially unselected? Which explicit submission
+did the server accept? Was consent later withdrawn? Most apps genuinely cannot reconstruct those
+application-side facts; `clickwrap` exists so you can, with a receipt verifiable without the
+producing application's source code. It still does not prove that a person perceived or
+understood the interface.
 
-FinePrint’s documented core and [signature model at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/app/models/fine_print/signature.rb#L1-L33) answer:
+That's also why nothing in this gem prints "legally binding" or "court-proof": those are conclusions a court reaches about *your* agreement, under *your* jurisdiction's law, looking at *your* whole page and *your* terms. The gem's job is narrower and more useful — making sure that when that day comes, your lawyer is holding the receipt.
 
-```text
-Did user U sign version N of contract X?
-```
+## What `clickwrap` is *not*
 
-Clickwrap is for applications that also need to answer:
+This gem provides evidence mechanics — excellent ones — and nothing else. It does not:
 
-```text
-Which exact content and presentation was offered?
-Which explicit statements and choices were made?
-Did the required evidence and protected outcome commit together?
-What subject or transaction did it cover?
-Was it withdrawn, corrected, superseded, expired, or consumed?
-Can the complete receipt be reproduced and verified independently?
-Can optional personal request evidence be disposed of honestly?
-```
+- draft or approve legal documents, or decide whether a change is "material";
+- claim compliance, enforceability, admissibility, or "court-proof" anything;
+- verify identity or age, or decide whether a configured role or permission is
+  legally sufficient to bind an organization (identity, KYC, and legal capacity
+  belong elsewhere);
+- become DocuSign, a notary, a cookie CMP, or a contract-lifecycle platform;
+- call a local hash tamper-proof, server time trusted time, or an IP address a person;
+- hide data collection behind a `compliant: true` switch.
 
-The goal is to be easier in the first five minutes and dramatically stronger after five years in production—not FinePrint with more columns.
-
-## Legal and evidentiary posture
-
-Electronic form does not cure an invalid underlying transaction, missing capacity/authority, or a special formality. The US E-SIGN Act preserves electronic validity while retaining substantive requirements and exclusions ([15 U.S.C. § 7001](https://www.law.cornell.edu/uscode/text/15/7001); [15 U.S.C. § 7003](https://www.law.cornell.edu/uscode/text/15/7003)). Electronic form also does not make an unfair term fair ([Directive 93/13/EEC](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=celex%3A31993L0013)). EU eIDAS distinguishes ordinary electronic evidence from qualified electronic signatures and their specific legal effect ([Regulation (EU) No 910/2014, Article 25](https://eur-lex.europa.eu/eli/reg/2014/910/2024-05-20/eng)).
-
-US appellate formation decisions evaluate conspicuous notice and unambiguous assent in the context of the whole interface; no checkbox color or placement is a universal safe harbor ([Berman v. Freedom Financial Network](https://cdn.ca9.uscourts.gov/datastore/opinions/2022/04/05/20-16900.pdf); [Tejon v. Zeus Networks](https://media.ca11.uscourts.gov/opinions/pub/files/202411114.pdf); [Toth v. Everly Well](https://www.ca1.uscourts.gov/sites/ca1/files/opnfiles/23-1727P-01A.pdf)).
-
-GDPR consent must be demonstrable, distinguishable, and withdrawable, but consent is only one possible lawful basis. A privacy-information acknowledgment is not blanket consent ([GDPR Article 6](https://eur-lex.europa.eu/eli/reg/2016/679/art_6/oj/eng); [GDPR Article 7](https://eur-lex.europa.eu/eli/reg/2016/679/art_7/oj/eng); [AEPD FAQ 02.48](https://www.aepd.es/preguntas-frecuentes/2-tus-obligaciones-como-responsable-del-tratamiento/6-el-deber-de-informacion/FAQ-0248-sobre-si-el-usuario-tiene-que-dar-consentimiento-a-clausula-de-privacidad)). GDPR also requires purpose limitation, data minimization, storage limitation, transparency, and security; “collect everything forever” is not the evidence-maximizing default ([Article 5](https://eur-lex.europa.eu/eli/reg/2016/679/art_5/oj/eng); [Article 13](https://eur-lex.europa.eu/eli/reg/2016/679/art_13/oj/eng); [Article 32](https://eur-lex.europa.eu/eli/reg/2016/679/art_32/oj/eng)).
-
-These sources motivate Clickwrap’s design. They do not turn the gem into legal advice or a universal safe harbor.
-
-## Security model
-
-Clickwrap treats these as hostile until verified:
-
-- policy/document/version/validity values submitted by the client;
-- stale or replayed presentation tokens;
-- swapped actor, tenant, subject, or transaction IDs;
-- forwarded IP and Cloudflare headers outside a verified proxy path;
-- client timestamps and client-reported identity/location;
-- duplicate/concurrent submits;
-- mutable document sources;
-- after-commit analytics and provider callbacks; and
-- imported evidence without provider provenance.
-
-Security-sensitive values are server-owned, signed/bound, rechecked inside the transaction, and represented by stable failure results. Rails’ CSRF/session/authentication protections remain host responsibilities. Encryption keys, signing keys, and adapter credentials use Rails credentials or application-provided key providers and support rotation with versioned key identifiers.
-
-Report vulnerabilities privately according to `SECURITY.md`. Do not open a public issue containing an exploit or real evidence/PII.
-
-## Compatibility
-
-The ideal supported matrix is:
-
-- Ruby 3.2 through current Ruby, tested explicitly;
-- Rails 7.1 through current Rails 8.x;
-- PostgreSQL, SQLite, and MySQL for all documented portable core behavior;
-- adapter-specific hardening clearly marked and tested;
-- Rails authentication and Devise, both optional integrations;
-- Turbo/Hotwire and ordinary HTML;
-- integer and UUID primary keys;
-- multi-database applications when evidence and protected action share the documented transaction boundary; and
-- API-only applications for model/service/JSON receipt APIs, with HTML engine mounting optional.
-
-The gem depends only on the Rails components its approved surface needs. It does not depend on the `rails` meta-gem, Redis, a job backend, a JavaScript runtime, an external provider, or a CSS framework.
-
-The actual released gemspec and CI matrix—not this wishlist—are authoritative once implementation exists.
-
-## Stability and upgrade promise
-
-Clickwrap follows semantic versioning for its documented Ruby/Rails APIs, but persisted evidence gets a stricter promise:
-
-- every released receipt schema, canonicalization profile, digest field, event action, and lifecycle meaning has a permanent golden fixture;
-- new gem versions continue verifying old receipts even when they stop creating that old schema;
-- a format change gets a new explicit schema/version and verifier, never a silent reinterpretation;
-- upgrade generators add migrations and report their exact effects; released migration files are never edited under an installed application;
-- destructive or lossy data transitions require a plan, explicit operator action, and rollback/export guidance;
-- deprecations name the replacement and remain executable for a documented window; and
-- security fixes distinguish a vulnerable capture path from a verifier/display-only issue so operators know what historical evidence, if any, needs review.
-
-The project publishes the CI matrix, generator diffs, benchmark script, receipt golden fixtures, threat-model changes, and upgrade notes with every release. “It still boots” is not enough for a gem whose value is long-lived evidence.
-
-## Performance
-
-The ordinary capture path is one bounded database transaction with no network call. Documents and compiled policies are cached by immutable digest. Request geolocation, timestamp providers, external anchors, PDFs, and analytics are optional and never hidden in the simple path.
-
-There is no global event-history mutex. Sequence/chain scope is per tenant or aggregate, benchmarked under contention, and independently checkpointed where enabled. Bulk export streams records and verifies incrementally.
-
-Performance claims are published only with reproducible benchmarks against supported databases.
+Your application and its counsel own the legal text, lawful basis, retention periods, and jurisdiction-specific requirements. `clickwrap` makes configured decisions executable and traceable in evidence—it doesn't make them for you.
 
 ## FAQ
 
 ### Is this an electronic-signature gem?
 
-It captures electronic evidence of explicit actions and can import/provider-bind signature receipts. It does not call ordinary clickwrap a qualified electronic signature, notarization, or trusted identity proof.
+It captures electronic evidence of explicit actions and can import provider signature receipts. It does not call a checkbox a qualified electronic signature.
 
-### Does a user have to open or scroll through the document?
+### Does the user have to scroll through the document?
 
-Not by universal default. Clickwrap makes the document available before action and records the exact presentation. A policy can require an accurately observed open/review interaction when the host has a real requirement, but Clickwrap never equates scrolling with reading or understanding.
+No — and `clickwrap` never equates scrolling with reading. It makes documents available before action and records the exact presentation. A policy can require an observed open/review interaction if your app truly needs one.
 
-### Should I record IP addresses and geolocation?
+### Should I record IP addresses?
 
-Only for policies with a present, documented purpose and reviewed access/retention posture. They can corroborate request context but do not repair weak notice or prove identity/physical location. All such fields default off.
+Only for policies with a real, documented purpose. They corroborate request context; they don't prove identity or location. Everything defaults off.
 
-### Can I use Clickwrap without Devise?
+### Can I keep my domain models?
 
-Yes. Devise and Rails authentication are convenience adapters over the same public capture APIs.
-
-### Can one policy contain several documents and statements?
-
-Yes. The receipt preserves each document/version, statement, choice, and ordering independently. Agreement, acknowledgment, and optional consent controls remain semantically separate even when one page presents them together.
-
-### Can I keep my domain-specific declaration or authorization model?
-
-Yes—and usually should. Clickwrap complements domain models; it does not replace your payout, certification, identity, employment, or eligibility rules.
-
-### Can Clickwrap prove the user saw the page?
-
-It can prove the server generated and accepted a bound presentation manifest and record accurately observed interactions. It cannot prove human attention, comprehension, exact pixels, or legal sufficiency from a database row.
-
-### What happens if Clickwrap is temporarily unavailable?
-
-Required evidence fails closed: the same-database protected action rolls back. Optional after-commit hooks fail independently and are reported. Applications can define deliberate emergency/system exemptions with explicit actor and reason; there is no silent rescue-and-continue path.
-
-### Can I delete evidence?
-
-Yes, according to explicit retention/disposition policy and legal holds. Optional request evidence is separately disposable. Core historical evidence is never silently deleted through an actor association, and disposition is itself recorded.
+Yes, and you should. `clickwrap` owns presentation, evidence, lifecycle, and receipts — not your payout, eligibility, or employment rules.
 
 ### Is this GDPR compliant?
 
-No gem can answer that universally. Clickwrap provides privacy-aware mechanisms and truthful defaults. The host remains responsible for lawful basis, necessity, transparency, data-subject rights, security, retention, processors/transfers, DPIAs, and jurisdiction-specific requirements.
+No gem can answer that. `clickwrap` gives you privacy-aware mechanisms, truthful defaults, and an inventory of exactly what you configured. Lawful basis, necessity, and data-subject rights remain yours.
+
+## Compatibility
+
+- Ruby 3.2+, Rails 7.1 through 8.x
+- PostgreSQL, SQLite, and MySQL for all portable core behavior (hardening is adapter-specific and labeled)
+- Integer and UUID primary keys; Devise and Rails authentication both optional
+- Runtime dependencies are only the Rails components the gem actually uses (`activerecord`, `actionpack`, `actionview`, `activesupport`, `railties`) — never Redis, a job backend, a JS runtime, or an external service
+
+Persisted evidence gets a stricter promise than semver: every released receipt schema has a permanent golden fixture, new versions keep verifying old receipts, and released migrations are never edited underneath your app — see [Stability and upgrade promise](#stability-and-upgrade-promise).
+
+## Stability and upgrade promise
+
+`clickwrap` follows semantic versioning for its Ruby APIs. Evidence formats are stricter: a format change gets a new explicit schema and verifier, never a silent reinterpretation; upgrade generators add migrations and report their effects; and deprecations name their replacement and remain executable for a documented window.
 
 ## Development
 
 ```bash
 bin/setup
-bin/test
-bin/rubocop
-bin/rails test
+bundle exec rake test
+bundle exec rubocop
 ```
 
-The project uses Minitest, a dummy Rails application, SimpleCov, RuboCop, Appraisal matrices, SQLite/PostgreSQL/MySQL integration lanes, concurrency/fault tests, generator tests, Brakeman where relevant, and independent receipt-verifier golden fixtures.
-
-Every change to canonicalization, schema, receipts, migrations, cryptographic fields, or lifecycle behavior must prove backward verification against all released fixtures.
+The project uses Minitest with a dummy Rails app, SimpleCov, RuboCop, Appraisal matrices, and SQLite/PostgreSQL/MySQL CI lanes. Fault-injection, concurrency, replay, stale-token, disposition, and golden-receipt tests are load-bearing, not extras.
 
 ## Contributing
 
-Bug reports and focused pull requests are welcome once the repository opens for implementation. Changes to public vocabulary or evidence claims require corresponding documentation, source review, migration/compatibility analysis, and proof-integration coverage.
+Bug reports and focused pull requests are welcome at https://github.com/rameerez/clickwrap. Please run `bundle exec rake test` and `bundle exec rubocop` first.
 
-Please do not use issues to request jurisdiction-specific legal advice or ask maintainers to approve legal text.
+Two kinds of change need extra care: anything touching public vocabulary or an evidence claim (docs change alongside code, plus a note on receipts already written), and anything touching canonicalization, receipt schemas, digests, or migrations — released evidence formats are permanent. Security reports go through [`SECURITY.md`](SECURITY.md), privately.
 
 ## License
 
-MIT.
+The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).

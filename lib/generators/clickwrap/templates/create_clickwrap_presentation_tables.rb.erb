@@ -1,0 +1,160 @@
+# frozen_string_literal: true
+
+# Persisted pre-submit presentations — `rails generate clickwrap:install
+# --with-persisted-presentations`, or added later with the same command.
+#
+# A default install writes nothing on GET, so this table can never receive
+# a row until a policy declares
+# `persist_presentations_before_submission_for`. It ships separately so an
+# installation's schema says what that installation actually records.
+class CreateClickwrapPresentationTables < ActiveRecord::Migration<%= migration_version %>
+  def change
+    primary_key_type, foreign_key_type = primary_and_foreign_key_types
+
+    # ---------------------------------------------------------------------------
+    # clickwrap_presentations
+    #
+    # The default path signs the manifest into a short-lived token and writes
+    # NOTHING on GET — a render is not evidence, and a table row per page view
+    # would be both slow and more personal data than the job needs.
+    #
+    # Rows land here in two cases: a policy explicitly retains pre-submit
+    # presentations for a documented reason, and every successful capture, whose
+    # accepted manifest is persisted with the event. An abandoned GET is
+    # `presented_by_server` — never `accepted`, and never `seen_by_human`,
+    # because a server cannot know whether a human saw anything.
+    # ---------------------------------------------------------------------------
+    create_table :clickwrap_presentations, id: primary_key_type do |t|
+      t.string :policy_key, null: false
+      t.references :policy_revision, null: false, type: foreign_key_type, index: false,
+                                     foreign_key: { to_table: :clickwrap_policy_revisions }
+
+      t.string :nonce, null: false
+      t.send(json_column_type, :manifest, null: false)
+      t.string :manifest_digest, null: false
+
+      # Stable references drive every evidence query. These optional convenience
+      # pointers are strings so one polymorphic column can safely point at host
+      # models whose primary keys are integers, UUIDs, or domain strings.
+      t.string :actor_type
+      t.string :actor_id
+      t.string :actor_reference
+      t.string :registration_flow_id
+      t.string :represented_party_type
+      t.string :represented_party_id
+      t.string :represented_party_reference
+      t.string :tenant_key
+      t.string :subject_type
+      t.string :subject_id
+      t.string :subject_fingerprint
+
+      t.string :locale, null: false, default: "en"
+      t.string :capture_channel, null: false, default: "web_browser"
+      t.string :state, null: false, default: "presented_by_server"
+
+      t.datetime :issued_at, precision: 6, null: false
+      t.datetime :expires_at, precision: 6, null: false
+      t.datetime :submitted_at, precision: 6
+      t.datetime :retain_until, precision: 6
+
+      t.datetime :created_at, precision: 6, null: false
+    end
+
+    add_index :clickwrap_presentations, :nonce, unique: true,
+              name: "index_clickwrap_presentations_on_nonce"
+    add_index :clickwrap_presentations, [ :actor_type, :actor_id ],
+              name: "index_clickwrap_presentations_on_actor"
+    add_index :clickwrap_presentations, :retain_until,
+              name: "index_clickwrap_presentations_on_retain_until"
+    add_index :clickwrap_presentations, :expires_at,
+              name: "index_clickwrap_presentations_on_expires_at"
+    add_index :clickwrap_presentations, :actor_reference,
+              name: "index_clickwrap_presentations_on_actor_reference"
+    add_clickwrap_check_constraint :clickwrap_presentations,
+                         "state IN (#{quoted_values(%w[presented_by_server accepted rejected expired])})",
+                         name: "chk_clickwrap_presentations_state"
+    add_clickwrap_check_constraint :clickwrap_presentations,
+                         "capture_channel IN (#{quoted_values(%w[web_browser native_app api_client operator background_job imported_provider system])})",
+                         name: "chk_clickwrap_presentations_channel"
+
+    # `clickwrap_events.presentation_id` is created by the core migration and
+    # gains its foreign key here, with the table it points at.
+    add_clickwrap_foreign_key :clickwrap_events, :clickwrap_presentations,
+                    column: :presentation_id, name: "fk_clickwrap_events_presentation"
+  end
+
+  private
+
+  # Honor the host's configured primary key type (uuid vs bigint). Reads the
+  # same setting `rails g model` uses, so an app generated with
+  # `config.generators { |g| g.orm :active_record, primary_key_type: :uuid }`
+  # gets uuid clickwrap tables and uuid foreign keys, automatically.
+  #
+  # Note that clickwrap_events keeps a ULID string key regardless: its id is
+  # quoted verbatim in receipts and exports, so it has to be stable, sortable,
+  # and identical in every host.
+  def primary_and_foreign_key_types
+    config = Rails.configuration.generators
+    setting = config.options[config.orm][:primary_key_type]
+    primary_key_type = setting || :primary_key
+    foreign_key_type = setting || :bigint
+    [ primary_key_type, foreign_key_type ]
+  end
+
+  def json_column_type
+    return :jsonb if connection.adapter_name.downcase.match?(/postg/) # postgresql, postgis
+
+    :json
+  end
+
+  # MySQL 8+ doesn't allow default values on JSON columns. Returns an empty-hash
+  # default for SQLite/PostgreSQL, nil for MySQL. The models handle nil
+  # gracefully by defaulting to {} in their accessors.
+  def json_column_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    {}
+  end
+
+  # Same MySQL caveat as `json_column_default`, but for list-shaped columns.
+  def json_array_default
+    return nil if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    []
+  end
+
+  # Legal documents are routinely longer than MySQL's 64 KB TEXT limit, and a
+  # silently truncated agreement is the worst possible failure for this gem.
+  # `:mediumtext` maps to MEDIUMTEXT on MySQL (16 MB) and to ordinary TEXT
+  # everywhere else.
+  def text_column_type
+    return :mediumtext if connection.adapter_name.downcase.match?(/mysql|trilogy/)
+
+    :text
+  end
+
+  def quoted_values(values)
+    values.map { |value| connection.quote(value) }.join(", ")
+  end
+
+  # SQLite implements both foreign keys and check constraints by rebuilding a
+  # table. During a long install migration, Active Record can otherwise rebuild
+  # from a schema-cache entry captured before the indexes/columns immediately
+  # above were added. Refreshing around every rebuild keeps the SQLite result
+  # identical to PostgreSQL/MySQL instead of quietly resurrecting stale shape.
+  def add_clickwrap_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+    add_check_constraint(table, expression, **options)
+    refresh_clickwrap_table_schema!(table)
+  end
+
+  def add_clickwrap_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+    add_foreign_key(from_table, to_table, **options)
+    refresh_clickwrap_table_schema!(from_table)
+  end
+
+  def refresh_clickwrap_table_schema!(table)
+    connection.schema_cache.clear_data_source_cache!(table.to_s)
+  end
+end
