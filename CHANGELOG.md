@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correct Gemfile snippet in the README's own quick start.
 - **The status banner says where the gem actually stands.** It claimed the gem
   was "not yet proven in production" and had not been through its planned
-  production integrations; it now records that the gem runs in production
-  behind real signups and ships enabled by default in RailsFast, while naming
-  the two gates that genuinely remain open — the unfamiliar-developer setup
+  production integrations; it now records that the gem runs in production in
+  more than one application — behind real signups, and under a
+  payout-authorization flow — and ships enabled by default in RailsFast, while
+  naming the two gates that genuinely remain open — the unfamiliar-developer setup
   exercise, and the legal/privacy review of the default wording. The old
   "don't put it under a payout flow just yet" line is replaced by the
   discipline such a flow deserves: keep your existing verifier authoritative
