@@ -35,7 +35,7 @@ If the evidence can't be recorded, the action doesn't happen. If the action fail
 No JavaScript package. No Redis. No background jobs. No external accounts or per-event API calls. No legal-document vendor. Just Rails, your database, and a DSL that reads like plain English.
 
 > [!IMPORTANT]
-> **Status: built and tested, not yet proven in production.** Everything in this README is implemented and covered by the test suite, but the gem hasn't been through its planned production integrations, an unfamiliar-developer usability test, or legal review of its default wording yet. Treat it as a release candidate for evaluation — don't put it under a payout flow just yet. The [stability promise](#stability-and-upgrade-promise) applies from 0.1.0 onward.
+> **Status: in production, with two gates still open.** Everything in this README is implemented and covered by the test suite, the gem runs in production behind real signups today, and it ships enabled by default — request-evidence annex included — in the [RailsFast](https://railsfast.com/?ref=clickwrap) template. Two gates remain open: no unfamiliar developer has installed it unassisted, and no focused legal or privacy review has passed over the default wording, the receipt claim boundaries, or the request-evidence posture — so read those defaults with your own counsel rather than adopting them on trust. High-assurance flows — payouts, one-time authorizations — deserve the full discipline rather than a leap of faith: keep your existing verifier authoritative until you have demonstrated parity with it, bind every authorization to its subject and consume it exactly once, and test the double-submit race in your own application. The [stability promise](#stability-and-upgrade-promise) applies from 0.1.0 onward.
 
 ## 👨‍💻 Example
 
@@ -165,7 +165,7 @@ bin/rails generate clickwrap:install
 bin/rails db:migrate
 ```
 
-`bundle add clickwrap` would install version 0.0.0, a deliberately empty name placeholder on RubyGems — install from GitHub until the first real version is published there.
+`bundle add clickwrap` writes that Gemfile line and installs the gem in one command, if you would rather not edit the file yourself.
 
 The installer detects Rails authentication vs. Devise, integer vs. UUID primary keys, and your database adapter, then generates adaptive migrations, one annotated initializer, and a conventional signup policy. It emits only the tables your installation can actually write to; the capabilities that are off by default bring their own migration when you want them:
 

@@ -23,10 +23,8 @@ survived contact with production code.
 ## 1. Install, in this exact order
 
 ```ruby
-# Gemfile — `bundle add clickwrap` would install 0.0.0, a deliberately empty
-# name placeholder on RubyGems. Install from GitHub until the first real
-# version is published there.
-gem "clickwrap", github: "rameerez/clickwrap"
+# Gemfile
+gem "clickwrap"
 ```
 
 ```bash

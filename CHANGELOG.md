@@ -6,6 +6,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation — the docs stop contradicting the shipped gem
+
+- **The README and `guides/integrating.md` teach `gem "clickwrap"`.** Both
+  still told readers that `bundle add clickwrap` would fetch the empty 0.0.0
+  name placeholder and that they should install from GitHub instead — four
+  published releases after that stopped being true, and directly under a
+  correct Gemfile snippet in the README's own quick start.
+- **The status banner says where the gem actually stands.** It claimed the gem
+  was "not yet proven in production" and had not been through its planned
+  production integrations; it now records that the gem runs in production
+  behind real signups and ships enabled by default in RailsFast, while naming
+  the two gates that genuinely remain open — the unfamiliar-developer setup
+  exercise, and the legal/privacy review of the default wording. The old
+  "don't put it under a payout flow just yet" line is replaced by the
+  discipline such a flow deserves: keep your existing verifier authoritative
+  until you have shown parity with it, bind each one-time authorization to its
+  subject, and test the double-submit race.
+- **One `## [0.1.0]` heading in this file, not two.** The section dated
+  2026-08-15 was drafted as release notes on the day the engine landed, but
+  0.1.0 was not published until 2026-08-19. It now reads as the
+  first-implementation subsection of the release it was always part of, with
+  its text intact.
+
 ## [0.2.1] - 2026-08-19
 
 ### Added — request evidence can keep pace with the evidence it corroborates
@@ -584,7 +607,13 @@ Changes driven by the first production host application:
   tests read the signed presentation token and its controls back off the
   rendered page, the way a browser does.
 
-## [0.1.0] - 2026-08-15
+### The first implementation, drafted 2026-08-15
+
+> These notes were written on 2026-08-15, the day the engine first landed, and
+> were drafted then as the release notes for 0.1.0. The release itself did not
+> go out until 2026-08-19; the sections above are the four days in between.
+> Everything below shipped as part of that same 0.1.0 and was never released
+> on its own.
 
 First implemented release. `clickwrap` turns terms acceptance, privacy notice
 acknowledgment, consent, factual declarations, operator attestations, and
@@ -599,7 +628,7 @@ its purpose, and its retention. The gem provides evidence mechanics only: your
 application and its counsel still own the legal text, lawful basis, substantive
 validity, capacity, authority, and retention periods.
 
-### Added
+#### Added
 
 - **Immutable versioned documents.** `Clickwrap.document :terms, version:, from:`
   points at the files your application already owns; `bin/rails clickwrap:publish`
