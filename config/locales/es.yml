@@ -38,7 +38,11 @@ es:
         agreement:
           terms: "acepto los %{documents}"
         acknowledgment:
-          privacy_notice: "he recibido la %{documents}"
+          # La misma voz que la declaración detallada ("Doy por recibida la
+          # Política de Privacidad."): el mismo acto debe leerse igual
+          # compuesto que detallado. Nunca "he leído": la evidencia registra
+          # un acto afirmativo sobre un aviso ofrecido, no que alguien leyera.
+          privacy_notice: "doy por recibida la %{documents}"
       agreement: "acepto %{documents}"
       acknowledgment: "he recibido %{documents}"
       documents_joiner: " y "

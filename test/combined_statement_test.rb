@@ -38,9 +38,9 @@ class CombinedStatementTest < ActiveSupport::TestCase
     # fragment templates carry the article each document needs, the templates
     # are written lowercase for the middle of the sentence, and the composer
     # capitalizes exactly one letter: the first.
-    assert_equal "Acepto los Términos de Servicio y he recibido la Política de Privacidad.",
+    assert_equal "Acepto los Términos de Servicio y doy por recibida la Política de Privacidad.",
                  combined.sentence
-    assert_equal ["Acepto los ", "he recibido la "], combined.fragments.map(&:prefix)
+    assert_equal ["Acepto los ", "doy por recibida la "], combined.fragments.map(&:prefix)
   end
 
   test "an application's own per-key fragment beats the generic template" do
@@ -355,7 +355,7 @@ class CombinedStatementTest < ActiveSupport::TestCase
     # the assertion pins is the Spanish template work: per-key articles and
     # the single opening capital.
     combined = Clickwrap.present(:signup, actor: @user, locale: :es).combined
-    assert_equal "Acepto los Terms of Service y he recibido la Privacy Policy.", combined.sentence
+    assert_equal "Acepto los Terms of Service y doy por recibida la Privacy Policy.", combined.sentence
   end
 
   test "a locale with no connective words itemizes rather than composing half a sentence" do
