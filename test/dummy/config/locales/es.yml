@@ -1,0 +1,12 @@
+# The dummy HOST's own wording for one gem key. The gem's default is "Doy por
+# recibida la Política de Privacidad." and the gem itself never says "he
+# leído" — but a host application MAY choose the conventional first-person
+# read-declaration, and it does so exactly like this: ship the same key in its
+# own locale file and let load order do the rest. This file exists so a test
+# can prove the host's wording actually wins (the engine once re-appended its
+# own locales after the host's, and every host override silently lost).
+es:
+  clickwrap:
+    statements:
+      acknowledgment:
+        privacy_notice: "He leído la Política de Privacidad."

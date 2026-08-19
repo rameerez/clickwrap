@@ -20,9 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   middle of a sentence; the composer capitalizes exactly one letter — the
   first — once, at build time, so the signed manifest and the rendered HTML
   can never disagree. The Spanish signup now reads
-  "Acepto los Términos y Condiciones y he recibido la Política de Privacidad."
-  instead of "Acepto Términos y Condiciones y He recibido Política de
-  Privacidad."
+  "Acepto los Términos y Condiciones y doy por recibida la Política de
+  Privacidad." instead of "Acepto Términos y Condiciones y He recibido
+  Política de Privacidad."
+- **One voice, composed or itemized.** The Spanish composed acknowledgment now
+  says "doy por recibida" — the same words as the itemized default statement —
+  instead of the flatter "he recibido". The same act reads the same way in
+  either rendering. (Still never "he leído": the evidence records an
+  affirmative act on an offered notice, not that anyone read it. A host that
+  wants the first-person read-declaration owns that wording via its locale
+  files — see the next fix.)
+- **Host locale overrides actually win now.** The engine appended its locale
+  files to `app.config.i18n.load_path` on top of Rails's automatic engine
+  locale loading. Railties paths are unshifted ahead of that list, so the
+  appended copy landed AFTER the host's own locale files — and every host
+  override of a gem key silently lost to the gem's default. The manual append
+  is gone; Rails::Engine's own `:add_locales` ordering (gem first, host last)
+  is the contract, and a test now pins it.
 - **Checkbox optical alignment.** The box was mathematically centred on the
   first line and still read as floating high: Latin text carries its mass
   between cap-height and baseline, below the line box's midpoint. The offset
