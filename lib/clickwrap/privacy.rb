@@ -220,6 +220,7 @@ module Clickwrap
       # difference between "not due yet" and "nothing can ever say when".
       def describe_rule(rule)
         return nil if rule.nil?
+        return { "kind" => "indefinite" } if rule.indefinite?
         return { "kind" => "duration", "seconds" => rule.duration.to_i } if rule.duration?
 
         {

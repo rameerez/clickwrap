@@ -58,6 +58,10 @@ require_relative "clickwrap/engine" if defined?(Rails::Engine)
 # long you must keep anything. Those belong to the application and its counsel,
 # and no configuration flag here can stand in for them.
 module Clickwrap
+  # The retention class every policy gets unless it names its own with
+  # `retain_with`: evidence kept indefinitely, deletion always an explicit,
+  # reviewed act. Keeping is reversible; deleting is not.
+  DEFAULT_RETENTION_CLASS_KEY = "evidence_kept_indefinitely"
   DOCUMENT_OPTIONS = %i[
     version locale media_type effective_at tenant from content resolver renderer link
   ].freeze
@@ -109,7 +113,19 @@ module Clickwrap
 
     def documents = @documents ||= Registry.new(:document)
     def policies = @policies ||= Registry.new(:policy)
-    def retention_classes = @retention_classes ||= Registry.new(:retention_class)
+
+    # The registry is seeded with one built-in class: evidence kept
+    # indefinitely, nothing scheduled for deletion. It exists so a policy that
+    # never says `retain_with` has a real, inspectable retention class instead
+    # of a hole — keeping is the reversible default; deletion is the reviewed
+    # opt-in. A host wanting deletion clocks declares its own class and names
+    # it on the policy. The seed survives every reload (see Registry#clear).
+    def retention_classes
+      @retention_classes ||= Registry.new(:retention_class) do |registry|
+        registry.register(DEFAULT_RETENTION_CLASS_KEY,
+                          RetentionClass.new(key: DEFAULT_RETENTION_CLASS_KEY, rules: {}))
+      end
+    end
 
     # Declares one immutable document version. Declaring it does not publish it:
     # `bin/rails clickwrap:publish` reads the bytes once, digests them, and

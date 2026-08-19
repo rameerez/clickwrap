@@ -27,6 +27,13 @@ module Clickwrap
         assign_rule!(:core_event, duration:)
       end
 
+      # The default, said out loud. Omitting the core-event rule means the same
+      # thing, but a retention class somebody will read in review is better off
+      # carrying the decision in words.
+      def retain_core_event_indefinitely
+        assign_rule!(:core_event, indefinite: true)
+      end
+
       # For obligations a duration cannot express — "five years, or three years
       # after this contract is liquidated, whichever is later". The named
       # calculation is registered by the host on the configuration object, and
@@ -66,7 +73,7 @@ module Clickwrap
 
       private
 
-      def assign_rule!(part, duration: nil, host_event_name: nil)
+      def assign_rule!(part, duration: nil, host_event_name: nil, indefinite: false)
         if @rules.key?(part)
           raise DefinitionError,
                 "Retention class #{@key} declares #{part} more than once. Keep one reviewed " \
@@ -74,7 +81,7 @@ module Clickwrap
                 "deletion deadline."
         end
 
-        @rules[part] = RetentionClass::Rule.new(part:, duration:, host_event_name:)
+        @rules[part] = RetentionClass::Rule.new(part:, duration:, host_event_name:, indefinite:)
       end
 
       def method_missing(name, *_arguments, **_options)

@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-19
+
+### Changed — evidence is kept indefinitely by default
+
+- **The default retention posture is now indefinite.** A policy that never
+  says `retain_with` runs under a new built-in retention class,
+  `evidence_kept_indefinitely`: no deletion clock on the core event, none on
+  any request evidence. Previously such a policy refused to boot. The
+  direction is deliberate: keeping is reversible — a reviewed disposition can
+  always run later — while deletion is not, and the day contractual evidence
+  matters is usually years past every convenient schedule. Deletion is the
+  explicit, reviewed opt-in it always was: declare a class with clocks and
+  name it on the policy.
+- **A retention class may keep the core event forever.** New DSL verb
+  `retain_core_event_indefinitely` says the default out loud; omitting the
+  core-event rule now means the same thing instead of raising. Snapshots
+  record `{"indefinite" => true}`, the privacy inventory reports
+  `{"kind" => "indefinite"}`, events under such a class freeze no deadline,
+  and the retention planner never lists them as due — on any horizon.
+- **Registries can carry built-in seeds.** `Registry#clear` (every reload)
+  now returns a seeded registry to its built-ins instead of to nothing, which
+  is what keeps the default retention class alive across `to_prepare`.
+
+### Documentation
+
+- The README installs from rubygems.org (`gem "clickwrap"`), documents the
+  new retention default, and shows HTML pages and runtime `resolver:` sources
+  for legal documents alongside Markdown.
+
 ## [0.1.1] - 2026-08-19
 
 ### Fixed — the composed sentence in a language that declines its articles
