@@ -575,3 +575,27 @@ can never undo or stand in for the Clickwrap event. Clickwrap ships no Footprint
 | [Trackdown v0.4.0 result object](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/location_result.rb), [configuration](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/configuration.rb), [Cloudflare provider](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/cloudflare_provider.rb), [MaxMind provider](https://github.com/rameerez/trackdown/blob/v0.4.0/lib/trackdown/providers/maxmind_provider.rb), [PR #9](https://github.com/rameerez/trackdown/pull/9) | Pinned released source and project change record |
 | [Footprinted pinned model](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/footprint.rb#L7-L52), [tracking concern](https://github.com/rameerez/footprinted/blob/03b714bd3fa31368a8ce6695433386128fb6f91c/lib/footprinted/model.rb#L7-L65) | Pinned source code |
 | The field selection, the ordering of evidentiary priority, and every API prescription above | Product-design inference |
+
+## Rendering recorded values: encodings survive encryption
+
+Rack hands header strings to Ruby tagged `ASCII-8BIT`, and encrypted
+attributes preserve the original encoding through decryption — so a recorded
+`browser_user_agent` read back from the annex is BINARY-tagged even when its
+bytes are perfectly valid UTF-8. Concatenating it into a UTF-8 view buffer
+raises `Encoding::CompatibilityError`, and because only live captures carry
+an annex, the failure hides until the first real signup reaches an admin
+screen (it took down a production operator panel exactly that way).
+
+Normalize at the render boundary, not in storage — the stored bytes are the
+evidence:
+
+```ruby
+# clickwrap-doc-test: syntax-only — a host view helper, not gem configuration
+def rendered_recorded_text(value)
+  utf8 = value.to_s.dup.force_encoding(Encoding::UTF_8)
+  utf8.valid_encoding? ? utf8 : utf8.scrub
+end
+```
+
+The gem's own screens never render raw annex values, so they are not exposed;
+any host view that does — an operator panel, an export page — is.
