@@ -229,6 +229,20 @@ module Clickwrap
               "purpose."
       end
 
+      # The legal-basis reference goes into the compiled policy revision and
+      # every receipt built from it, permanently. Scaffolding there is worse
+      # than an omission: an omission reads as "the host said nothing", while
+      # "TODO: ask legal" reads as a reviewed determination to anyone who finds
+      # it later. Same rule as `because:` — the option is optional, but text
+      # the host actually wrote has to be text they meant.
+      if ReviewedText.placeholder?(setting.legal_basis_reference)
+        raise DefinitionError,
+              "Policy #{policy_key} records #{category} with a `legal_basis_reference:` " \
+              "that is still scaffolding text (#{setting.legal_basis_reference.inspect}). " \
+              "Replace it with the application's own reference, or drop the option — " \
+              "Clickwrap would rather record nothing than record a TODO as a legal basis."
+      end
+
       return unless setting.delete_after && setting.delete_after.to_i <= 0
 
       raise DefinitionError,

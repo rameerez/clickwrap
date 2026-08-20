@@ -6,6 +6,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-20
+
+### Fixed — two guards that looked like they held
+
+- **Canonical JSON refuses invalid bytes whatever their encoding tag.**
+  `valid_encoding?` is always true on an `ASCII-8BIT` string — BINARY has no
+  invalid byte sequences by definition — and BINARY is exactly what Rack and
+  CDN headers deliver, so the UTF-8 guard was a no-op for the ten
+  request-evidence values most likely to be malformed. Invalid bytes passed
+  through and produced canonical JSON that was not itself valid UTF-8, which
+  RFC 8785 forbids and a verifier in another language may reject or normalize
+  into a different digest. The guard now normalizes the tag before validating.
+  **No digest ever written changes**: bytes that are valid UTF-8 canonicalize
+  byte-identically whether they arrive tagged BINARY or UTF-8, which a test
+  pins. And a stored value that can no longer be canonicalized now reports a
+  binding mismatch instead of raising out of the integrity check — a check
+  that crashes tells an operator nothing except that the tool broke.
+- **`record_ip_geolocation(country: nil)` is refused instead of quietly
+  enabling three fields.** With plain `nil` keyword defaults an explicit nil
+  was indistinguishable from an omitted keyword, so a policy written as
+  `record_ip_geolocation(country: settings[:geo])` with an empty setting fell
+  through to the coarse-trio default — enabling a category of personal data as
+  a side effect, which the frictionless pass never relaxed. A sentinel now
+  tells the two apart: unmentioned still gets the coarse trio, `false` still
+  reaches the coherence check that names `do_not_record_ip_geolocation`, and
+  `nil` raises a sentence.
+- **A scaffolding `legal_basis_reference:` is refused like a scaffolding
+  `because:`.** The reference lands in the compiled policy revision and every
+  receipt built from it, permanently, where "TODO: ask legal" reads as a
+  reviewed determination rather than an omission. The option stays optional;
+  text the host actually wrote has to be text they meant.
+
+### Documentation
+
+- The installer's purpose and retention prompts now describe what the
+  installer actually does since 0.3.x: a blank purpose is accepted (the gem
+  records its own stated purpose, marked as the gem's), a blank period keeps
+  pace with the evidence it corroborates, and only scaffolding text or a
+  negative period stops generation.
+
 ## [0.3.1] - 2026-08-20
 
 ### Changed — the rest of the collection friction, and the principle behind removing it

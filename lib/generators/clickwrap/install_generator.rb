@@ -980,15 +980,18 @@ module Clickwrap
 
       def ask_purpose(label)
         say "\n  Why does the application need #{label}? One plain sentence, in your own"
-        say "  words — it goes into the initializer and the privacy inventory. A blank"
-        say "  or scaffolding answer stops generation before Clickwrap writes any files."
+        say "  words — it goes into the initializer and the privacy inventory. Leave it"
+        say "  blank and Clickwrap records its own stated purpose instead, marked as the"
+        say "  gem's; a scaffolding answer (TODO, FIXME) stops generation before any"
+        say "  files are written."
         ask("  Purpose:").to_s.strip
       end
 
       def ask_retention_days(label)
         say "\n  After how many days should Clickwrap delete #{label}?"
-        say "  Clickwrap does not invent a period. Enter the positive number your application"
-        say "  has reviewed; a blank or zero answer stops generation before files are written."
+        say "  Enter the number of days your application reviewed, or leave it blank and"
+        say "  #{label} keeps pace with the evidence it corroborates — kept until a"
+        say "  reviewed disposition removes it. A negative number stops generation."
         ask("  Days:").to_s.strip.to_i
       end
 

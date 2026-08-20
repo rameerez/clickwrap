@@ -302,11 +302,18 @@ module Clickwrap
       key = Clickwrap.config.request_evidence_binding_key_for(key_id)
       return false if key.nil?
 
-      computed = Digest.keyed_digest(
-        CanonicalJson.generate(binding_body_for(category)),
-        key: key,
-        algorithm: digest_algorithm
-      )
+      # A stored value that can no longer be canonicalized cannot reproduce its
+      # binding, and saying so is the honest answer — an integrity check that
+      # raises tells an operator nothing except that the tool broke.
+      begin
+        computed = Digest.keyed_digest(
+          CanonicalJson.generate(binding_body_for(category)),
+          key: key,
+          algorithm: digest_algorithm
+        )
+      rescue CanonicalJson::SerializationError
+        return false
+      end
       Digest.secure_compare?(computed, digest)
     end
 
