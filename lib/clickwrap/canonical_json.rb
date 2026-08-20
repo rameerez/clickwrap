@@ -132,10 +132,26 @@ module Clickwrap
       end
 
       def write_string(string, buffer)
-        raise SerializationError, "Canonical JSON strings must be valid UTF-8" unless string.valid_encoding?
+        # `valid_encoding?` is ALWAYS true on an ASCII-8BIT string — BINARY has
+        # no invalid byte sequences by definition — and BINARY is exactly what
+        # Rack and CDN headers deliver, so this guard was a no-op for the
+        # strings most likely to be malformed. Ten request-evidence columns
+        # reach it.
+        #
+        # Normalizing the tag before validating is safe for every digest ever
+        # written: bytes that ARE valid UTF-8 canonicalize byte-identically
+        # whether they arrive tagged BINARY or UTF-8 (measured, and pinned by a
+        # test below). What changes is only the case that was broken —
+        # genuinely invalid bytes used to emit canonical JSON that was itself
+        # not valid UTF-8, which RFC 8785 forbids and a verifier in another
+        # language may reject or normalize into a different digest. That is the
+        # "still verifiable years later" promise failing silently, so it is
+        # refused at write time instead.
+        utf8 = string.encoding == Encoding::UTF_8 ? string : string.dup.force_encoding(Encoding::UTF_8)
+        raise SerializationError, "Canonical JSON strings must be valid UTF-8" unless utf8.valid_encoding?
 
         buffer << '"'
-        string.each_char do |char|
+        utf8.each_char do |char|
           escape = ESCAPES[char]
           buffer << if escape
                       escape

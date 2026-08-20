@@ -257,9 +257,21 @@ module Clickwrap
       # and nothing finer, because that is what "IP geolocation" means in this
       # gem when nobody narrows it. Naming even one field means you are
       # choosing the set yourself, and then the set is exactly what you named.
-      def record_ip_geolocation(country: nil, region: nil, city: nil, postal_code: nil,
-                                latitude_and_longitude: nil, timezone: nil, continent: nil,
-                                metro_code: nil, accuracy_radius_in_kilometers: nil,
+      # Distinguishes "the policy never mentioned this field" from "the policy
+      # passed nil for it". With plain `nil` defaults the two are identical, and
+      # `record_ip_geolocation(country: settings[:geo])` with an empty setting
+      # silently enabled the coarse trio — enabling a category of personal data
+      # as a side effect, which is the one thing the frictionless pass never
+      # relaxed.
+      UNMENTIONED_FIELD = Object.new.freeze
+      private_constant :UNMENTIONED_FIELD
+
+      def record_ip_geolocation(country: UNMENTIONED_FIELD, region: UNMENTIONED_FIELD,
+                                city: UNMENTIONED_FIELD, postal_code: UNMENTIONED_FIELD,
+                                latitude_and_longitude: UNMENTIONED_FIELD,
+                                timezone: UNMENTIONED_FIELD, continent: UNMENTIONED_FIELD,
+                                metro_code: UNMENTIONED_FIELD,
+                                accuracy_radius_in_kilometers: UNMENTIONED_FIELD,
                                 using: nil, encrypted: nil, delete_after: nil, retain_until: nil,
                                 fail_if_unavailable: false, because: nil,
                                 legal_basis_reference: nil,
@@ -415,14 +427,28 @@ module Clickwrap
         end
       end
 
-      # `nil` means "the policy did not mention this field"; `false` means "the
-      # policy named it and turned it off". The distinction is the whole reason
-      # the keywords default to nil: a policy that mentions nothing gets the
-      # coarse trio, and a policy that explicitly sets every field to false
-      # still reaches the coherence check that tells it to say
+      # An UNMENTIONED field means "the policy did not mention this"; `false`
+      # means "the policy named it and turned it off". A policy that mentions
+      # nothing gets the coarse trio; a policy that explicitly sets every field
+      # to false still reaches the coherence check that tells it to say
       # `do_not_record_ip_geolocation` instead.
+      #
+      # An explicit `nil` is neither, and is refused rather than guessed: it is
+      # almost always a variable that came out empty, and treating it as "the
+      # policy said nothing" would turn a missing setting into three enabled
+      # fields of personal data.
       def default_ip_geolocation_fields_when_none_named(named)
-        return named.transform_values { |value| value == true } if named.any? { |_, value| !value.nil? }
+        ambiguous = named.select { |_, value| value.nil? }.keys
+        unless ambiguous.empty?
+          raise DefinitionError,
+                "Policy #{@key} passes nil for #{ambiguous.join(", ")} in " \
+                "`record_ip_geolocation`. Say `true` or `false` for each field you name, " \
+                "or leave it out entirely — Clickwrap will not read an empty value as " \
+                "permission to record it, and it will not read it as silence either."
+        end
+
+        mentioned = named.reject { |_, value| value.equal?(UNMENTIONED_FIELD) }
+        return named.transform_values { |value| value == true } if mentioned.any?
 
         Vocabulary::IP_GEOLOCATION_DATA_FIELDS.to_h do |field|
           [field, Vocabulary::COARSE_IP_GEOLOCATION_DATA_FIELDS.include?(field)]
