@@ -560,8 +560,11 @@ history, not just post-migration. The shape that worked:
 
 ## 9. Request evidence, when a surface earns it
 
-Default to collecting nothing; enable per policy, per field, when a surface
-has a real purpose (our money path did; our signup did not):
+The gem collects nothing until you say otherwise, and since 0.3.0 saying
+otherwise for every policy at once is one line —
+`config.record_request_evidence_by_default = true`. We took the narrower road
+and enabled per policy, per field, where the surface earned it (our money path
+did; our signup did not):
 
 ```ruby
 policy.record_ip_address(
@@ -572,16 +575,19 @@ policy.record_ip_address(
 )
 ```
 
-Enabling any IP field requires `config.trusted_proxy_configuration_digest` —
-a digest of the effective proxy rules, not a prose label, so old evidence
-records which configuration was in force. Generate it from Rails' configured
-rules (or Rails' actual defaults when none were overridden):
+`config.trusted_proxy_configuration_digest` is worth setting and is no longer
+required to record an address — a digest of the effective proxy rules, not a
+prose label, so old evidence records which configuration was in force. Generate
+it from Rails' configured rules (or Rails' actual defaults when none were
+overridden):
 
 ```ruby
 config.trusted_proxy_configuration_digest =
   Clickwrap.trusted_proxy_configuration_digest_for_rails_application
 ```
 
+Leave it unset and the annex records a `nil` digest, which honestly says nobody
+reviewed a proxy topology; `clickwrap:doctor` warns while that is the case.
 This records configuration provenance; it does not prove the rules were
 correctly deployed or reviewed. Sharing the same fields across several policies?
 A plain Ruby lambda in `config/clickwrap.rb` calling

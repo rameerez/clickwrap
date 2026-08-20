@@ -28,8 +28,11 @@
 #
 # There is deliberately no `maximum_evidence`, `full_evidence`, `legal_proof`,
 # or regulation-named mode setting. No runtime flag can make a legal
-# determination for you, and an option that turns on a category of personal data
-# as a side effect of something else is exactly what this gem exists not to do.
+# determination for you, and an option whose name does not say what it collects
+# is exactly what this gem exists not to ship. The one grouped switch that does
+# exist, `config.record_request_evidence_by_default`, names its own contents:
+# an IP address, a browser user agent, and a coarse country/region/city
+# estimate — nothing finer, ever.
 <%- if recipe -%>
 #
 # This file was scaffolded with `--request-evidence-recipe=<%= recipe %>`. The
@@ -251,10 +254,12 @@ Clickwrap.configure do |config|
   # proof that anyone was physically anywhere.
 <%- if records_any_request_evidence? -%>
   #
-  # You enabled some of these during install. The generator required an explicit
-  # purpose and deletion period before writing this file; review both below. The
-  # annex table itself came with `--with-request-evidence`, which this install
-  # added for you.
+  # You enabled some of these during install, and the installer asked for an
+  # explicit purpose and deletion period before writing this file; review both
+  # below. The gem itself would have accepted the fields without them and
+  # recorded its own stated purpose instead — the installer asks because a
+  # sentence your team wrote is worth more than one the gem supplied. The annex
+  # table came with `--with-request-evidence`, which this install added for you.
 <%- else -%>
   #
   # Everything here is off, which is the safe default — and the annex table was
@@ -272,12 +277,15 @@ Clickwrap.configure do |config|
 
   # --- Request evidence: why, how long, and how it is protected ---------------
   #
-  # An enabled field with a blank purpose or no deletion rule is a configuration
-  # error at boot, not a warning. "We turned it on and never decided why" is the
-  # failure mode these settings exist to prevent. There is no keep-forever
-  # default anywhere in this gem, and deleting a value removes the encrypted
-  # annex entry and appends a disposition event — the historical agreement,
-  # declaration, or authorization stays intact and verifiable without it.
+  # Both of these are optional, and the installer wrote yours because you gave
+  # them. A field enabled with no purpose records the one Clickwrap states, and
+  # the privacy inventory marks it as the gem's sentence rather than yours; a
+  # field with no deletion period keeps pace with the evidence it corroborates.
+  # What is refused is a purpose that is still scaffolding text, and a deletion
+  # period set alongside `keep_recorded_..._indefinitely!` for the same field.
+  # Deleting a value removes the encrypted annex entry and appends a disposition
+  # event — the historical agreement, declaration, or authorization stays intact
+  # and verifiable without it.
 
 <%- if record_ip_addresses? -%>
   config.reason_for_recording_ip_addresses_by_default =
@@ -301,10 +309,10 @@ Clickwrap.configure do |config|
   config.review_default_request_evidence_configuration_on = <%= review_date_literal %>
 <%- else -%>
   # Nothing above is enabled, so there is nothing to give a purpose or a
-  # deletion period to. Enabling a field is never one line — the gem refuses an
-  # enabled field with no recorded purpose and no deletion rule — and it wants a
-  # review date so the decision gets looked at again by a person instead of
-  # outliving its reason:
+  # deletion period to. Turning the ordinary three on later is one line —
+  # `config.record_request_evidence_by_default = true` — and these are the
+  # settings that upgrade it into a record your own team reviewed, plus a date
+  # so the decision gets looked at again instead of outliving its reason:
   #
   # config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
   # config.delete_recorded_ip_addresses_after = 90.days
@@ -359,7 +367,9 @@ Clickwrap.configure do |config|
     Clickwrap.trusted_proxy_configuration_digest_for_rails_application
 <%- else -%>
   # A digest of the effective trusted-proxy rules, stored beside any recorded
-  # address. Nothing here records one, so there is nothing to stamp:
+  # address. Nothing here records one, so there is nothing to stamp. Set it if
+  # you enable IP recording later: it is not required, but without it every
+  # recorded address carries a blank where its collection context should be.
   #
   # config.trusted_proxy_configuration_digest =
   #   Clickwrap.trusted_proxy_configuration_digest_for_rails_application
@@ -368,8 +378,9 @@ Clickwrap.configure do |config|
 <%- if any_ip_geolocation_field? -%>
   # DECISION — you enabled IP-geolocation fields and explicitly selected this
   # resolver. Make its gem and data source available in every environment:
-  # Clickwrap refuses to boot with fields it has nothing to resolve, rather than
-  # recording blanks that later read as "no result".
+  # Clickwrap refuses to boot with fields nothing can resolve — no resolver here
+  # and no trackdown in the bundle — rather than recording blanks that later
+  # read as "no result".
   #
   # Only the fields authorized above are stored, never the whole result object,
   # and every stored value keeps the provider, source, estimated state,
@@ -378,11 +389,18 @@ Clickwrap.configure do |config|
   # needed to read them.
   config.ip_geolocation_resolver = <%= ip_geolocation_resolver_class_name %>.new
 <%- else -%>
-  # Required before any IP-geolocation field can be enabled, here or in a
-  # policy. The official optional resolver requires trackdown >= 0.4 so the
-  # provider that actually answered and per-request source trust are preserved:
+  # Something has to resolve an IP-geolocation field before it can be enabled,
+  # here or in a policy. Bundling trackdown is enough — Clickwrap uses the
+  # official adapter for you when you have not named a resolver of your own,
+  # and the privacy inventory reports it as the gem's choice rather than yours.
+  # It requires trackdown >= 0.4 so the provider that actually answered and
+  # per-request source trust are preserved:
   #
   #   bundle add trackdown --version ">= 0.4"
+  #
+  # Name it explicitly to pick a different provider, or when you are wiring
+  # Trackdown's per-request CDN trust:
+  #
   #   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 <%- end -%>
 

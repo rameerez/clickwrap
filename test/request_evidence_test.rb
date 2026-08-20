@@ -42,29 +42,166 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     assert_not config.records_any_request_evidence_by_default?
   end
 
-  test "turning a default on without a purpose fails at boot" do
-    error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.configure do |config|
-        config.record_ip_address_by_default = true
-        config.delete_recorded_ip_addresses_after = 90.days
-      end
-    end
+  # --- The one switch ---------------------------------------------------------
 
-    assert_match(/is blank/, error.message)
+  test "the one switch records the coarse trio and nothing finer" do
+    Clickwrap.configure { |config| config.record_request_evidence_by_default = true }
+
+    config = Clickwrap.config
+    assert config.record_request_evidence_by_default
+    assert config.record_ip_address_by_default
+    assert config.record_browser_user_agent_by_default
+    assert_equal %w[country region city], config.enabled_default_ip_geolocation_fields
+
+    (Clickwrap::Vocabulary::IP_GEOLOCATION_DATA_FIELDS -
+      Clickwrap::Vocabulary::COARSE_IP_GEOLOCATION_DATA_FIELDS).each do |field|
+      assert_not config.public_send(:"record_ip_geolocation_#{field}_by_default"),
+                 "the switch must not enable #{field}"
+    end
   end
 
-  test "turning a default on without a retention rule fails at boot" do
-    error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.configure do |config|
-        config.record_ip_address_by_default = true
-        config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"
-      end
+  test "the switch composes with the per-field flags in reading order" do
+    Clickwrap.configure do |config|
+      config.record_request_evidence_by_default = true
+      config.record_browser_user_agent_by_default = false
     end
 
-    assert_match(/nothing says how long to keep it/, error.message)
+    assert Clickwrap.config.record_ip_address_by_default
+    assert_not Clickwrap.config.record_browser_user_agent_by_default
+    assert_not Clickwrap.config.record_request_evidence_by_default,
+               "the reader describes the trio, and one of them is off"
   end
 
-  test "enabling geolocation with no resolver fails at boot" do
+  test "turning the switch off leaves the separately named finer fields alone" do
+    Clickwrap.configure do |config|
+      config.record_ip_geolocation_timezone_by_default = true
+      config.record_request_evidence_by_default = true
+      config.record_request_evidence_by_default = false
+    end
+
+    assert_not Clickwrap.config.record_ip_address_by_default
+    assert_equal %w[timezone], Clickwrap.config.enabled_default_ip_geolocation_fields
+  end
+
+  test "the switch is a boolean, not a mode name that could hide a third state" do
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.config.record_request_evidence_by_default = :everything
+    end
+
+    assert_match(/record_request_evidence_by_default must be true or false/, error.message)
+  end
+
+  test "a policy narrower than the switch still wins" do
+    Clickwrap.configure { |config| config.record_request_evidence_by_default = true }
+
+    policy = Clickwrap.policy :narrower_than_the_switch do
+      agree_to :terms
+      do_not_record_ip_address
+      do_not_record_ip_geolocation
+    end
+
+    assert_not policy.request_evidence.records_ip_address?
+    assert_not policy.request_evidence.records_ip_geolocation?
+    assert policy.request_evidence.records_browser_user_agent?
+  end
+
+  test "a policy wider than the switch still wins" do
+    policy = Clickwrap.policy :wider_than_the_switch do
+      agree_to :terms
+      record_ip_address because: "Investigate disputed acceptance"
+    end
+
+    assert policy.request_evidence.records_ip_address?
+    assert_equal "host", policy.request_evidence.purpose_source_for(:ip_address)
+    assert_not policy.request_evidence.records_browser_user_agent?
+  end
+
+  # --- Gem-supplied defaults --------------------------------------------------
+
+  test "turning a default on without a purpose records the purpose Clickwrap states" do
+    Clickwrap.configure do |config|
+      config.record_ip_address_by_default = true
+      config.delete_recorded_ip_addresses_after = 90.days
+    end
+
+    policy = Clickwrap.policy(:purpose_supplied_by_the_gem) { agree_to :terms }
+    setting = policy.request_evidence.ip_address
+
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE, setting.because
+    assert_equal "gem_default", policy.request_evidence.purpose_source_for(:ip_address)
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE,
+                 policy.snapshot.dig("request_evidence", "ip_address", "because"),
+                 "the compiled revision always carries a purpose"
+  end
+
+  test "a purpose the host wrote stays the host's own words" do
+    Clickwrap.configure do |config|
+      config.record_ip_address_by_default = true
+      config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"
+    end
+
+    policy = Clickwrap.policy(:purpose_supplied_by_the_host) { agree_to :terms }
+
+    assert_equal "Investigate account compromise", policy.request_evidence.ip_address.because
+    assert_equal "host", policy.request_evidence.purpose_source_for(:ip_address)
+  end
+
+  test "scaffolding text is still not a purpose, wherever the host wrote it" do
+    application = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.configure do |config|
+        config.record_ip_address_by_default = true
+        config.reason_for_recording_ip_addresses_by_default = "TODO: ask legal"
+      end
+    end
+    assert_match(/scaffolding text/, application.message)
+
+    policy = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :scaffolded_purpose do
+        agree_to :terms
+        record_ip_address because: "FIXME"
+      end
+    end
+    assert_match(/scaffolding text/, policy.message)
+  end
+
+  test "turning a default on without a retention rule keeps pace with the evidence" do
+    Clickwrap.configure do |config|
+      config.record_ip_address_by_default = true
+      config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"
+    end
+
+    assert Clickwrap.config.validate!
+    assert_nil Clickwrap.config.delete_recorded_ip_addresses_after
+
+    Clickwrap.policy(:no_clock_anywhere) { agree_to :terms }
+    Clickwrap::Services::ValidatePolicyReferences.call
+
+    receipt = submit_clickwrap(:no_clock_anywhere, actor: @user, http_request: @http_request)
+    annex = receipt.event.reload.request_evidence
+
+    assert_equal "203.0.113.7", annex.ip_address
+    assert_nil annex.ip_address_delete_after, "no schedule IS the disposal answer"
+    assert_nil annex.ip_address_retain_until_rule
+  end
+
+  test "an IP address recorded with no reviewed proxy configuration says so honestly" do
+    Clickwrap.configure do |config|
+      config.trusted_proxy_configuration_digest = nil
+      config.record_ip_address_by_default = true
+    end
+
+    Clickwrap.policy(:unreviewed_proxy_topology) { agree_to :terms }
+    receipt = submit_clickwrap(:unreviewed_proxy_topology, actor: @user, http_request: @http_request)
+    annex = receipt.event.reload.request_evidence
+
+    assert_equal "203.0.113.7", annex.ip_address
+    assert_nil annex.trusted_proxy_configuration_digest,
+               "the absence is the provenance: nobody recorded a reviewed proxy configuration"
+    assert_equal "rails_request_remote_ip", annex.ip_address_reader_name,
+                 "which reader was asked is still recorded, digest or no digest"
+  end
+
+  test "enabling geolocation with no resolver and no trackdown fails at boot" do
     error = assert_raises(Clickwrap::ConfigurationError) do
       Clickwrap.configure do |config|
         config.ip_geolocation_resolver = nil
@@ -75,6 +212,7 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     end
 
     assert_match(/no\s+`ip_geolocation_resolver` is configured/, error.message)
+    assert_match(/bundle add trackdown/, error.message)
   end
 
   test "storing raw values unencrypted requires a deliberately named decision" do

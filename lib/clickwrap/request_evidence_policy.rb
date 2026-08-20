@@ -8,9 +8,15 @@ module Clickwrap
   # not squeamishness about useful data: it is that high-quality evidence is
   # purpose-specific. An IP address is personal data, and keeping it on your own
   # infrastructure does not remove the duty to have a reason for it, protect it,
-  # and stop keeping it eventually. So each field is enabled by name, with a
-  # plain-English purpose and a retention decision attached, and the policy that
-  # enables it is the server's, never the browser's.
+  # and stop keeping it eventually. So each field is enabled by name, and the
+  # policy that enables it is the server's, never the browser's.
+  #
+  # Naming a field is the whole requirement. Every recorded category still
+  # leaves here carrying a purpose and a disposal posture, because a snapshot
+  # read years from now has to answer both questions — but since 0.3.0 those
+  # answers have honest gem-supplied defaults instead of being the entry fee. A
+  # host who writes their own keeps their own words, and the privacy inventory
+  # reports which of the two is looking back at you.
   #
   # None of these fields is identity or physical location. An IP address is a
   # network observation. IP geolocation is a provider's estimate about that
@@ -61,9 +67,11 @@ module Clickwrap
                    trusted_proxy_configuration_digest: nil, review_configuration_on: nil)
       @policy_key = policy_key
       @retention_class_key = retention_class_key&.to_s
+      @purpose_sources = {}
       @ip_address = normalized_setting(:ip_address, ip_address || NOT_RECORDED)
       @browser_user_agent = normalized_setting(:browser_user_agent, browser_user_agent || NOT_RECORDED)
       @ip_geolocation = normalized_setting(:ip_geolocation, ip_geolocation || NOT_RECORDED)
+      @purpose_sources.freeze
       @ip_geolocation_fields = normalize_geolocation_fields(ip_geolocation_fields)
       @ip_geolocation_resolver_name = ip_geolocation_resolver_name&.to_sym
       @trusted_proxy_configuration_digest = trusted_proxy_configuration_digest&.to_s
@@ -86,6 +94,15 @@ module Clickwrap
     end
 
     def records_anything? = records_ip_address? || records_browser_user_agent? || records_ip_geolocation?
+
+    # Who wrote the purpose stored for this category: `"host"` when the policy
+    # or the initializer supplied one, `"gem_default"` when Clickwrap filled in
+    # its own. Deliberately kept off `to_snapshot`: the snapshot is a released
+    # evidence format, and the answer is derivable from the configuration a
+    # reader already has.
+    def purpose_source_for(category)
+      @purpose_sources[category.to_s]
+    end
 
     def setting_for(category)
       case category.to_sym
@@ -132,7 +149,6 @@ module Clickwrap
       FIELD_CATEGORIES.each { |category| validate_category!(category) }
       validate_geolocation_coherence!
       validate_named_resolver!
-      validate_trusted_proxy_configuration_digest!
     end
 
     def normalized_setting(category, setting)
@@ -153,7 +169,16 @@ module Clickwrap
               "`config.encrypt_recorded_*` setting, or omit `encrypted:` to inherit it."
       end
 
-      Setting.new(**setting.to_h, encrypted: configured)
+      # The compiled revision always carries a purpose, so a reader years from
+      # now never finds a recorded field with nothing beside it saying what it
+      # was for. Whose sentence it is gets remembered separately.
+      @purpose_sources[category.to_s] = setting.because.presence ? "host" : "gem_default"
+
+      Setting.new(
+        **setting.to_h,
+        encrypted: configured,
+        because: setting.because.presence || Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE
+      )
     end
 
     def validate_named_resolver!
@@ -164,8 +189,9 @@ module Clickwrap
         raise DefinitionError,
               "Policy #{policy_key} records IP geolocation using resolver " \
               "#{ip_geolocation_resolver_name.inspect}, but no resolver is registered under " \
-              "that name. Configure `config.ip_geolocation_resolver` for " \
-              "`:application_default`, or register the named resolver with " \
+              "that name. Bundle `trackdown` (>= 0.4) and Clickwrap uses it for " \
+              "`:application_default` with no wiring line at all, or set " \
+              "`config.ip_geolocation_resolver` yourself, or register the named resolver with " \
               "`config.register_ip_geolocation_resolver`. Registered resolvers: " \
               "#{Clickwrap.config.ip_geolocation_resolver_names.join(", ").presence || "(none)"}."
       end
@@ -186,34 +212,21 @@ module Clickwrap
             "capabilities: #{error.message}"
     end
 
+    # A missing purpose and a missing disposal answer both have defaults now.
+    # What is left refuses only the two things a default cannot honestly stand
+    # in for: scaffolding text the host actually wrote, and a deletion clock
+    # that is not a period.
     def validate_category!(category)
       setting = setting_for(category)
       return unless setting.record?
-
-      if setting.because.to_s.strip.empty?
-        raise DefinitionError,
-              "Policy #{policy_key} records #{category} but gives no `because:`. Say in one " \
-              "plain sentence why this policy needs it right now. \"We might need it someday\" " \
-              "is not a purpose, and a privacy notice mentioning the field is not one either."
-      end
 
       if ReviewedText.placeholder?(setting.because)
         raise DefinitionError,
               "Policy #{policy_key} records #{category}, but its `because:` is still " \
               "scaffolding text (#{setting.because.inspect}). Replace it with the " \
-              "application's reviewed, present-tense reason; Clickwrap never treats a TODO " \
-              "as a data-collection purpose."
-      end
-
-      if setting.delete_after.nil? && setting.retain_until.nil? && retention_class_key.nil? &&
-         !Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
-        raise DefinitionError,
-              "Policy #{policy_key} records #{category} but nothing says what should ever " \
-              "happen to it. Give it `delete_after:` with a duration, or `retain_until:` " \
-              "naming a host event rule, attach a retention class with a rule for this " \
-              "category, or answer it application-wide with " \
-              "`keep_recorded_..._indefinitely!(because: \"…\")`. Keeping forever is never " \
-              "silent, and Clickwrap will not choose for you."
+              "application's reviewed, present-tense reason, or drop the option and let " \
+              "Clickwrap record its own stated purpose; a TODO is never a data-collection " \
+              "purpose."
       end
 
       return unless setting.delete_after && setting.delete_after.to_i <= 0
@@ -247,18 +260,6 @@ module Clickwrap
       raise DefinitionError,
             "Policy #{policy_key} enables the IP-geolocation fields #{enabled.join(", ")} " \
             "without recording IP geolocation."
-    end
-
-    def validate_trusted_proxy_configuration_digest!
-      return unless records_ip_address? || records_ip_geolocation?
-      return unless trusted_proxy_configuration_digest.to_s.strip.empty?
-
-      raise DefinitionError,
-            "Policy #{policy_key} records an IP address or derives IP geolocation, but " \
-            "`config.trusted_proxy_configuration_digest` is blank. Review the deployment's " \
-            "trusted-proxy topology, digest that reviewed configuration, and set the prefixed " \
-            "digest (for example `sha256:...`). This records which proxy decision produced the " \
-            "address; it does not claim that the decision was correct."
     end
   end
 end

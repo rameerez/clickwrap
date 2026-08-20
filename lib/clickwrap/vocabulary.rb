@@ -160,6 +160,33 @@ module Clickwrap
       accuracy_radius_in_kilometers
     ].freeze
 
+    # The three coarse fields `config.record_request_evidence_by_default = true`
+    # turns on. Coarse means administrative area, not a point: a country, a
+    # region, and a city are what a provider can estimate from an address with
+    # any confidence at all. Everything finer — a postal code, coordinates, a
+    # timezone, a metro code — stays its own separately named decision, because
+    # a switch that reads "record request evidence" should not hand somebody
+    # coordinates they never asked for.
+    COARSE_IP_GEOLOCATION_DATA_FIELDS = %w[country region city].freeze
+
+    # The purpose Clickwrap records when a host enables request evidence
+    # without writing a purpose of their own. It is the gem's own sentence, not
+    # a reviewed host decision, and the privacy inventory says which of the two
+    # it is looking at. It exists because the alternative — refusing to boot
+    # until somebody writes a sentence — was pushing integrators to record
+    # nothing at all, and no corroboration is worse evidence than corroboration
+    # collected under the gem's stated purpose.
+    DEFAULT_REQUEST_EVIDENCE_PURPOSE =
+      "Corroborate who performed each recorded act, from where, on what client — to defend " \
+      "the recorded agreement itself."
+
+    # The reason recorded when a host keeps request evidence indefinitely
+    # without writing their own. Same posture as the purpose above: the
+    # declaration is still recorded and still readable years later; only the
+    # obligation to phrase it yourself is gone.
+    DEFAULT_REASON_FOR_KEEPING_REQUEST_EVIDENCE_INDEFINITELY =
+      "Corroboration lives as long as the evidence it corroborates"
+
     # Provenance that travels with any stored IP-geolocation result. A policy
     # cannot keep provider-derived coordinates while stripping the uncertainty
     # needed to interpret them.

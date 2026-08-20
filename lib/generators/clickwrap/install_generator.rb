@@ -28,9 +28,13 @@ module Clickwrap
     # spelling of the off-by-default posture. It disappears after generation;
     # it is deliberately not a runtime concept. There is no
     # `record_network_context`, `record_everything`, `full_evidence`, or
-    # regulation-named mode switch anywhere in this gem, because a flag that
-    # enables a whole category of personal data is the thing this gem exists not
-    # to do, and no flag can make a legal determination on a host's behalf.
+    # regulation-named mode switch anywhere in this gem, because a flag whose
+    # name hides what it collects is the thing this gem exists not to ship, and
+    # no flag can make a legal determination on a host's behalf. The runtime's
+    # one grouped switch, `config.record_request_evidence_by_default`, is not
+    # one of those: it names its three fields and can never grow a fourth. The
+    # installer still asks about them one at a time, because a purpose the host
+    # wrote beats the honest default the gem would otherwise record.
     class InstallGenerator < Rails::Generators::Base
       include ActiveRecord::Generators::Migration
 

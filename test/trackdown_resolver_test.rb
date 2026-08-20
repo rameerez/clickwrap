@@ -123,6 +123,79 @@ class TrackdownResolverTest < ActiveSupport::TestCase
     end
   end
 
+  # --- Adopted without a wiring line ------------------------------------------
+
+  test "a host who bundles trackdown and names no resolver gets this one" do
+    with_fake_trackdown do
+      Clickwrap.configure do |config|
+        config.ip_geolocation_resolver = nil
+        config.record_request_evidence_by_default = true
+      end
+
+      resolver = Clickwrap.config.ip_geolocation_resolver_for(:application_default)
+
+      assert_instance_of Clickwrap::IpGeolocation::TrackdownResolver, resolver
+      assert Clickwrap.config.ip_geolocation_resolver_was_adopted_automatically?
+      assert_same resolver, Clickwrap.config.ip_geolocation_resolver_in_force
+      assert_same resolver, Clickwrap.config.ip_geolocation_resolver_for(:application_default),
+                  "adoption is considered once, not per policy compile"
+      assert_nil Clickwrap.config.ip_geolocation_resolver,
+                 "the host's own setting stays empty; nothing was written into it"
+    end
+  end
+
+  test "a host's own resolver is never displaced by the bundled trackdown" do
+    with_fake_trackdown do
+      chosen = Clickwrap::IpGeolocation::StaticResolver.new
+      Clickwrap.configure do |config|
+        config.ip_geolocation_resolver = chosen
+        config.record_request_evidence_by_default = true
+      end
+
+      assert_same chosen, Clickwrap.config.ip_geolocation_resolver_for(:application_default)
+      assert_not Clickwrap.config.ip_geolocation_resolver_was_adopted_automatically?
+    end
+  end
+
+  test "adoption never happens as a side effect of describing the configuration" do
+    with_fake_trackdown do
+      Clickwrap.configure { |config| config.ip_geolocation_resolver = nil }
+
+      assert_nil Clickwrap.config.ip_geolocation_resolver_in_force
+      assert_not Clickwrap.config.ip_geolocation_resolver_was_adopted_automatically?
+      assert_equal({ "configured" => false },
+                   Clickwrap::Privacy.inventory.dig("defaults", "ip_geolocation", "resolver"))
+    end
+  end
+
+  test "an adopted resolver is reported as the gem's choice, not the host's" do
+    with_fake_trackdown do
+      Clickwrap.configure do |config|
+        config.ip_geolocation_resolver = nil
+        config.record_request_evidence_by_default = true
+      end
+      Clickwrap.config.ip_geolocation_resolver_for(:application_default)
+
+      described = Clickwrap::Privacy.inventory.dig("defaults", "ip_geolocation", "resolver")
+
+      assert_equal "Clickwrap::IpGeolocation::TrackdownResolver", described["class"]
+      assert_equal "gem_default", described["source"]
+    end
+  end
+
+  test "an installed release that is too old surfaces its own sentence, not a missing-gem one" do
+    with_fake_trackdown(version: "0.3.0") do
+      error = assert_raises(Clickwrap::ConfigurationError) do
+        Clickwrap.configure do |config|
+          config.ip_geolocation_resolver = nil
+          config.record_request_evidence_by_default = true
+        end
+      end
+
+      assert_match(/requires trackdown >= 0\.4\.0/, error.message)
+    end
+  end
+
   private
 
   def with_fake_trackdown(version: "0.4.0")
