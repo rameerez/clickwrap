@@ -1230,7 +1230,7 @@ module Clickwrap
     # The named escape hatch for turning encryption off. The ceremony is the
     # method: you cannot reach `encrypt_recorded_* = false` without writing a
     # line that says out loud what you are doing, and that line is what a
-    # reviewer finds in a diff. Since 0.3.0 the `because:` is optional — the
+    # reviewer finds in a diff. Since 0.3.1 the `because:` is optional — the
     # gem records its own sentence when you do not write one — because the
     # host's privacy policy owns the why, and demanding it twice never stopped
     # anybody who had already typed this method name.
