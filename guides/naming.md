@@ -106,11 +106,19 @@ The same distinction runs through the six request-evidence states. `not_configur
 configuration fact; `unavailable` is an observation; `deleted_after_retention` is a third thing
 entirely. None of them is blank.
 
-### 6. One option never secretly enables another category of data
+### 6. One option never *secretly* enables another category of data
 
-**Why:** this is the failure mode the gem exists to prevent. An option that turns on a category
-of personal data as a side effect makes the diff unreviewable and the upgrade dangerous — a
-later release can widen what the profile covers, and nobody reading the initializer would know.
+**Why:** this is the failure mode the gem exists to prevent. An option whose name does not say
+what it collects makes the diff unreviewable and the upgrade dangerous — a later release can
+widen what the profile covers, and nobody reading the initializer would know.
+
+The test is the name, not the count. `config.record_request_evidence_by_default = true` does
+enable three categories at once, and it is fine, because the line tells a reviewer what those
+three are and the gem may never widen them: the switch is defined as the IP address, the
+browser user agent, and a coarse country/region/city estimate, and a future release that
+wanted to add coordinates would have to change its name. A `precision: :full` or a
+`level: :enhanced` fails the test for the opposite reason — nobody reading it can say what
+came back.
 
 ```ruby
 # Before
@@ -249,7 +257,7 @@ banned for a specific reason, not for taste.
 |---|---|
 | `:network`, `:full`, `:enhanced`, `:forensic`, `:maximum` | They hide what will be collected behind a word that sounds like a quality level |
 | `record_location` | A developer could reasonably read it as GPS or physical location. It is neither |
-| `request_evidence: :network`, `track_everything`, `record_everything` | Category switches. See rule 6 |
+| `request_evidence: :network`, `track_everything`, `record_everything` | Their names do not name their contents. See rule 6, and contrast `record_request_evidence_by_default`, which does |
 | `maximum_evidence`, `full_evidence`, `legal_proof: true` | They imply a verdict the gem cannot reach, and they enable data as a side effect |
 | An opaque privacy-profile switch keyed to a regulation | No runtime flag can make a legal determination on anyone's behalf, and the name would be the least accurate string in the codebase |
 | `include_sensitive_context: true` | One flag turning on three categories of personal data makes an operator's intent unreviewable. Use `include_ip_address:`, `include_browser_user_agent:`, `include_ip_geolocation:` |

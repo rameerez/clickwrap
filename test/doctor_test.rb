@@ -103,11 +103,24 @@ class DoctorTest < ActiveSupport::TestCase
     end
   end
 
+  test "a resolver Clickwrap adopted says so, rather than reading as a host decision" do
+    Clickwrap.config.ip_geolocation_resolver = nil
+    adopted = Clickwrap::IpGeolocation::StaticResolver.new
+    Clickwrap.config.stubs(:ip_geolocation_resolver_in_force).returns(adopted)
+    Clickwrap.config.stubs(:ip_geolocation_resolver_was_adopted_automatically?).returns(true)
+
+    findings = Clickwrap::Doctor.new.report
+
+    assert ok?(findings, /Clickwrap adopted/)
+    assert_match(/bundles trackdown and named no resolver of its own/,
+                 message_for(findings, /Clickwrap adopted/))
+  end
+
   test "recording IP addresses with no reviewed proxy configuration is a warning" do
-    # Normal `Clickwrap.configure` now refuses this incomplete state. Mutating
-    # individual setters can still create it temporarily (for example in a
-    # console or during a staged initializer migration), so Doctor continues to
-    # diagnose it instead of assuming only boot-valid states are observable.
+    # Since 0.3.0 this boots: a nil digest is recorded as the honest absence of
+    # reviewed proxy provenance rather than refused. Doctor is where the nudge
+    # lives now — a warning an operator can read and act on, not a wall between
+    # an integrator and any evidence at all.
     Clickwrap.config.trusted_proxy_configuration_digest = nil
     Clickwrap.config.record_ip_address_by_default = true
     Clickwrap.config.reason_for_recording_ip_addresses_by_default = "Investigate account compromise"

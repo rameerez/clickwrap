@@ -52,6 +52,7 @@ class ConfigurationTest < ActiveSupport::TestCase
   test "nothing personal is collected by default" do
     config = Clickwrap::Configuration.new
 
+    assert_not config.record_request_evidence_by_default
     assert_not config.record_ip_address_by_default
     assert_not config.record_browser_user_agent_by_default
     assert_empty config.enabled_default_ip_geolocation_fields
@@ -155,24 +156,33 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/must be true or false/, error.message)
   end
 
-  test "IP-derived application defaults require reviewed proxy provenance" do
-    error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.configure do |config|
-        config.trusted_proxy_configuration_digest = nil
-        config.record_ip_address_by_default = true
-        config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
-        config.delete_recorded_ip_addresses_after = 30.days
-      end
+  test "IP-derived application defaults record without reviewed proxy provenance" do
+    # Until 0.3.0 this combination refused to boot. It now records the annex
+    # with a nil digest, which is itself honest provenance: nobody reviewed a
+    # proxy topology, and the receipt does not pretend otherwise. `doctor`
+    # still says so out loud (see doctor_test).
+    Clickwrap.configure do |config|
+      config.trusted_proxy_configuration_digest = nil
+      config.record_ip_address_by_default = true
+      config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
+      config.delete_recorded_ip_addresses_after = 30.days
     end
 
-    assert_match(/trusted_proxy_configuration_digest/, error.message)
-    assert_match(/does not claim that decision was correct/, error.message)
+    assert Clickwrap.config.validate!
+    assert_nil Clickwrap.config.trusted_proxy_configuration_digest
 
+    # Hosts who do review one still get the stronger record, and the setter
+    # still refuses anything that is not a complete prefixed digest.
     Clickwrap.configure do |config|
       config.trusted_proxy_configuration_digest =
         Clickwrap.trusted_proxy_configuration_digest_for([IPAddr.new("10.0.0.0/8")])
     end
-    assert Clickwrap.config.validate!
+    assert Clickwrap::Digest.well_formed?(Clickwrap.config.trusted_proxy_configuration_digest)
+
+    error = assert_raises(Clickwrap::ConfigurationError) do
+      Clickwrap.config.trusted_proxy_configuration_digest = "TODO: ask infrastructure"
+    end
+    assert_match(/complete prefixed SHA-2 digest/, error.message)
   end
 
   test "trusted proxy provenance digests the effective rules rather than prose" do
@@ -320,14 +330,20 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/storage layer/, Clickwrap.config.reason_for_storing_request_evidence_unencrypted)
   end
 
-  test "there is no runtime compliance or profile switch" do
-    # Deliberately absent. An option that enables a category of personal data as
-    # a side effect of something else is the thing this gem exists not to do.
+  test "there is no switch whose name hides what it collects" do
+    # Deliberately absent. Each of these names either claims a legal outcome no
+    # runtime flag can deliver, or describes its collection so vaguely that a
+    # reader of the initializer cannot tell what it turns on.
     %i[gdpr_compliant_mode maximum_evidence full_evidence legal_proof
        record_network_context track_everything record_location].each do |name|
       assert_not Clickwrap.config.respond_to?(:"#{name}="), "#{name} must not exist"
       assert_not Clickwrap.config.respond_to?(name), "#{name} must not exist"
     end
+
+    # The one switch that does exist names its own contents, and the reader
+    # reports what is actually on rather than a remembered assignment.
+    assert_respond_to Clickwrap.config, :record_request_evidence_by_default=
+    assert_not Clickwrap.config.record_request_evidence_by_default
   end
 
   test "every IP-geolocation field has its own separately named setting" do

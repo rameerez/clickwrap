@@ -83,6 +83,22 @@ module Clickwrap
 
       attr_reader :capabilities
 
+      # Whether the host's bundle carries `trackdown` at all. The configuration
+      # asks this before adopting the adapter for a policy that enabled
+      # IP-geolocation fields without naming a resolver, so the common case —
+      # trackdown plus Cloudflare, already bundled — needs no wiring line.
+      #
+      # It answers the narrow question it is named after and nothing else. An
+      # installed release older than 0.4 answers `true` here and then fails in
+      # the constructor with the sentence about upgrading, which is far more
+      # useful to that host than being told the gem is missing.
+      def self.installed?
+        require "trackdown" unless defined?(::Trackdown)
+        true
+      rescue ::LoadError
+        false
+      end
+
       # Trust is per request in Trackdown 0.4. A host registers its verifier with
       # Trackdown, Trackdown runs it against the same request that supplied the
       # CDN headers, and this adapter copies the result's explicit trust state.

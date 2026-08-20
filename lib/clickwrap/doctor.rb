@@ -271,7 +271,8 @@ module Clickwrap
     end
 
     def resolver_findings
-      configured = Clickwrap.config.ip_geolocation_resolver
+      config = Clickwrap.config
+      configured = config.ip_geolocation_resolver_in_force
       wanted = Clickwrap.policies.values.select { |policy| policy.request_evidence.records_ip_geolocation? }
 
       if configured.nil?
@@ -285,7 +286,11 @@ module Clickwrap
                         "as unavailable")]
       end
 
-      [ok("an IP-geolocation resolver is configured (#{configured.class.name})")]
+      return [ok("an IP-geolocation resolver is configured (#{configured.class.name})")] unless
+        config.ip_geolocation_resolver_was_adopted_automatically?
+
+      [ok("IP geolocation resolves through #{configured.class.name}, which Clickwrap adopted " \
+          "because this application bundles trackdown and named no resolver of its own")]
     end
 
     # An IP address read from a forwarded header is only as good as the proxy

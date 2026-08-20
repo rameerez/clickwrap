@@ -6,6 +6,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+### Changed — recording request evidence is one switch, not a checklist
+
+Owner directive, and a deliberate reversal of part of this gem's own
+philosophy. The reasoning, stated plainly so a future reader can weigh it:
+the ceremony around *enabling* request evidence — a written purpose, a
+disposal answer, and a reviewed trusted-proxy digest, each of them a boot
+refusal — was not producing better-reviewed collection. It was producing
+**no collection at all**. Integrators hit three refusals in a row on the way
+to their first capture and turned the fields off, and an agreement with no
+corroboration is worse evidence than one corroborated under a purpose the gem
+stated on their behalf. So the friction is gone from turning collection *on*.
+None of it is gone from describing collection honestly.
+
+- **`config.record_request_evidence_by_default = true`.** One line records, on
+  every policy, the IP address the request arrived from, the browser user
+  agent it sent, and a coarse country / region / city estimate for that
+  address. Nothing finer: a postal code, coordinates, a timezone, a continent,
+  a metro code, and an accuracy radius each remain their own separately named
+  setting. It is a fan-out setter over the existing `record_*_by_default`
+  flags, so it composes with them in reading order, and any policy still
+  overrides it with `record_ip_address(...)` or `do_not_record_ip_address`.
+  The reader reports what is actually on rather than a remembered assignment.
+- **A purpose is no longer the price of admission.** A category enabled
+  without `because:` / `reason_for_recording_*_by_default` records
+  `Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE` — "Corroborate who performed
+  each recorded act, from where, on what client — to defend the recorded
+  agreement itself." Every compiled policy revision therefore still carries a
+  purpose into every receipt, and `Clickwrap::Privacy.inventory` marks each one
+  `"purpose_source": "gem_default"` or `"host"` so the gem's sentence can never
+  be mistaken for a decision somebody reviewed.
+- **No disposal answer means indefinite.** The four gatekeepers that refused a
+  recorded field with no clock — `Configuration#validate_request_evidence_defaults!`,
+  the policy-level check in `RequestEvidencePolicy`, the reference validator,
+  and the capture-time extractor — now treat absence as "keeps pace with the
+  evidence it corroborates", which is what core evidence has done since 0.2.0.
+  The annex is stamped with no schedule and the retention planner never lists
+  it. `keep_recorded_*_indefinitely!` still works, still records its reason,
+  and now accepts no `because:` at all (defaulting to "Corroboration lives as
+  long as the evidence it corroborates").
+- **`trusted_proxy_configuration_digest` is no longer required to record an IP
+  address.** When it is absent the annex stores `nil`, and that nil is honest
+  provenance: no reviewed proxy configuration was recorded when this address
+  was observed. Hosts who set one still get the stronger record, the setter
+  still refuses anything that is not a complete prefixed SHA-2 digest, and
+  `clickwrap:doctor` still warns while it is unset.
+- **Bundled `trackdown` is used without a wiring line.** A policy that records
+  IP geolocation and names no resolver now gets
+  `Clickwrap::IpGeolocation::TrackdownResolver` automatically when the host's
+  bundle carries trackdown 0.4 or newer — lazily, considered once, and only at
+  the moment something actually needs an address resolved. The privacy
+  inventory reports such a resolver with `"source": "gem_default"` and doctor
+  names it. An installed release older than 0.4 gets the adapter's own
+  upgrade sentence rather than a misleading "trackdown is not installed", and
+  a host with no trackdown gets the boot sentence, now naming `bundle add
+  trackdown` as the first option.
+
+### Unchanged, deliberately
+
+- The gem's code default is still record-nothing. The switch is opt-in.
+- Claim boundaries are untouched: nothing says compliant, enforceable, proves
+  identity, or physical location, and IP geolocation remains network context —
+  not identity, not GPS.
+- Encryption stays on by default, and turning it off keeps its
+  `deliberately_store_request_evidence_unencrypted!(because:)` ceremony. That
+  one is a genuine hazard with a named escape hatch; the directive was about
+  the friction of enabling collection, not the friction of weakening it.
+- Scaffolding text is still refused wherever the host actually wrote it
+  (`"TODO: ask legal"` is not a purpose), and a deletion clock declared
+  alongside `keep_recorded_..._indefinitely!` for the same category is still
+  refused as opposite decisions.
+- Receipts still distinguish `not_configured` / `unavailable` / `recorded` /
+  `deleted_after_retention`, and no released receipt format changed. The
+  purpose provenance is deliberately kept off `to_snapshot`, so policy
+  revision digests and every golden fixture verify exactly as before.
+
+### Documentation — the request-evidence story is rewritten around the switch
+
+- README, `guides/request-evidence.md`, `guides/integrating.md`, and
+  `guides/naming.md` lead with the one switch and present purposes, legal
+  bases, clocks, and proxy digests as the upgrade path for teams who want
+  reviewed records — not as the entry fee. The now-false "boot refuses without
+  a reason or a period" claims are gone.
+- `CLAUDE.md` / `AGENTS.md` rule 6 is rewritten to the new truth and records
+  this directive and its date, so a future agent does not restore the
+  refusals as a "fix". The prohibition it keeps is the one that was always the
+  point: never add a switch whose *name* hides what it collects.
+
 ### Documentation — the docs stop contradicting the shipped gem
 
 - **The README and `guides/integrating.md` teach `gem "clickwrap"`.** Both

@@ -36,6 +36,7 @@ class PrivacyTest < ActiveSupport::TestCase
     ip_address = regulated["fields"]["ip_address"]
     assert ip_address["recorded"]
     assert_equal "Investigate account compromise and disputes about this action", ip_address["because"]
+    assert_equal "host", ip_address["purpose_source"]
     assert_equal "DUMMY-LIA-SECURITY-2026-01", ip_address["legal_basis_reference"]
     assert_equal "security_evidence_retention_ends", ip_address["retain_until_rule"]
     assert ip_address["encrypted"]
@@ -68,6 +69,50 @@ class PrivacyTest < ActiveSupport::TestCase
                  inventory["retention_classes"]
                    .find { |klass| klass["retention_class"] == "ordinary_agreement_evidence" }
                    .dig("rules", "core_event", "seconds")
+  end
+
+  test "a purpose Clickwrap supplied is never printed as a reviewed host decision" do
+    Clickwrap.configure { |config| config.record_request_evidence_by_default = true }
+    Clickwrap.policy(:switched_on_policy) { agree_to :terms }
+
+    inventory = Clickwrap::Privacy.inventory
+    defaults = inventory.dig("defaults", "ip_address")
+
+    assert defaults["recorded_by_default"]
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE, defaults["because"]
+    assert_equal "gem_default", defaults["purpose_source"]
+
+    policy = policy_entry(inventory, "switched_on_policy")["fields"]["ip_address"]
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE, policy["because"]
+    assert_equal "gem_default", policy["purpose_source"]
+
+    # And the same field, once the host writes their own sentence.
+    Clickwrap.config.reason_for_recording_ip_addresses_by_default = "Investigate disputed submissions"
+    reviewed = Clickwrap::Privacy.inventory.dig("defaults", "ip_address")
+
+    assert_equal "Investigate disputed submissions", reviewed["because"]
+    assert_equal "host", reviewed["purpose_source"]
+  end
+
+  test "the inventory reads back an indefinite request-evidence decision as a decision" do
+    Clickwrap.configure do |config|
+      config.record_ip_address_by_default = true
+      config.keep_recorded_ip_addresses_indefinitely!(because: "It outlives the dispute window")
+    end
+
+    defaults = Clickwrap::Privacy.inventory.dig("defaults", "ip_address")
+
+    assert defaults["kept_indefinitely"]
+    assert_equal "It outlives the dispute window", defaults["reason_for_keeping_indefinitely"]
+    assert_nil defaults["delete_after_seconds"]
+  end
+
+  test "a category nobody records prints no purpose at all" do
+    defaults = Clickwrap::Privacy.inventory.dig("defaults", "browser_user_agent")
+
+    assert_not defaults["recorded_by_default"]
+    assert_nil defaults["because"], "an unrecorded field has no purpose to state"
+    assert_nil defaults["purpose_source"]
   end
 
   test "the inventory reports a policy whose review date has already passed" do

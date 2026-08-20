@@ -15,7 +15,6 @@ module Clickwrap
         Clickwrap.policies.each do |policy|
           validate_documents!(policy)
           retention_class = validate_retention_class!(policy)
-          validate_request_evidence_retention!(policy, retention_class)
           validate_host_calculations!(policy, retention_class)
           validate_authority_adapter!(policy)
           validate_ip_geolocation_resolver!(policy)
@@ -105,37 +104,13 @@ module Clickwrap
           )
       end
 
-      def validate_request_evidence_retention!(policy, retention_class)
-        RequestEvidencePolicy::FIELD_CATEGORIES.each do |category|
-          setting = policy.request_evidence.setting_for(category)
-          next unless setting.record?
-          next if setting.delete_after || setting.retain_until || retention_class.rule_for(category)
-          # The application-wide answer counts too: recording enabled in the
-          # initializer carries its disposal decision in the same place —
-          # either a global clock or the explicit, reasoned keep-indefinitely.
-          next if config_answers_disposal_for?(category)
-
-          raise DefinitionError,
-                "Policy #{policy.key} records #{category}, but nothing says when to dispose of " \
-                "it. Add `delete_after:`/`retain_until:` to the policy, a plain-English " \
-                "request-evidence rule (or `keep_recorded_#{category}_indefinitely`) to " \
-                "retention class #{retention_class.key}, or answer it application-wide in the " \
-                "initializer with `delete_recorded_..._after` or " \
-                "`keep_recorded_..._indefinitely!(because: \"…\")`."
-        end
-      end
-
-      def config_answers_disposal_for?(category)
-        clock =
-          case category.to_sym
-          when :ip_address then Clickwrap.config.delete_recorded_ip_addresses_after
-          when :browser_user_agent then Clickwrap.config.delete_recorded_browser_user_agents_after
-          else Clickwrap.config.delete_recorded_ip_geolocation_after
-          end
-
-        clock.present? || Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
-      end
-
+      # There is deliberately no disposal check here any more. A recorded
+      # category with no clock anywhere — not on the policy, not in its
+      # retention class, not in the initializer — means it keeps pace with the
+      # evidence it corroborates, which is what the core event does by default
+      # too. What still fails below is a rule that names a calculation nobody
+      # registered: a deadline waiting on a typo never arrives, and that is a
+      # different thing from a deliberate absence of one.
       def validate_host_calculations!(policy, retention_class)
         referenced = retention_class.rules.values.filter_map do |rule|
           rule.host_event_name&.to_sym

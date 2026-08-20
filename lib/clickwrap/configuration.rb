@@ -21,14 +21,18 @@ module Clickwrap
   #   - Every hook defaults to a no-op, so the gem works untouched and a host
   #     wires hooks only as needed.
   #   - Nothing here collects personal data by default. Every `record_*` flag
-  #     starts false, and turning one on without a purpose and a retention
-  #     decision is a configuration error, not a warning.
+  #     starts false. Turning one on takes one line and nothing else; the
+  #     purpose and the disposal answer have honest gem-supplied defaults, and
+  #     a host who wants reviewed ones writes them.
   #
   # One setting deserves its own note: there is deliberately no
   # `gdpr_compliant_mode`, `maximum_evidence`, `full_evidence`, or
-  # `legal_proof`. An option that silently enables a category of personal data
-  # is exactly the thing this gem exists not to do, and no runtime flag can
-  # make a legal determination on your behalf.
+  # `legal_proof`. Those names hide what they collect and pretend to make a
+  # legal determination, which is exactly the thing this gem exists not to do.
+  # `record_request_evidence_by_default` is the opposite kind of switch: it
+  # says out loud what it records (an IP address, a browser user agent, and a
+  # coarse country/region/city estimate), it enables nothing finer, and it
+  # claims nothing about the law.
   class Configuration
     DOCUMENT_STORES = %i[database active_storage resolver].freeze
     DIGEST_ALGORITHMS = %i[sha256 sha384 sha512].freeze
@@ -246,6 +250,8 @@ module Clickwrap
 
       @ip_geolocation_resolver = nil
       @ip_geolocation_resolvers = {}
+      @automatically_adopted_ip_geolocation_resolver = nil
+      @considered_automatic_ip_geolocation_resolver = false
       @fail_capture_when_ip_geolocation_is_unavailable = false
 
       # The keyed annex digest carries a key ID so a host can rotate keys
@@ -612,6 +618,49 @@ module Clickwrap
 
     # --- Request-evidence setters --------------------------------------------
 
+    # The one switch.
+    #
+    #   config.record_request_evidence_by_default = true
+    #
+    # Records, on every policy: the IP address the request arrived from, the
+    # browser user agent it sent, and a coarse country/region/city estimate for
+    # that address. Nothing finer — a postal code, coordinates, a timezone, a
+    # metro code — and nothing else at all. The purpose and the disposal answer
+    # have honest gem defaults (see `Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE`
+    # and the keep-indefinitely posture below), so this line is genuinely the
+    # whole first step.
+    #
+    # It is a fan-out setter, not a mode: it writes the individual
+    # `record_*_by_default` flags, which means it composes with them in reading
+    # order. Write the switch first and a narrower flag after it to carve one
+    # field back out —
+    #
+    #   config.record_request_evidence_by_default = true
+    #   config.record_browser_user_agent_by_default = false
+    #
+    # — and any policy can still override all of it with `record_ip_address`,
+    # `do_not_record_ip_address`, and their siblings. Setting it to false turns
+    # the same three fields off and leaves the finer geolocation fields alone,
+    # because it never turned those on.
+    def record_request_evidence_by_default=(value)
+      enabled = ensure_boolean(value, "record_request_evidence_by_default")
+
+      @record_ip_address_by_default = enabled
+      @record_browser_user_agent_by_default = enabled
+      Vocabulary::COARSE_IP_GEOLOCATION_DATA_FIELDS.each do |field|
+        instance_variable_set(:"@record_ip_geolocation_#{field}_by_default", enabled)
+      end
+    end
+
+    # Reads back what the switch describes rather than a remembered assignment:
+    # true when all three coarse fields are on, however they were turned on.
+    def record_request_evidence_by_default
+      record_ip_address_by_default && record_browser_user_agent_by_default &&
+        Vocabulary::COARSE_IP_GEOLOCATION_DATA_FIELDS.all? do |field|
+          public_send(:"record_ip_geolocation_#{field}_by_default")
+        end
+    end
+
     def record_ip_address_by_default=(value)
       @record_ip_address_by_default = ensure_boolean(value, "record_ip_address_by_default")
     end
@@ -715,9 +764,34 @@ module Clickwrap
     end
 
     def ip_geolocation_resolver_for(name = nil)
-      return ip_geolocation_resolver if name.blank? || name.to_s == "application_default"
+      return application_default_ip_geolocation_resolver if name.blank? || name.to_s == "application_default"
 
       @ip_geolocation_resolvers[name.to_s]
+    end
+
+    # What a policy gets when it does not name a resolver: the host's own, or —
+    # when they never set one and their bundle already carries `trackdown` 0.4
+    # or newer — the official adapter for it. That is the whole "trackdown plus
+    # Cloudflare just works" path, and it is deliberately not a silent
+    # collection decision: nothing calls this until a policy has already
+    # enabled an IP-geolocation field.
+    #
+    # An installed-but-too-old trackdown is NOT hidden here. The adapter's own
+    # sentence about upgrading is more useful than pretending the gem is
+    # missing.
+    def application_default_ip_geolocation_resolver
+      @ip_geolocation_resolver || automatically_adopted_ip_geolocation_resolver
+    end
+
+    # The resolver actually in force, for anything that only wants to describe
+    # the configuration (the privacy inventory, `clickwrap:doctor`). Unlike the
+    # reader above it never adopts one as a side effect of being asked.
+    def ip_geolocation_resolver_in_force
+      @ip_geolocation_resolver || @automatically_adopted_ip_geolocation_resolver
+    end
+
+    def ip_geolocation_resolver_was_adopted_automatically?
+      @ip_geolocation_resolver.nil? && !@automatically_adopted_ip_geolocation_resolver.nil?
     end
 
     def ip_geolocation_resolver_names = @ip_geolocation_resolvers.keys.sort.freeze
@@ -842,7 +916,6 @@ module Clickwrap
     # caught the typos; these are the things that need the whole block resolved.
     def validate!
       validate_request_evidence_defaults!
-      validate_trusted_proxy_configuration!
       validate_ip_geolocation_resolver!
       true
     end
@@ -870,6 +943,15 @@ module Clickwrap
       Reference.record(actor)
     end
 
+    # Enabling a category by default needs nothing else. A purpose the host did
+    # not write falls back to Clickwrap's own stated one, and a disposal answer
+    # nobody gave means the corroboration keeps pace with the evidence it
+    # corroborates — which is what core evidence has done since 0.2.0.
+    #
+    # Two things still fail here, and both are the host contradicting
+    # themselves rather than merely leaving a blank: scaffolding text standing
+    # in for a purpose, and a deletion clock set alongside a declaration to
+    # keep the same category forever.
     def validate_request_evidence_defaults!
       {
         ip_address: [record_ip_address_by_default,
@@ -884,37 +966,20 @@ module Clickwrap
       }.each do |category, (enabled, reason, delete_after)|
         next unless enabled
 
-        if reason.to_s.strip.empty?
-          raise ConfigurationError,
-                "Clickwrap is set to record #{category} for every policy by default, but " \
-                "`reason_for_recording_#{plural_for(category)}_by_default` is blank. Say in one " \
-                "plain sentence why the application needs it. If only some policies need it, " \
-                "turn the default off and enable it in those policies instead."
-        end
-
         if ReviewedText.placeholder?(reason)
           raise ConfigurationError,
                 "Clickwrap is set to record #{category} for every policy by default, but its " \
                 "reason is still scaffolding text (#{reason.inspect}). Replace it with the " \
-                "application's reviewed, present-tense reason, or turn that default off."
+                "application's reviewed, present-tense reason, or delete the line and let " \
+                "Clickwrap record its own stated purpose."
         end
 
-        if delete_after.present? && keeps_recorded_request_evidence_indefinitely?(category)
-          raise ConfigurationError,
-                "Clickwrap is told both to delete recorded #{category} after " \
-                "#{delete_after.inspect} and to keep it indefinitely. Those are opposite " \
-                "decisions — keep exactly one."
-        end
-
-        next if delete_after.present? || keeps_recorded_request_evidence_indefinitely?(category)
+        next unless delete_after.present? && keeps_recorded_request_evidence_indefinitely?(category)
 
         raise ConfigurationError,
-              "Clickwrap is set to record #{category} for every policy by default, but nothing " \
-              "says how long to keep it. Either set a reviewed period with " \
-              "`delete_recorded_#{plural_for(category)}_after`, or keep it as long as the " \
-              "evidence it corroborates with " \
-              "`keep_recorded_#{plural_for(category)}_indefinitely!(because: \"…\")` — or turn " \
-              "the default off and let each policy choose its own retention rule."
+              "Clickwrap is told both to delete recorded #{category} after " \
+              "#{delete_after.inspect} and to keep it indefinitely. Those are opposite " \
+              "decisions — keep exactly one."
       end
     end
 
@@ -926,46 +991,48 @@ module Clickwrap
       end
     end
 
-    def declare_indefinite_request_evidence!(category, because)
-      if because.to_s.strip.empty?
-        raise ConfigurationError,
-              "keep_recorded_#{plural_for(category)}_indefinitely! needs a `because:` " \
-              "explaining the reviewed decision."
-      end
-
-      @keep_recorded_request_evidence_indefinitely[category] = because
+    def host_reason_for_recording_by_default(category)
+      public_send(:"reason_for_recording_#{plural_for(category.to_sym)}_by_default").presence
     end
 
-    def validate_trusted_proxy_configuration!
-      records_ip_derived_evidence =
-        record_ip_address_by_default || enabled_default_ip_geolocation_fields.any?
-      return unless records_ip_derived_evidence
-      return if trusted_proxy_configuration_digest.present?
-
-      raise ConfigurationError,
-            "Clickwrap is set to record an IP address or derive IP geolocation for every " \
-            "policy, but `trusted_proxy_configuration_digest` is blank. Review and test the " \
-            "deployment's trusted-proxy topology, digest that exact configuration, and set " \
-            "the complete prefixed SHA-2 digest (for example `sha256:...`). This records which " \
-            "proxy decision produced the address; it does not claim that decision was correct."
+    def declare_indefinite_request_evidence!(category, because)
+      @keep_recorded_request_evidence_indefinitely[category] =
+        because.presence || Vocabulary::DEFAULT_REASON_FOR_KEEPING_REQUEST_EVIDENCE_INDEFINITELY
     end
 
     def validate_ip_geolocation_resolver!
-      return if ip_geolocation_resolver
       return if enabled_default_ip_geolocation_fields.empty? && !fail_capture_when_ip_geolocation_is_unavailable
+      return if application_default_ip_geolocation_resolver
 
       if enabled_default_ip_geolocation_fields.any?
         raise ConfigurationError,
               "Clickwrap is set to record the IP-geolocation fields " \
               "#{enabled_default_ip_geolocation_fields.join(", ")} but no " \
-              "`ip_geolocation_resolver` is configured, so there is nothing to resolve them. " \
-              "Set one (for example Clickwrap::IpGeolocation::TrackdownResolver.new) or turn " \
-              "the fields off."
+              "`ip_geolocation_resolver` is configured and the `trackdown` gem is not " \
+              "installed, so there is nothing to resolve them. Run " \
+              "`bundle add trackdown --version \">= 0.4\"` and Clickwrap will use it, set " \
+              "`config.ip_geolocation_resolver` to your own adapter, or turn the fields off."
       end
 
       raise ConfigurationError,
             "`fail_capture_when_ip_geolocation_is_unavailable` is true but no " \
             "`ip_geolocation_resolver` is configured, so every capture would fail."
+    end
+
+    # Considered once, at the first moment something actually needs geolocation
+    # resolved, and remembered either way — including the "no trackdown here"
+    # answer, so a host without it does not pay for a failed `require` on every
+    # policy compile.
+    def automatically_adopted_ip_geolocation_resolver
+      return @automatically_adopted_ip_geolocation_resolver if @considered_automatic_ip_geolocation_resolver
+
+      # Remembered only once the adapter has actually been built. An installed
+      # trackdown too old to use raises out of here, and a host who fixes their
+      # bundle and asks again must not be told the gem is missing because a
+      # failed attempt got memoized as "no".
+      resolver = (IpGeolocation::TrackdownResolver.new if IpGeolocation::TrackdownResolver.installed?)
+      @considered_automatic_ip_geolocation_resolver = true
+      @automatically_adopted_ip_geolocation_resolver = resolver
     end
 
     # --- Setter helpers -------------------------------------------------------
@@ -1118,29 +1185,42 @@ module Clickwrap
 
     public
 
-    # The deliberate, named escape hatch referenced by `ensure_encryption_choice`.
-    # It exists so that turning encryption off is a sentence a reviewer can find
-    # in a diff, with the host's own reason attached, rather than a `false`.
-    # The named escape hatch for by-default request evidence with no deletion
-    # clock: request evidence exists to corroborate evidence that (since 0.2.0)
-    # keeps indefinitely by default, and a corroboration that expires before
-    # the thing it corroborates is a scheduled weakening of the record. Same
-    # rule as every escape hatch here: keeping forever must be a sentence a
-    # reviewer can find in a diff, with the host's own reason attached.
-    def keep_recorded_ip_addresses_indefinitely!(because:)
+    # Says out loud what an absent deletion clock already means: this category
+    # keeps pace with the evidence it corroborates. Request evidence exists to
+    # corroborate evidence that (since 0.2.0) keeps indefinitely by default,
+    # and a corroboration that expires before the thing it corroborates is a
+    # scheduled weakening of the record.
+    #
+    # Saying it explicitly is worth doing — it puts the decision and its reason
+    # in the initializer where a reviewer finds them — but since 0.3.0 it is no
+    # longer the price of admission, and `because:` is optional. What a host
+    # writes is kept as their own words; what they leave out gets Clickwrap's.
+    def keep_recorded_ip_addresses_indefinitely!(because: nil)
       declare_indefinite_request_evidence!(:ip_address, because)
     end
 
-    def keep_recorded_browser_user_agents_indefinitely!(because:)
+    def keep_recorded_browser_user_agents_indefinitely!(because: nil)
       declare_indefinite_request_evidence!(:browser_user_agent, because)
     end
 
-    def keep_recorded_ip_geolocation_indefinitely!(because:)
+    def keep_recorded_ip_geolocation_indefinitely!(because: nil)
       declare_indefinite_request_evidence!(:ip_geolocation, because)
     end
 
     def keeps_recorded_request_evidence_indefinitely?(category)
       @keep_recorded_request_evidence_indefinitely.key?(category.to_sym)
+    end
+
+    # The purpose that will actually be recorded for a category enabled
+    # application-wide, and which of the two wrote it. The inventory reports
+    # both, so a reviewer can tell a sentence their team signed off on from the
+    # one the gem supplied.
+    def reason_for_recording_by_default(category)
+      host_reason_for_recording_by_default(category) || Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE
+    end
+
+    def reason_for_recording_by_default_source(category)
+      host_reason_for_recording_by_default(category) ? "host" : "gem_default"
     end
 
     def reason_for_keeping_recorded_request_evidence_indefinitely(category)

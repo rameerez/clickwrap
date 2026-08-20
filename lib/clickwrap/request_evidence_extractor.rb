@@ -244,7 +244,10 @@ module Clickwrap
 
       # Provenance is recorded even when the value is not, because "which reader
       # was asked, under which reviewed proxy configuration" is what tells a
-      # later reader how much the address is worth.
+      # later reader how much the address is worth. A nil digest is part of
+      # that answer rather than a hole in it: it says no reviewed proxy
+      # configuration was recorded when this address was observed, which is
+      # exactly what a reader should know about it.
       provenance = {
         ip_address_reader_name: ip_address_reader_name,
         trusted_proxy_configuration_digest: policy.trusted_proxy_configuration_digest
@@ -484,13 +487,17 @@ module Clickwrap
     # --- Retention ------------------------------------------------------------
 
     # Every recorded field leaves here with a disposal answer: a date, the name
-    # of a host rule that will produce one, or the explicit reviewed decision
-    # to keep it as long as the evidence it corroborates. Keeping forever is
-    # never a silent default — it is a named declaration in the retention class
-    # (`keep_recorded_..._indefinitely`) or the initializer
-    # (`keep_recorded_..._indefinitely!(because: "…")`) — and a recorded field
-    # with no answer at all is a configuration bug caught before the row is
-    # written rather than a row nobody ever decided about.
+    # of a host rule that will produce one, or no schedule at all — which means
+    # it keeps pace with the evidence it corroborates, exactly like an
+    # indefinite core event. A blank schedule is the answer, not a gap: the
+    # planner never lists these rows, and the receipt reports them as recorded
+    # rather than as anything pending.
+    #
+    # Until 0.3.0 this raised when nothing had named a schedule, on the theory
+    # that keeping forever must never be silent. The theory held; the cost did
+    # not. It refused captures for hosts who had simply not written a sentence,
+    # and pushed integrators toward recording nothing — which is worse evidence
+    # than evidence kept under the same posture as the agreement it belongs to.
     #
     # `retain_until` names a host calculation instead of a duration because real
     # record-keeping schedules are not always durations — "five years, or three
@@ -504,31 +511,13 @@ module Clickwrap
       return { "#{category}_delete_after": now + class_rule.duration } if class_rule&.duration?
       return { "#{category}_retain_until_rule": class_rule.host_event_name.to_s } if class_rule&.host_event?
 
-      # Indefinite — declared in the class or application-wide — stamps
-      # nothing: the blank schedule plus the recorded declaration IS the
-      # disposal answer, exactly like an indefinite core event.
-      if class_rule&.indefinite? ||
-         Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(category)
-        return {}
-      end
-
-      raise ConfigurationError, missing_retention_message(category)
+      {}
     end
 
     def retention_class_rule_for(category)
       return nil if policy.retention_class_key.nil?
 
       Clickwrap.retention_class!(policy.retention_class_key).rule_for(category)
-    end
-
-    def missing_retention_message(category)
-      "Clickwrap is about to record #{category} for policy #{policy_key} and nothing says what " \
-        "should ever happen to it. Give the policy a rule — `delete_after:` with a reviewed " \
-        "period, or `retain_until:` naming a host retention calculation — add a #{category} " \
-        "rule (or `keep_recorded_#{category}_indefinitely`) to retention class " \
-        "#{policy.retention_class_key.inspect}, or answer it application-wide with " \
-        "`keep_recorded_..._indefinitely!(because: \"…\")`. Keeping forever is never silent, " \
-        "and Clickwrap will not choose for you."
     end
 
     # --- Failing closed -------------------------------------------------------

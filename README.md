@@ -110,10 +110,11 @@ Clickwrap.policy :signup do
 end
 ```
 
-(Yes, the payload-retention decision is mandatory — `clickwrap` will not silently
-default captured evidence or request evidence to "keep forever" and will not pick
-a period for you. A minimal, digest-linked disposition tombstone remains after a
-reviewed core deletion so the deletion itself does not become an unexplained hole.)
+(A retention class that names no rule keeps the evidence, which is the same
+posture request evidence takes: keeping is reversible, deleting is the explicit
+act. `clickwrap` will not pick a *deletion* period for you. A minimal,
+digest-linked disposition tombstone remains after a reviewed core deletion so
+the deletion itself does not become an unexplained hole.)
 
 Add one macro to your model:
 
@@ -722,37 +723,54 @@ With the engine mounted, users can view and download their own receipts, and ope
 
 `clickwrap` always records its event ID, server time, capture channel, and policy version. That proves **what was offered and what came back**. But an agreement dispute is rarely about the words — it's "that wasn't me" — and the answer to that is request evidence: the IP address, the browser, and where in the world the request came from, bound into the same digest-linked record at the same instant. Years later, "this exact sentence was accepted from this address, on this client, from this city, at this second, in the transaction that created the account" is a different conversation from "the row says yes". **Our recommendation is to record IP + user agent + geolocation on every assent policy** — you already hold a purpose (defending the very agreement being made) and the evidence lives encrypted, in its own annex, deletable on its own schedule if your counsel ever decides so.
 
-What the gem refuses to do is turn it on *silently*. Every field is a separate named decision with a written purpose — there is deliberately no `maximum_evidence` switch — so the recommended posture is three explicit blocks in your initializer:
+So turn it on. One line, and you are done:
+
+```ruby
+Clickwrap.configure do |config|
+  config.record_request_evidence_by_default = true
+end
+```
+
+That records, on every policy: the IP address the request arrived from, the browser user agent it sent, and a coarse country / region / city estimate for that address. Add [`trackdown`](https://github.com/rameerez/trackdown) 0.4+ to your Gemfile and the geolocation half resolves itself — Clickwrap picks up the official adapter with no wiring line, so trackdown plus Cloudflare genuinely is "bundle it and flip the switch".
+
+Nothing else is required, because Clickwrap supplies honest defaults for the parts you did not write:
+
+- **Purpose.** Every recorded field carries one into the receipt. Yours if you wrote one, otherwise Clickwrap's: *"Corroborate who performed each recorded act, from where, on what client — to defend the recorded agreement itself."* The [privacy inventory](#operations) marks which of the two it is reading back (`"purpose_source": "gem_default"` vs `"host"`), so a gem sentence never passes for a decision your team reviewed.
+- **How long.** No clock means it keeps pace with the evidence it corroborates — the same posture core evidence has had since 0.2.0. A corroboration scheduled to expire before the agreement it corroborates is a scheduled weakening of the record.
+- **Proxy provenance.** `trusted_proxy_configuration_digest` is recorded when you set one and left `nil` when you have not, and the `nil` is itself the honest answer: no reviewed proxy configuration was in force when this address was observed. `bin/rails clickwrap:doctor` says so out loud.
+
+What the gem still will not do is hide what it collects behind a name. The switch is called `record_request_evidence_by_default` because that is what it does; there is deliberately no `gdpr_compliant_mode`, `maximum_evidence`, or `legal_proof`, and no flag here makes any claim about the law. It also stops exactly at the coarse trio: a postal code, coordinates, a timezone, a metro code, and an accuracy radius each stay their own separately named line, because a switch that reads "record request evidence" should not hand you coordinates you never asked for.
+
+### The upgrade path: reviewed records
+
+The one-liner is the entry point, not the ceiling. Teams who want the stronger record — words their counsel signed off on, a legal basis reference, a named clock, a reviewed proxy topology — write them, and Clickwrap keeps every one of them as the host's own:
 
 ```ruby
 # clickwrap-doc-test: syntax-only — the resolver needs trackdown installed
 Clickwrap.configure do |config|
-  config.record_ip_address_by_default = true
+  config.record_request_evidence_by_default = true
+
   config.reason_for_recording_ip_addresses_by_default =
     "Corroborate who performed each recorded act, to defend the agreement itself"
+  config.legal_basis_reference_for_recording_ip_addresses_by_default = "LIA-SECURITY-2026-01"
   config.keep_recorded_ip_addresses_indefinitely!(
     because: "Corroboration must live exactly as long as the evidence it corroborates")
 
-  config.record_browser_user_agent_by_default = true
   config.reason_for_recording_browser_user_agents_by_default =
     "Corroborate the client context of each recorded act"
-  config.keep_recorded_browser_user_agents_indefinitely!(
-    because: "Corroboration must live exactly as long as the evidence it corroborates")
+  config.delete_recorded_browser_user_agents_after = 2.years
 
-  config.record_ip_geolocation_country_by_default = true
-  config.record_ip_geolocation_region_by_default = true
-  config.record_ip_geolocation_city_by_default = true
   config.reason_for_recording_ip_geolocation_by_default =
     "Corroborate where each recorded act was performed from"
-  config.keep_recorded_ip_geolocation_indefinitely!(
-    because: "Corroboration must live exactly as long as the evidence it corroborates")
   config.ip_geolocation_resolver = Clickwrap::IpGeolocation::TrackdownResolver.new
 
+  config.trusted_proxy_configuration_digest =
+    Clickwrap.trusted_proxy_configuration_digest_for_rails_application
   config.review_default_request_evidence_configuration_on = Date.new(2027, 8, 1)
 end
 ```
 
-(`keep_recorded_..._indefinitely!` matches the retention default since 0.2.0 — evidence keeps until deletion is an explicit reviewed act. A corroboration that expires before the agreement it corroborates is a scheduled weakening of the record; if your counsel wants a clock instead, `delete_recorded_..._after` is the same one-line decision in the other direction.)
+Two things are still refused, and both are you contradicting yourself rather than leaving a blank: scaffolding text (`"TODO: ask legal"`) standing in for a purpose, and a deletion clock set alongside `keep_recorded_..._indefinitely!` for the same category.
 
 A single regulated surface can also name a field per policy instead of by default:
 
@@ -773,10 +791,11 @@ end
 Recorded values live in a separately encrypted annex with their own retention, so
 they can be deleted later without rewriting the core event payload. Core payloads
 have their own reviewed disposition path and leave a digest-linked tombstone.
-There is deliberately no `gdpr_compliant_mode` or `maximum_evidence` switch —
-every field is named individually, in plain English.
+Encryption is on by default and turning it off keeps its own ceremony —
+`config.deliberately_store_request_evidence_unencrypted!(because: "…")` — because
+that one is a real hazard, not paperwork.
 
-For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) 0.4 or newer is the optional official resolver:
+For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) 0.4 or newer is the official resolver, and Clickwrap uses it automatically when your bundle has it and you named no resolver of your own. Set it explicitly when you want a different provider per policy, or when you are wiring Trackdown's per-request CDN trust:
 
 ```ruby
 Trackdown.configure do |trackdown|
@@ -1237,8 +1256,11 @@ Clickwrap.configure do |config|
     controller.current_user == receipt.actor
   end
 
-  # Safe defaults: no IP address, browser user-agent, or IP geolocation is stored.
-  # Enable fields per policy, each with a plain-English purpose and retention rule.
+  # Nothing request-derived is stored until you say so. This one line says so:
+  # IP address, browser user agent, and a coarse country/region/city estimate,
+  # on every policy. Per-field flags and per-policy declarations still override
+  # it in either direction.
+  config.record_request_evidence_by_default = true
 
   # Optional hooks run only after evidence and domain state have committed:
   config.after_event_is_committed = ->(event) { }
@@ -1340,7 +1362,7 @@ No — and `clickwrap` never equates scrolling with reading. It makes documents 
 
 ### Should I record IP addresses?
 
-Only for policies with a real, documented purpose. They corroborate request context; they don't prove identity or location. Everything defaults off.
+We think yes, for assent policies — they are what turns "the row says yes" into "this sentence was accepted from this address, on this client, at this second". They corroborate request context; they do not prove identity or physical location. The gem's own default is still off, and turning them on is `config.record_request_evidence_by_default = true`.
 
 ### Can I keep my domain models?
 

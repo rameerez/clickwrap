@@ -5,11 +5,25 @@ configured actor and authentication source, the policy and application version, 
 request ID when one is available. None of that is derived from the person's network or browser.
 
 It records **nothing** about the request itself — no IP address, no browser user-agent, no
-IP-geolocation field — unless the initializer or a policy names that exact field. There is no
-category switch, no profile, and no option that turns one of these on as a side effect of
-turning on something else.
+IP-geolocation field — until the initializer or a policy says otherwise. Saying otherwise takes
+one line:
 
-That default is evidence design, not squeamishness. Three things follow from it:
+```ruby
+Clickwrap.configure do |config|
+  config.record_request_evidence_by_default = true
+end
+```
+
+That switch records exactly what its name says and nothing else: the IP address, the browser
+user agent, and a coarse country / region / city estimate. Every finer geolocation field — a
+postal code, coordinates, a timezone, a continent, a metro code, an accuracy radius — remains
+its own separately named line, and no option here turns a category on as a side effect of
+turning on something else. There is still no profile switch and no name that hides its
+contents (`gdpr_compliant_mode`, `maximum_evidence`, `legal_proof`); a switch that reads
+`record_request_evidence_by_default` is the opposite of one.
+
+The gem's own default is still record-nothing, and that default is evidence design, not
+squeamishness. Three things follow from it:
 
 - An IP address and other online identifiers can be personal data. The CJEU addressed dynamic
   IP addresses in [Breyer, Case C-582/14](https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX%3A62014CJ0582)
@@ -230,7 +244,8 @@ they tell an auditor completely different things:
 
 Two places, and the policy always wins.
 
-**In the initializer, for every policy.** Each field is its own setting, and each is `false`:
+**In the initializer, for every policy.** Either the one switch, or the individual settings —
+each field has its own, and each is `false`:
 
 ```ruby
 Clickwrap.configure do |config|
@@ -242,10 +257,15 @@ Clickwrap.configure do |config|
 end
 ```
 
-Turning a default on without a purpose or without a deletion period is a `ConfigurationError`
-at the end of the `configure` block, not a warning. Enabling any
-`record_ip_geolocation_*_by_default` without an `ip_geolocation_resolver` is likewise a
-`ConfigurationError` — there would be nothing to resolve them.
+Everything below the first line there is optional. A purpose you do not write becomes
+Clickwrap's own stated one (marked `gem_default` in the inventory); a deletion period you do
+not set means the field keeps pace with the evidence it corroborates.
+
+Three things are still a `ConfigurationError` at the end of the `configure` block rather than a
+warning: scaffolding text standing in for a purpose, a deletion clock set alongside
+`keep_recorded_..._indefinitely!` for the same category, and enabling a
+`record_ip_geolocation_*_by_default` field with no `ip_geolocation_resolver` configured *and*
+no `trackdown` in the bundle — there would be nothing to resolve them with.
 
 **In one policy, for one flow.** This is the shape most applications want: ordinary signup
 inherits nothing, and the one consequential action opts in by name.
@@ -293,13 +313,19 @@ end
 Every keyword there is doing work:
 
 - **`because:`** is the present purpose, in a sentence someone outside engineering can read. It
-  is stored, printed by `bin/rails clickwrap:privacy:inventory`, and required.
+  is stored and printed by `bin/rails clickwrap:privacy:inventory`. It is optional: a policy
+  that omits it records Clickwrap's own stated purpose instead, and the inventory marks that
+  entry `"purpose_source": "gem_default"` so nobody mistakes it for a sentence your team
+  reviewed. What is refused is scaffolding text — `"TODO: ask legal"` is not a purpose.
 - **`legal_basis_reference:`** and **`data_protection_impact_assessment_reference:`** are
   host-supplied pointers to your own reviewed documents. Clickwrap stores them. It does not
   read them, validate them, or endorse them.
-- **`delete_after:`** or **`retain_until:`** is not optional. If a policy records a field and
-  neither the policy nor the configuration says when it goes away, capture raises a
-  `ConfigurationError` before the row is written. There is no keep-forever default in this gem.
+- **`delete_after:`** and **`retain_until:`** are both optional. When neither the policy, its
+  retention class, nor the configuration names a schedule, the field keeps pace with the
+  evidence it corroborates — the same posture the core event has — and the annex is stamped
+  with no deadline at all, so the retention planner never lists it. Setting a clock alongside
+  an application-wide `keep_recorded_..._indefinitely!` for the same category is still refused:
+  those are opposite decisions.
 - **`fail_if_unavailable:`** (default `false`) decides whether evidence you cannot get is worse
   than no capture at all. When it is `true` and the field cannot be resolved, the capture and
   the protected action roll back together.
@@ -359,6 +385,12 @@ So "we record IP addresses" is not one decision. It is four:
    later reader identify which rules were in force — the difference between corroborating
    evidence and a number with no recorded collection context.
 
+   Since 0.3.0 this step is not a precondition for recording an address. Leave it unset and the
+   annex stores `trusted_proxy_configuration_digest` as `nil`, which is the honest reading of
+   the situation: nobody recorded having reviewed a proxy topology when this address was
+   observed. `bin/rails clickwrap:doctor` warns while it stays that way. Hosts who complete
+   step 4 get the stronger record; hosts who do not get an address that says what it is worth.
+
 If you replace the reader, you own that decision, and the receipt says so: any host-assigned
 lambda is labeled `host_configured_reader` rather than `rails_request_remote_ip`, even when the
 body is identical. Clickwrap will not claim Rails' spoof checks on your behalf.
@@ -377,6 +409,18 @@ gem and must never become one.
 ```bash
 bundle add trackdown --version ">= 0.4"
 ```
+
+That is the whole wiring step. When your bundle carries trackdown and you have not named a
+resolver of your own, Clickwrap uses `Clickwrap::IpGeolocation::TrackdownResolver` for any
+policy that records IP geolocation — lazily, only at the moment something actually needs an
+address resolved, and never as a collection decision on its own (nothing is resolved until a
+policy has already enabled a geolocation field). `bin/rails clickwrap:privacy:inventory` reports
+that resolver with `"source": "gem_default"`, and `clickwrap:doctor` names it, so an adopted
+resolver never reads as a host decision. An installed trackdown older than 0.4 is not hidden
+behind "the gem is missing": you get the adapter's own sentence about upgrading.
+
+Set it explicitly when you want a different provider per policy, or when you are wiring
+Trackdown's per-request CDN trust:
 
 ```ruby
 # clickwrap-doc-test: syntax-only — requires the optional trackdown gem installed above

@@ -5,8 +5,9 @@ require "test_helper"
 # By-default request evidence used to demand a deletion clock — which, since
 # 0.2.0 flipped core evidence to keep-indefinitely, meant the corroboration
 # (IP, user agent, geolocation) was scheduled to expire before the agreement
-# it corroborates. These pin the third option: keeping it as long as the
-# evidence itself, said out loud with a reason, never silently.
+# it corroborates. 0.3.0 made keeping pace the answer nobody has to write
+# down: an absent clock means indefinite, and saying it out loud is still
+# worth doing but no longer the price of recording anything at all.
 class RequestEvidenceKeepIndefinitelyTest < ActiveSupport::TestCase
   def enable_ip_defaults!(config)
     config.trusted_proxy_configuration_digest =
@@ -28,15 +29,13 @@ class RequestEvidenceKeepIndefinitelyTest < ActiveSupport::TestCase
     assert_nil Clickwrap.config.delete_recorded_ip_addresses_after
   end
 
-  test "recording by default with neither a clock nor keep-indefinitely refuses to boot" do
-    error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.configure { |config| enable_ip_defaults!(config) }
-      Clickwrap.config.validate!
-    end
+  test "recording by default with neither a clock nor keep-indefinitely boots, and means indefinite" do
+    Clickwrap.configure { |config| enable_ip_defaults!(config) }
 
-    assert_match(/nothing says how long to keep it/, error.message)
-    assert_match(/keep_recorded_ip_addresses_indefinitely!/, error.message)
-    assert_match(/delete_recorded_ip_addresses_after/, error.message)
+    assert Clickwrap.config.validate!
+    assert_nil Clickwrap.config.delete_recorded_ip_addresses_after
+    assert_not Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(:ip_address),
+               "nobody declared it, so there is no declaration to read back"
   end
 
   test "a deletion clock and keep-indefinitely together are refused as opposite decisions" do
@@ -52,15 +51,23 @@ class RequestEvidenceKeepIndefinitelyTest < ActiveSupport::TestCase
     assert_match(/opposite decisions/, error.message)
   end
 
-  test "keep-indefinitely without a reason is refused" do
-    error = assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.configure do |config|
-        config.keep_recorded_browser_user_agents_indefinitely!(because: "  ")
-      end
+  test "keep-indefinitely without a reason records the one Clickwrap states" do
+    Clickwrap.configure do |config|
+      config.keep_recorded_browser_user_agents_indefinitely!
+      config.keep_recorded_ip_geolocation_indefinitely!(because: "Our own reviewed sentence")
     end
 
-    assert_match(/needs a `because:`/, error.message)
+    assert Clickwrap.config.keeps_recorded_request_evidence_indefinitely?(:browser_user_agent)
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REASON_FOR_KEEPING_REQUEST_EVIDENCE_INDEFINITELY,
+                 Clickwrap.config.reason_for_keeping_recorded_request_evidence_indefinitely(
+                   :browser_user_agent
+                 )
+    assert_equal "Our own reviewed sentence",
+                 Clickwrap.config.reason_for_keeping_recorded_request_evidence_indefinitely(
+                   :ip_geolocation
+                 )
   end
+
   test "by-default recording under keep-indefinitely compiles, captures, and is never planned" do
     Clickwrap.configure do |config|
       enable_ip_defaults!(config)

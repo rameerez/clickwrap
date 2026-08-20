@@ -125,7 +125,7 @@ module Clickwrap
           "browser_user_agent" => default_category(config, :browser_user_agent),
           "ip_geolocation" => default_category(config, :ip_geolocation).merge(
             "fields" => config.enabled_default_ip_geolocation_fields,
-            "resolver" => describe_resolver(config.ip_geolocation_resolver),
+            "resolver" => describe_resolver(config),
             "fail_capture_when_unavailable" => config.fail_capture_when_ip_geolocation_is_unavailable
           ),
           "review_default_request_evidence_configuration_on" =>
@@ -138,14 +138,25 @@ module Clickwrap
         }
       end
 
+      # `because` is the purpose that will actually be recorded, and
+      # `purpose_source` says who wrote it. A `"gem_default"` purpose is a real
+      # purpose and it is stored with the evidence — but nobody should mistake
+      # Clickwrap's own sentence for one the host's team reviewed, so the
+      # inventory never lets the two look alike.
       def default_category(config, category)
+        recorded = default_recorded?(config, category)
+
         {
-          "recorded_by_default" => default_recorded?(config, category),
-          "because" => config.public_send(:"reason_for_recording_#{plural_for(category)}_by_default"),
+          "recorded_by_default" => recorded,
+          "because" => recorded ? config.reason_for_recording_by_default(category) : nil,
+          "purpose_source" => (config.reason_for_recording_by_default_source(category) if recorded),
           "legal_basis_reference" =>
             config.public_send(:"legal_basis_reference_for_recording_#{plural_for(category)}_by_default"),
           "encrypted" => config.public_send(:"encrypt_recorded_#{plural_for(category)}"),
-          "delete_after_seconds" => config.public_send(:"delete_recorded_#{plural_for(category)}_after")&.to_i
+          "delete_after_seconds" => config.public_send(:"delete_recorded_#{plural_for(category)}_after")&.to_i,
+          "kept_indefinitely" => config.keeps_recorded_request_evidence_indefinitely?(category),
+          "reason_for_keeping_indefinitely" =>
+            config.reason_for_keeping_recorded_request_evidence_indefinitely(category)
         }
       end
 
@@ -186,6 +197,7 @@ module Clickwrap
         entry = {
           "recorded" => setting.record?,
           "because" => setting.because,
+          "purpose_source" => policy.request_evidence.purpose_source_for(category),
           "legal_basis_reference" => setting.legal_basis_reference,
           "data_protection_impact_assessment_reference" =>
             setting.data_protection_impact_assessment_reference,
@@ -201,7 +213,7 @@ module Clickwrap
         entry.merge(
           "fields" => policy.request_evidence.enabled_ip_geolocation_fields,
           "resolver_named_by_policy" => policy.request_evidence.ip_geolocation_resolver_name&.to_s,
-          "resolver" => describe_resolver(Clickwrap.config.ip_geolocation_resolver)
+          "resolver" => describe_resolver(Clickwrap.config)
         )
       end
 
@@ -283,10 +295,19 @@ module Clickwrap
         }
       end
 
-      def describe_resolver(resolver)
+      # Reports the resolver in force, and whether the host named it or
+      # Clickwrap adopted the official trackdown adapter because their bundle
+      # already carried it. Asking never causes that adoption to happen — an
+      # inventory describes a configuration, it does not make one.
+      def describe_resolver(config)
+        resolver = config.ip_geolocation_resolver_in_force
         return { "configured" => false } if resolver.nil?
 
-        { "configured" => true, "class" => resolver.class.name }
+        {
+          "configured" => true,
+          "class" => resolver.class.name,
+          "source" => config.ip_geolocation_resolver_was_adopted_automatically? ? "gem_default" : "host"
+        }
       end
 
       def plural_for(category)
