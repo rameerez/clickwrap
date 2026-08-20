@@ -239,24 +239,34 @@ module Clickwrap
         @request_evidence[:browser_user_agent] = RequestEvidencePolicy::NOT_RECORDED
       end
 
-      # Each IP-geolocation data field is named separately, because each one is
-      # a separate decision about what to keep about a person's network
+      # Each IP-geolocation data field can be named separately, because each one
+      # is a separate decision about what to keep about a person's network
       # context. `latitude_and_longitude` is one coupled choice: half a
       # coordinate is not a result. Whatever is enabled, the provider name,
       # source, estimated status, resolution time, and any accuracy or database
       # provenance the resolver supplies are stored with it automatically — a
       # policy cannot keep the coordinates and drop the uncertainty needed to
       # read them.
-      def record_ip_geolocation(country: false, region: false, city: false, postal_code: false,
-                                latitude_and_longitude: false, timezone: false, continent: false,
-                                metro_code: false, accuracy_radius_in_kilometers: false,
+      #
+      # Naming no field at all is the frictionless form:
+      #
+      #   record_ip_geolocation
+      #
+      # It records the same coarse trio as
+      # `config.record_request_evidence_by_default` — country, region, city —
+      # and nothing finer, because that is what "IP geolocation" means in this
+      # gem when nobody narrows it. Naming even one field means you are
+      # choosing the set yourself, and then the set is exactly what you named.
+      def record_ip_geolocation(country: nil, region: nil, city: nil, postal_code: nil,
+                                latitude_and_longitude: nil, timezone: nil, continent: nil,
+                                metro_code: nil, accuracy_radius_in_kilometers: nil,
                                 using: nil, encrypted: nil, delete_after: nil, retain_until: nil,
                                 fail_if_unavailable: false, because: nil,
                                 legal_basis_reference: nil,
                                 data_protection_impact_assessment_reference: nil,
                                 **unknown_options)
         refuse_unknown_options!("record_ip_geolocation", unknown_options)
-        @ip_geolocation_fields = {
+        named = {
           "country" => country,
           "region" => region,
           "city" => city,
@@ -267,6 +277,7 @@ module Clickwrap
           "metro_code" => metro_code,
           "accuracy_radius_in_kilometers" => accuracy_radius_in_kilometers
         }
+        @ip_geolocation_fields = default_ip_geolocation_fields_when_none_named(named)
         @ip_geolocation_resolver_name = using
 
         @request_evidence[:ip_geolocation] = RequestEvidencePolicy::Setting.new(
@@ -401,6 +412,20 @@ module Clickwrap
         when :browser_user_agent
           Clickwrap.config.legal_basis_reference_for_recording_browser_user_agents_by_default
         else Clickwrap.config.legal_basis_reference_for_recording_ip_geolocation_by_default
+        end
+      end
+
+      # `nil` means "the policy did not mention this field"; `false` means "the
+      # policy named it and turned it off". The distinction is the whole reason
+      # the keywords default to nil: a policy that mentions nothing gets the
+      # coarse trio, and a policy that explicitly sets every field to false
+      # still reaches the coherence check that tells it to say
+      # `do_not_record_ip_geolocation` instead.
+      def default_ip_geolocation_fields_when_none_named(named)
+        return named.transform_values { |value| value == true } if named.any? { |_, value| !value.nil? }
+
+        Vocabulary::IP_GEOLOCATION_DATA_FIELDS.to_h do |field|
+          [field, Vocabulary::COARSE_IP_GEOLOCATION_DATA_FIELDS.include?(field)]
         end
       end
 

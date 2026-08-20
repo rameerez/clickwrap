@@ -733,7 +733,7 @@ end
 
 That records, on every policy: the IP address the request arrived from, the browser user agent it sent, and a coarse country / region / city estimate for that address. Add [`trackdown`](https://github.com/rameerez/trackdown) 0.4+ to your Gemfile and the geolocation half resolves itself — Clickwrap picks up the official adapter with no wiring line, so trackdown plus Cloudflare genuinely is "bundle it and flip the switch".
 
-Nothing else is required, because Clickwrap supplies honest defaults for the parts you did not write:
+Nothing else is required — anywhere, at either level. **Your privacy policy owns the why; the gem records the what, honestly, and is nobody's nanny.** Clickwrap supplies its own defaults for every part you did not write:
 
 - **Purpose.** Every recorded field carries one into the receipt. Yours if you wrote one, otherwise Clickwrap's: *"Corroborate who performed each recorded act, from where, on what client — to defend the recorded agreement itself."* The [privacy inventory](#operations) marks which of the two it is reading back (`"purpose_source": "gem_default"` vs `"host"`), so a gem sentence never passes for a decision your team reviewed.
 - **How long.** No clock means it keeps pace with the evidence it corroborates — the same posture core evidence has had since 0.2.0. A corroboration scheduled to expire before the agreement it corroborates is a scheduled weakening of the record.
@@ -772,7 +772,23 @@ end
 
 Two things are still refused, and both are you contradicting yourself rather than leaving a blank: scaffolding text (`"TODO: ask legal"`) standing in for a purpose, and a deletion clock set alongside `keep_recorded_..._indefinitely!` for the same category.
 
-A single regulated surface can also name a field per policy instead of by default:
+### Per policy, with as much or as little as you want
+
+A single surface can name the fields itself instead of inheriting the default. The frictionless form takes no arguments at all:
+
+```ruby
+Clickwrap.policy :withdrawal_authorization do
+  authorize :regulated_action, one_time: true, valid_for: 10.minutes
+
+  record_ip_address
+  record_browser_user_agent
+  record_ip_geolocation
+end
+```
+
+`record_ip_geolocation` with no field named records the same coarse trio as the switch — country, region, city. Name even one field and you are choosing the set yourself, and the set is exactly what you named.
+
+The same declarations with the full record a reviewed team would want:
 
 ```ruby
 Clickwrap.policy :regulated_authorization do
@@ -791,9 +807,11 @@ end
 Recorded values live in a separately encrypted annex with their own retention, so
 they can be deleted later without rewriting the core event payload. Core payloads
 have their own reviewed disposition path and leave a digest-linked tombstone.
-Encryption is on by default and turning it off keeps its own ceremony —
-`config.deliberately_store_request_evidence_unencrypted!(because: "…")` — because
-that one is a real hazard, not paperwork.
+Encryption is on by default for all three categories. Turning it off keeps its
+own ceremony — you cannot reach `encrypt_recorded_ip_addresses = false` without
+first writing `config.deliberately_store_request_evidence_unencrypted!` — but the
+ceremony is the method name a reviewer finds in the diff, not a sentence the gem
+makes you type. `because:` there is optional too.
 
 For IP geolocation, [`trackdown`](https://github.com/rameerez/trackdown) 0.4 or newer is the official resolver, and Clickwrap uses it automatically when your bundle has it and you named no resolver of your own. Set it explicitly when you want a different provider per policy, or when you are wiring Trackdown's per-request CDN trust:
 

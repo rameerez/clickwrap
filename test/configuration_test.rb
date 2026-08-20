@@ -309,6 +309,10 @@ class ConfigurationTest < ActiveSupport::TestCase
   # --- The named escape hatch -------------------------------------------------
 
   test "turning encryption off is a sentence a reviewer can find, not a false" do
+    # The ceremony is the method name, and it survives: `= false` alone still
+    # cannot reach the setting. What no longer survives is being asked to
+    # phrase the reason twice — the method records the gem's own when the host
+    # writes none.
     error = assert_raises(Clickwrap::ConfigurationError) do
       Clickwrap.config.encrypt_recorded_ip_addresses = false
     end
@@ -316,18 +320,32 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_match(/plain text in your database/, error.message)
     assert_match(/deliberately_store_request_evidence_unencrypted!/, error.message)
 
-    assert_raises(Clickwrap::ConfigurationError) do
-      Clickwrap.config.deliberately_store_request_evidence_unencrypted!(because: "  ")
-    end
-
-    Clickwrap.config.deliberately_store_request_evidence_unencrypted!(
-      because: "Reviewed: this deployment encrypts at the storage layer"
-    )
+    Clickwrap.config.deliberately_store_request_evidence_unencrypted!
     Clickwrap.config.encrypt_recorded_ip_addresses = false
 
     assert_not Clickwrap.config.encrypt_recorded_ip_addresses
     assert Clickwrap.config.storing_request_evidence_unencrypted?
+    assert_equal Clickwrap::Vocabulary::DEFAULT_REASON_FOR_STORING_REQUEST_EVIDENCE_UNENCRYPTED,
+                 Clickwrap.config.reason_for_storing_request_evidence_unencrypted
+  end
+
+  test "a host's own reason for unencrypted storage stays their own words" do
+    Clickwrap.config.deliberately_store_request_evidence_unencrypted!(
+      because: "Reviewed: this deployment encrypts at the storage layer"
+    )
+    Clickwrap.config.encrypt_recorded_browser_user_agents = false
+
+    assert_not Clickwrap.config.encrypt_recorded_browser_user_agents
     assert_match(/storage layer/, Clickwrap.config.reason_for_storing_request_evidence_unencrypted)
+  end
+
+  test "encryption is on by default for all three categories, switch or no switch" do
+    Clickwrap.configure { |config| config.record_request_evidence_by_default = true }
+
+    assert Clickwrap.config.encrypt_recorded_ip_addresses
+    assert Clickwrap.config.encrypt_recorded_browser_user_agents
+    assert Clickwrap.config.encrypt_recorded_ip_geolocation
+    assert_not Clickwrap.config.storing_request_evidence_unencrypted?
   end
 
   test "there is no switch whose name hides what it collects" do

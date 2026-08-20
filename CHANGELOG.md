@@ -6,6 +6,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-20
+
+### Changed — the rest of the collection friction, and the principle behind removing it
+
+0.3.0 made *enabling* request evidence one switch and gave the initializer
+defaults honest gem-supplied purposes. It left the friction standing
+everywhere else: a policy-level `record_ip_address` still read as though it
+wanted a sentence, `record_ip_geolocation` refused to do anything without a
+field list, and the encryption escape hatch still demanded a reason be
+phrased twice. This finishes the job the owner asked for.
+
+The principle, in their words: **the host application and its privacy policy
+own *why* data is collected; this gem records *what* was collected, honestly,
+and is nobody's nanny.** Its job is evidence mechanics, not gatekeeping
+collection. Everything below now works exactly as written:
+
+```ruby
+Clickwrap.configure do |config|
+  config.record_request_evidence_by_default = true
+  config.keep_recorded_ip_addresses_indefinitely!
+  config.deliberately_store_request_evidence_unencrypted!
+end
+
+Clickwrap.policy :anything do
+  agree_to :terms
+  record_ip_address
+  record_browser_user_agent
+  record_ip_geolocation
+end
+```
+
+- **All three `record_` verbs take zero keyword arguments.** `because:`,
+  `legal_basis_reference:`, `data_protection_impact_assessment_reference:`,
+  `delete_after:`, `retain_until:`, and `encrypted:` are optional in fact and
+  not merely in the signature — nothing downstream refuses their absence.
+  (`legal_basis_reference` and the DPIA reference never were required anywhere
+  in the gem; a test now pins that they never become so.)
+- **`record_ip_geolocation` with no field named records the coarse trio** —
+  country, region, city — the same set `record_request_evidence_by_default`
+  turns on, and nothing finer. The field keywords moved from `false` to `nil`
+  defaults so "did not mention this field" is distinguishable from "named it
+  and turned it off". Naming even one field means you are choosing the set
+  yourself, and the set is exactly what you named. Naming every field `false`
+  is still refused, because calling the verb and disabling everything cannot
+  mean anything; `do_not_record_ip_geolocation` is how to say that.
+- **`keep_recorded_{ip_addresses,browser_user_agents,ip_geolocation}_indefinitely!`
+  take no arguments at all.**
+- **`deliberately_store_request_evidence_unencrypted!` no longer needs a
+  `because:`.** The method NAME is the ceremony: `encrypt_recorded_* = false`
+  still cannot be reached without writing that line, and a reviewer still
+  finds it in the diff. When the host writes no reason the gem records
+  `Vocabulary::DEFAULT_REASON_FOR_STORING_REQUEST_EVIDENCE_UNENCRYPTED`.
+  Encryption itself is untouched — on by default for all three categories,
+  with a test pinning that the one switch does not weaken it.
+- **The install generator stops refusing an incomplete category.**
+  `--record-ip-addresses-by-default` with no reason and no period writes the
+  file and simply omits those two lines, so the gem's own defaults apply.
+- The `ReviewedText` placeholder check now only ever applies to text a host
+  actually supplied. Absence is never scaffolding.
+
+### Unchanged, deliberately
+
+- Reasons that are not about *collection* keep their required `because:`:
+  `delete_recorded_ip_address!` and its siblings, `dispose_core_event!`,
+  `place_on_legal_hold!` / `release_legal_hold!`, `plan_disposition_for`,
+  unredacted receipt export, and the lifecycle verbs. Those record a
+  destructive act, an access, or a state change — there the audit trail *is*
+  the reason, and there is no honest default for "why did somebody delete
+  this".
+- Still refused, because each is the host contradicting themselves rather than
+  leaving a blank: scaffolding text the host actually wrote standing in for a
+  purpose (including in the installer, where a `TODO` in a shipped initializer
+  is worse than no line and the gem would reject it at boot anyway), a
+  negative deletion period passed to the installer, a deletion clock declared
+  alongside `keep_recorded_..._indefinitely!` for the same category, and
+  `record_ip_geolocation` with every field explicitly off.
+- The gem's code default is still record-nothing. Claim boundaries, receipt
+  state labeling (`not_configured` / `unavailable` / `recorded` /
+  `deleted_after_retention`), and every released receipt format are untouched.
+
+### Documentation
+
+- README, `guides/request-evidence.md`, and `guides/naming.md` show the
+  zero-keyword forms as the ordinary way to write a policy, with purposes,
+  legal bases, and clocks as the upgrade path.
+- `CLAUDE.md` / `AGENTS.md` rule 6 is rewritten around the principle above and
+  records the owner directive and its date. What it keeps as non-negotiable:
+  never a switch whose NAME hides what it collects, never an overclaim, never
+  a blurred receipt state, encryption on by default behind its named call,
+  host-supplied scaffolding rejected, and contradictions refused.
+
 ## [0.3.0] - 2026-08-20
 
 ### Changed — recording request evidence is one switch, not a checklist

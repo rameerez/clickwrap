@@ -287,19 +287,25 @@ Clickwrap.configure do |config|
   # event — the historical agreement, declaration, or authorization stays intact
   # and verifiable without it.
 
-<%- if record_ip_addresses? -%>
+<%- if record_ip_addresses? && reason_for_recording_ip_addresses.present? -%>
   config.reason_for_recording_ip_addresses_by_default =
     <%= reason_for_recording_ip_addresses.inspect %>
+<%- end -%>
+<%- if record_ip_addresses? && delete_recorded_ip_addresses_after_days.positive? -%>
   config.delete_recorded_ip_addresses_after = <%= delete_recorded_ip_addresses_after_days %>.days
 <%- end -%>
-<%- if record_browser_user_agents? -%>
+<%- if record_browser_user_agents? && reason_for_recording_browser_user_agents.present? -%>
   config.reason_for_recording_browser_user_agents_by_default =
     <%= reason_for_recording_browser_user_agents.inspect %>
+<%- end -%>
+<%- if record_browser_user_agents? && delete_recorded_browser_user_agents_after_days.positive? -%>
   config.delete_recorded_browser_user_agents_after = <%= delete_recorded_browser_user_agents_after_days %>.days
 <%- end -%>
-<%- if any_ip_geolocation_field? -%>
+<%- if any_ip_geolocation_field? && reason_for_recording_ip_geolocation.present? -%>
   config.reason_for_recording_ip_geolocation_by_default =
     <%= reason_for_recording_ip_geolocation.inspect %>
+<%- end -%>
+<%- if any_ip_geolocation_field? && delete_recorded_ip_geolocation_after_days.positive? -%>
   config.delete_recorded_ip_geolocation_after = <%= delete_recorded_ip_geolocation_after_days %>.days
 <%- end -%>
 <%- if records_any_request_evidence? -%>
@@ -332,8 +338,9 @@ Clickwrap.configure do |config|
   # Turning one of these off puts the raw value in plain text in your database,
   # and therefore in every ordinary backup and database dump. It is allowed,
   # because some applications have a reviewed reason, but it is never a quiet
-  # one-character change: Clickwrap refuses `false` until you have said why in
-  # `config.deliberately_store_request_evidence_unencrypted!(because: "…")`.
+  # one-character change: Clickwrap refuses `false` until you have written
+  # `config.deliberately_store_request_evidence_unencrypted!` above it. Writing
+  # that line IS the whole ceremony — its `because:` is optional.
   #
   # config.encrypt_recorded_ip_addresses = true
   # config.encrypt_recorded_browser_user_agents = true

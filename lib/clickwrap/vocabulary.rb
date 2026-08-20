@@ -187,6 +187,15 @@ module Clickwrap
     DEFAULT_REASON_FOR_KEEPING_REQUEST_EVIDENCE_INDEFINITELY =
       "Corroboration lives as long as the evidence it corroborates"
 
+    # The reason recorded when a host turns off encryption for request evidence
+    # without writing their own. Calling the method is still the ceremony —
+    # `deliberately_store_request_evidence_unencrypted!` is a sentence a
+    # reviewer finds in a diff and cannot misread — but the gem no longer
+    # demands the sentence be phrased twice.
+    DEFAULT_REASON_FOR_STORING_REQUEST_EVIDENCE_UNENCRYPTED =
+      "The application deliberately stores request evidence unencrypted; the reason lives " \
+      "outside Clickwrap"
+
     # Provenance that travels with any stored IP-geolocation result. A policy
     # cannot keep provider-derived coordinates while stripping the uncertainty
     # needed to interpret them.
