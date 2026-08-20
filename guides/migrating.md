@@ -333,3 +333,26 @@ never satisfy a human-action predicate.)
 | [FinePrint README at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/README.md#L7-L25) | Pinned source code |
 | [FinePrint signature model at the audited commit](https://github.com/openstax/fine_print/blob/3b75fbcbcfb048ecd2f4ee7c4f0b9bd3d10f7603/app/models/fine_print/signature.rb#L1-L33) | Pinned source code |
 | The never-synthesize rule, the `unknown:` vocabulary, and the dry-run-first workflow | Product-design inference |
+
+## Completeness: enumerate writers, not rows
+
+A migration inventory built by looking at what the database HOLDS will miss
+what the code can WRITE. One production integration classified 52 distinct
+audit event types from its data — the codebase carried ~150: everything rare
+(incident and recovery paths that had never fired) and everything new
+(writers added after the cutover) was invisible to the data-only sweep, and
+one of the missed stores turned out to hold the product's most consequential
+assent act.
+
+Sweep three ways, and reconcile the lists:
+
+1. **Schema**: every table and column whose name says assent — accepted,
+   declared, consent, attest, authoriz, acknowledg, signed.
+2. **Writers**: every place code can create such a record — grep the literals
+   (`event_type:`, ledger inserts), not the rows.
+3. **Structure**: every model already carrying `has_clickwrap_evidence`, and
+   every dual-write site.
+
+Then write a disposition for every entry — import it, "not a clickwrap" with
+the reason, or "provider record" — in a tracked document. Silently ignoring a
+store is not a valid disposition.
