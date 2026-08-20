@@ -1227,15 +1227,19 @@ module Clickwrap
       @keep_recorded_request_evidence_indefinitely[category.to_sym]
     end
 
-    def deliberately_store_request_evidence_unencrypted!(because:)
-      if because.to_s.strip.empty?
-        raise ConfigurationError,
-              "deliberately_store_request_evidence_unencrypted! needs a `because:` explaining " \
-              "the reviewed decision."
-      end
-
+    # The named escape hatch for turning encryption off. The ceremony is the
+    # method: you cannot reach `encrypt_recorded_* = false` without writing a
+    # line that says out loud what you are doing, and that line is what a
+    # reviewer finds in a diff. Since 0.3.0 the `because:` is optional — the
+    # gem records its own sentence when you do not write one — because the
+    # host's privacy policy owns the why, and demanding it twice never stopped
+    # anybody who had already typed this method name.
+    #
+    # Encryption itself is unchanged: on by default, for all three categories.
+    def deliberately_store_request_evidence_unencrypted!(because: nil)
       @deliberately_storing_request_evidence_unencrypted = true
-      @reason_for_storing_request_evidence_unencrypted = because
+      @reason_for_storing_request_evidence_unencrypted =
+        because.presence || Vocabulary::DEFAULT_REASON_FOR_STORING_REQUEST_EVIDENCE_UNENCRYPTED
     end
 
     def storing_request_evidence_unencrypted? = @deliberately_storing_request_evidence_unencrypted == true

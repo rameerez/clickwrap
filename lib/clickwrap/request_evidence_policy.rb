@@ -241,8 +241,11 @@ module Clickwrap
 
       if ip_geolocation.record? && enabled.empty?
         raise DefinitionError,
-              "Policy #{policy_key} calls `record_ip_geolocation` but enables no field. " \
-              "Name the fields you actually need, for example `country: true`."
+              "Policy #{policy_key} calls `record_ip_geolocation` and then turns every field " \
+              "off, which cannot mean anything. Name the fields you want, for example " \
+              "`country: true`; call `record_ip_geolocation` with no fields at all for the " \
+              "coarse country, region, and city; or say `do_not_record_ip_geolocation` if that " \
+              "is what you meant."
       end
 
       if ip_geolocation.record? &&

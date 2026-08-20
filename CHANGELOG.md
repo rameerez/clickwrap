@@ -18,8 +18,71 @@ refusal — was not producing better-reviewed collection. It was producing
 **no collection at all**. Integrators hit three refusals in a row on the way
 to their first capture and turned the fields off, and an agreement with no
 corroboration is worse evidence than one corroborated under a purpose the gem
-stated on their behalf. So the friction is gone from turning collection *on*.
-None of it is gone from describing collection honestly.
+stated on their behalf.
+
+The principle the owner set, in their words: the host application and its
+privacy policy own *why* data is collected; this gem records *what* was
+collected, honestly, and is nobody's nanny. Its job is evidence mechanics,
+not gatekeeping collection. So the friction is gone from turning collection
+*on*, everywhere and in every form. None of it is gone from describing
+collection honestly.
+
+**Every collection-related purpose, reason, and reference is now optional.**
+Not merely the ones the initializer sets — all of them, at both levels:
+
+```ruby
+# All of these now work exactly as written.
+Clickwrap.configure do |config|
+  config.record_request_evidence_by_default = true
+  config.keep_recorded_ip_addresses_indefinitely!
+  config.deliberately_store_request_evidence_unencrypted!
+end
+
+Clickwrap.policy :anything do
+  agree_to :terms
+  record_ip_address
+  record_browser_user_agent
+  record_ip_geolocation
+end
+```
+
+- `record_ip_address`, `record_browser_user_agent`, and `record_ip_geolocation`
+  take **zero keyword arguments**. `because:`, `legal_basis_reference:`,
+  `data_protection_impact_assessment_reference:`, `delete_after:`,
+  `retain_until:`, and `encrypted:` were already optional in the signature and
+  are now optional in fact — nothing downstream refuses their absence.
+  (`legal_basis_reference` and the DPIA reference never were required; there is
+  now a test pinning that they never become so.)
+- **`record_ip_geolocation` with no field named records the coarse trio** —
+  country, region, city — the same set the one switch turns on, and nothing
+  finer. Naming even one field means you are choosing the set yourself, and
+  then the set is exactly what you named. The keyword defaults changed from
+  `false` to `nil` to tell "did not mention" apart from "named it and turned it
+  off"; naming every field `false` is still refused, because calling
+  `record_ip_geolocation` and disabling everything cannot mean anything —
+  `do_not_record_ip_geolocation` is the way to say that.
+- **`keep_recorded_*_indefinitely!` takes no arguments at all.**
+- **`deliberately_store_request_evidence_unencrypted!` no longer needs a
+  `because:`.** The method NAME is the ceremony — `encrypt_recorded_* = false`
+  still cannot be reached without writing that line, and a reviewer still finds
+  it in a diff. Encryption itself is unchanged: on by default, all three
+  categories. The gem records
+  `Vocabulary::DEFAULT_REASON_FOR_STORING_REQUEST_EVIDENCE_UNENCRYPTED` when
+  the host writes nothing.
+- **The install generator stops refusing an incomplete category.**
+  `--record-ip-addresses-by-default` with no reason and no period writes the
+  file and simply omits those two lines. Scaffolding text is still refused (a
+  `TODO` written into a shipped initializer is worse than no line, and the gem
+  would reject it at boot anyway), as is a negative number of days.
+- The `ReviewedText` placeholder check now only ever applies to text a host
+  actually supplied. Absence is never scaffolding.
+
+Reasons that are **not** about collection keep their `because:`, deliberately:
+`delete_recorded_ip_address!` and its siblings, `dispose_core_event!`,
+`place_on_legal_hold!` / `release_legal_hold!`, `plan_disposition_for`,
+unredacted receipt export, and the lifecycle verbs. Those record a destructive
+act, an access, or a state change — the audit trail *is* the reason, and there
+is no honest default for "why did somebody delete this".
 
 - **`config.record_request_evidence_by_default = true`.** One line records, on
   every policy, the IP address the request arrived from, the browser user
@@ -70,10 +133,10 @@ None of it is gone from describing collection honestly.
 - Claim boundaries are untouched: nothing says compliant, enforceable, proves
   identity, or physical location, and IP geolocation remains network context —
   not identity, not GPS.
-- Encryption stays on by default, and turning it off keeps its
-  `deliberately_store_request_evidence_unencrypted!(because:)` ceremony. That
-  one is a genuine hazard with a named escape hatch; the directive was about
-  the friction of enabling collection, not the friction of weakening it.
+- Encryption stays on by default for all three categories, and `= false` still
+  cannot be reached without the named
+  `deliberately_store_request_evidence_unencrypted!` call. Only its `because:`
+  became optional: the method name is the part a reviewer reads.
 - Scaffolding text is still refused wherever the host actually wrote it
   (`"TODO: ask legal"` is not a purpose), and a deletion clock declared
   alongside `keep_recorded_..._indefinitely!` for the same category is still

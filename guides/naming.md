@@ -291,7 +291,7 @@ object.
 | `chain_event_history_with`, `anchor_event_history_with`, `timestamp_receipts_with` | one `integrity_level` setting | Three different mechanisms making three different claims. One setting would let a reader infer the strongest from the presence of the weakest |
 | `after_event_is_committed` | `after_commit` | Says which commit, and reads as a sentence |
 | `authorize_unredacted_request_evidence_access_with` | `access_control` | Long, and correct. It names exactly which access it authorizes |
-| `deliberately_store_request_evidence_unencrypted!(because:)` | `encryption: false` | Turning encryption off should be a sentence a reviewer can find in a diff, with the host's own reason attached — not a `false` |
+| `deliberately_store_request_evidence_unencrypted!` | `encryption: false` | Turning encryption off should be a sentence a reviewer can find in a diff — not a `false`. The method NAME is the ceremony; its `because:` is optional |
 
 The last row is the pattern worth copying. When an option has a consequence somebody should
 have to think about, make the name carry the thinking.

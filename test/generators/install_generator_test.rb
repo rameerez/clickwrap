@@ -486,15 +486,44 @@ class InstallGeneratorTest < Rails::Generators::TestCase
     end
   end
 
-  test "an incomplete enabled category is refused before any file is written" do
+  test "enabling a category with no purpose and no period writes the file anyway" do
+    run_generator %w[--skip-questions --record-ip-addresses-by-default]
+
+    assert_file "config/initializers/clickwrap.rb" do |initializer|
+      assert_match(/config\.record_ip_address_by_default = true/, initializer)
+      refute_match(/config\.reason_for_recording_ip_addresses_by_default =/, initializer)
+      refute_match(/config\.delete_recorded_ip_addresses_after =/, initializer)
+    end
+  end
+
+  test "scaffolding text is refused before any file is written" do
     stderr = capture(:stderr) do
-      run_generator %w[--skip-questions --record-ip-addresses-by-default]
+      run_generator [
+        "--skip-questions",
+        "--record-ip-addresses-by-default",
+        "--reason-for-recording-ip-addresses-by-default=TODO: ask legal"
+      ]
     end
 
-    assert_match(/cannot enable IP addresses with a blank or scaffolding reason/i, stderr)
+    assert_match(/cannot enable IP addresses with a scaffolding reason/i, stderr)
+    assert_match(/let Clickwrap record its own stated purpose/, stderr)
     assert_match(/No files were written/, stderr)
     assert_no_file "config/initializers/clickwrap.rb"
     assert_empty Dir.glob(File.join(destination_root, "db/migrate/*_create_clickwrap_tables.rb"))
+  end
+
+  test "a negative deletion period is refused before any file is written" do
+    stderr = capture(:stderr) do
+      run_generator [
+        "--skip-questions",
+        "--record-ip-addresses-by-default",
+        "--delete-recorded-ip-addresses-after-days=-30"
+      ]
+    end
+
+    assert_match(/cannot be negative/, stderr)
+    assert_match(/No files were written/, stderr)
+    assert_no_file "config/initializers/clickwrap.rb"
   end
 
   test "IP geolocation requires explicit uncertainty and a resolver class" do

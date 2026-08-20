@@ -116,6 +116,90 @@ class RequestEvidenceTest < ActiveSupport::TestCase
     assert_not policy.request_evidence.records_browser_user_agent?
   end
 
+  # --- Zero-keyword declarations ----------------------------------------------
+
+  test "every record_ verb works with no keyword arguments at all" do
+    policy = Clickwrap.policy :zero_keyword_request_evidence do
+      agree_to :terms
+      record_ip_address
+      record_browser_user_agent
+      record_ip_geolocation
+    end
+
+    request_evidence = policy.request_evidence
+    assert request_evidence.records_ip_address?
+    assert request_evidence.records_browser_user_agent?
+    assert request_evidence.records_ip_geolocation?
+
+    # No field named means the same coarse trio the one switch turns on.
+    assert_equal %w[country region city], request_evidence.enabled_ip_geolocation_fields
+
+    Clickwrap::RequestEvidencePolicy::FIELD_CATEGORIES.each do |category|
+      setting = request_evidence.setting_for(category)
+      assert_equal Clickwrap::Vocabulary::DEFAULT_REQUEST_EVIDENCE_PURPOSE, setting.because
+      assert_equal "gem_default", request_evidence.purpose_source_for(category)
+      assert_nil setting.legal_basis_reference
+      assert_nil setting.delete_after
+      assert_nil setting.retain_until
+    end
+  end
+
+  test "a zero-keyword declaration captures and stores exactly the coarse trio" do
+    configure_static_resolver!
+    Clickwrap.policy(:zero_keyword_capture) do
+      agree_to :terms
+      record_ip_address
+      record_ip_geolocation
+    end
+    Clickwrap::Services::ValidatePolicyReferences.call
+
+    receipt = submit_clickwrap(:zero_keyword_capture, actor: @user, http_request: @http_request)
+    annex = receipt.event.reload.request_evidence
+
+    assert_equal "203.0.113.7", annex.ip_address
+    assert annex.recorded_ip_geolocation_country?
+    assert annex.recorded_ip_geolocation_city?
+    assert_not annex.recorded_ip_geolocation_latitude_and_longitude?
+    assert_not annex.recorded_ip_geolocation_postal_code?
+  end
+
+  test "naming even one geolocation field means you chose the whole set" do
+    policy = Clickwrap.policy :one_named_geolocation_field do
+      agree_to :terms
+      record_ip_geolocation country: true
+    end
+
+    assert_equal %w[country], policy.request_evidence.enabled_ip_geolocation_fields
+  end
+
+  test "naming every geolocation field false is refused as meaningless" do
+    error = assert_raises(Clickwrap::DefinitionError) do
+      Clickwrap.policy :all_geolocation_fields_off do
+        agree_to :terms
+        record_ip_geolocation country: false, region: false, city: false
+      end
+    end
+
+    assert_match(/turns every field off/, error.message)
+    assert_match(/do_not_record_ip_geolocation/, error.message)
+  end
+
+  test "a legal basis reference is never required, at either level" do
+    Clickwrap.configure { |config| config.record_request_evidence_by_default = true }
+    switched = Clickwrap.policy(:no_legal_basis_by_default) { agree_to :terms }
+
+    assert switched.request_evidence.records_ip_address?
+    assert_nil switched.request_evidence.ip_address.legal_basis_reference
+
+    named = Clickwrap.policy :no_legal_basis_named do
+      agree_to :terms
+      record_ip_address because: "Investigate disputed acceptance"
+    end
+
+    assert_nil named.request_evidence.ip_address.legal_basis_reference
+    assert_nil named.request_evidence.ip_address.data_protection_impact_assessment_reference
+  end
+
   # --- Gem-supplied defaults --------------------------------------------------
 
   test "turning a default on without a purpose records the purpose Clickwrap states" do

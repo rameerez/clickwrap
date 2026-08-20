@@ -310,7 +310,26 @@ Clickwrap.policy :regulated_authorization do
 end
 ```
 
-Every keyword there is doing work:
+Every keyword there is doing work, and **every one of them is optional**. The same three
+declarations with nothing at all supplied are valid, and record the same fields:
+
+```ruby
+Clickwrap.policy :frictionless_regulated_authorization do
+  authorize :regulated_action, one_time: true, valid_for: 10.minutes
+
+  record_ip_address
+  record_browser_user_agent
+  record_ip_geolocation
+  retain_with :regulated_evidence
+end
+```
+
+`record_ip_geolocation` with no field named records the coarse trio — country, region, city —
+and nothing finer. Name even one field and the set is exactly what you named; name every field
+`false` and Clickwrap refuses, because calling `record_ip_geolocation` and disabling everything
+cannot mean anything (`do_not_record_ip_geolocation` is how to say that).
+
+What each keyword adds when you do supply it:
 
 - **`because:`** is the present purpose, in a sentence someone outside engineering can read. It
   is stored and printed by `bin/rails clickwrap:privacy:inventory`. It is optional: a policy
@@ -319,7 +338,9 @@ Every keyword there is doing work:
   reviewed. What is refused is scaffolding text — `"TODO: ask legal"` is not a purpose.
 - **`legal_basis_reference:`** and **`data_protection_impact_assessment_reference:`** are
   host-supplied pointers to your own reviewed documents. Clickwrap stores them. It does not
-  read them, validate them, or endorse them.
+  read them, validate them, endorse them, or ever require them — nothing in the gem refuses a
+  recorded field for want of either, and nothing ever will. Your privacy policy owns the why;
+  the gem records the what.
 - **`delete_after:`** and **`retain_until:`** are both optional. When neither the policy, its
   retention class, nor the configuration names a schedule, the field keeps pace with the
   evidence it corroborates — the same posture the core event has — and the annex is stamped

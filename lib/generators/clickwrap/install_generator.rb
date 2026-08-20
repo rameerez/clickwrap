@@ -1160,23 +1160,30 @@ module Clickwrap
         validate_ip_geolocation_resolver_class_name!
       end
 
+      # A missing purpose and a missing deletion period are both fine, and the
+      # generated file simply omits those lines: the gem records its own stated
+      # purpose and keeps the field as long as the evidence it corroborates.
+      # Scaffolding text is the one thing still refused, because a `TODO` the
+      # installer writes into a shipped initializer is worse than no line at
+      # all — the gem would reject it at boot anyway.
       def validate_enabled_category!(label, enabled:, because:, delete_after_days:,
                                      reason_option:, retention_option:)
         return unless enabled
 
-        unless Clickwrap::ReviewedText.present_and_reviewed?(because)
+        if Clickwrap::ReviewedText.placeholder?(because)
           raise Thor::Error,
-                "Clickwrap cannot enable #{label} with a blank or scaffolding reason. " \
-                "Give the application's reviewed, present-tense reason with " \
-                "#{reason_option}=\"...\", or turn that category off. No files were written."
+                "Clickwrap cannot enable #{label} with a scaffolding reason " \
+                "(#{because.inspect}). Give the application's reviewed, present-tense reason " \
+                "with #{reason_option}=\"...\", or omit it entirely and let Clickwrap record " \
+                "its own stated purpose. No files were written."
         end
 
-        return if delete_after_days.positive?
+        return unless delete_after_days.negative?
 
         raise Thor::Error,
-              "Clickwrap cannot enable #{label} without a positive deletion period. " \
-              "Set #{retention_option}=DAYS to the period your application reviewed, or " \
-              "turn that category off. No files were written."
+              "#{retention_option} cannot be negative (got #{delete_after_days}). Give the " \
+              "number of days your application reviewed, or omit it and #{label} will keep " \
+              "pace with the evidence it corroborates. No files were written."
       end
 
       def validate_ip_geolocation_coordinates!
