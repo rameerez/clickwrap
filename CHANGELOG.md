@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-31
+
+### Fixed — the actor class survives a reload
+
+- **`config.actor_class` followed the constant it had cached, not the one the
+  app has.** In a Rails app with reloading, every capture after the first code
+  change of a session raised
+
+  ```
+  Clickwrap was asked to record User as the actor, but
+  `config.actor_class_name` says the records that can act are User.
+  ```
+
+  Both halves name the same class, which reads as a contradiction and sends
+  whoever hits it to an initializer that is correct. They were two different
+  Ruby objects printing the same name: `actor_class` memoized the
+  constantized `Class` and re-resolved only when the class NAME changed —
+  which never happens, since the name is set once in an initializer — while
+  Zeitwerk replaces the class behind that name on every edit. The cache then
+  held a class no living record was an instance of, so
+  `actor.is_a?(config.actor_class)` was false for an ordinary `User` and
+  capture refused to record it.
+
+  The memo is gone. `constantize` after the first load is a `const_get` and
+  this is called once per capture rather than in a loop, so it was never
+  buying anything; `parent_controller_class` has always resolved this way.
+  Production was never affected — classes are not reloaded there — but every
+  development session was, from its second edit onwards.
+
 ## [0.3.2] - 2026-08-20
 
 ### Fixed — two guards that looked like they held
