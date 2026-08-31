@@ -107,6 +107,35 @@ class ConfigurationTest < ActiveSupport::TestCase
     assert_equal User, Clickwrap.config.actor_class
   end
 
+  # A Rails app with reloading replaces the class behind a name on every code
+  # change: Zeitwerk unloads the old constant and defines a new one, same
+  # name, different object. actor_class used to cache the resolved Class and
+  # re-resolve only when the NAME changed — which never happens, because the
+  # name is set once in an initializer — so from the second edit of a dev
+  # session onwards it handed back a class no live record was an instance of.
+  #
+  # The symptom was a ConfigurationError that named the same class twice
+  # ("asked to record User as the actor, but ... the records that can act are
+  # User"), which reads as a contradiction and points at an initializer that
+  # is correct.
+  test "the actor class follows the constant when the app reloads it" do
+    Clickwrap.config.actor_class_name = "ReloadableActor"
+    Object.const_set(:ReloadableActor, Class.new)
+    first = Clickwrap.config.actor_class
+
+    # What a reload does, in one line.
+    Object.send(:remove_const, :ReloadableActor)
+    Object.const_set(:ReloadableActor, Class.new)
+
+    refute_equal first.object_id, Clickwrap.config.actor_class.object_id,
+      "actor_class handed back the class the app had already thrown away"
+    assert_equal ReloadableActor, Clickwrap.config.actor_class
+    assert ReloadableActor.new.is_a?(Clickwrap.config.actor_class),
+      "a freshly reloaded record is not an instance of the cached class"
+  ensure
+    Object.send(:remove_const, :ReloadableActor) if Object.const_defined?(:ReloadableActor)
+  end
+
   test "an unknown document store is refused by name" do
     error = assert_raises(Clickwrap::ConfigurationError) do
       Clickwrap.config.store_document_contents_in = :s3

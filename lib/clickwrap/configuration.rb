@@ -307,16 +307,29 @@ module Clickwrap
       @describe_authentication_with = ensure_callable(value, "describe_authentication_with")
     end
 
-    # The constantized actor class, resolved lazily on first use. Lazy on
-    # purpose: the initializer that sets `config.actor_class_name = "User"` runs
-    # before the User model is necessarily loaded.
+    # The constantized actor class, resolved lazily on EVERY use. Lazy on
+    # purpose: the initializer that sets `config.actor_class_name = "User"`
+    # runs before the User model is necessarily loaded.
+    #
+    # Not memoized, deliberately. This used to cache the resolved Class object
+    # and re-resolve only when the class NAME changed — which is never, since
+    # the name is set once in an initializer. In a Rails app with reloading,
+    # the class behind that name is replaced on every code change: Zeitwerk
+    # unloads the old User and defines a new one, same name, different object.
+    # The cache then held a class no living record was an instance of, and
+    # `actor.is_a?(config.actor_class)` failed for a perfectly ordinary User.
+    #
+    # What that looked like from the outside was worse than the bug: the
+    # ConfigurationError names the offending class and the configured class,
+    # and both printed "User". The message read as a contradiction, sent
+    # people to an initializer that was correct, and came back after every
+    # edit — the first signup of a dev session worked and the second did not.
+    #
+    # `constantize` after the first load is a const_get, and this is called
+    # once per capture rather than in a loop, so there was nothing to save.
+    # `parent_controller_class` below has always resolved this way.
     def actor_class
-      name = actor_class_name
-      if @actor_class.nil? || @actor_class_name_at_resolution != name
-        @actor_class = name.constantize
-        @actor_class_name_at_resolution = name
-      end
-      @actor_class
+      actor_class_name.constantize
     end
 
     def parent_controller_class = parent_controller_class_name.constantize
