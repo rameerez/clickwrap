@@ -4,6 +4,8 @@ source "https://rubygems.org"
 
 gem "rake", "~> 13.0"
 gem "rails", "~> 8.0.0"
+# Rails < 8.1 passes quirks_mode: to JSON.generate; json >= 3 rejects unknown keywords.
+gem "json", "~> 2.7"
 gem "kramdown", require: false
 gem "markdown-rails", require: false
 
