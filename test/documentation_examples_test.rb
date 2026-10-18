@@ -98,9 +98,8 @@ class DocumentationExamplesTest < ActiveSupport::TestCase
     configure_documentation_host(example.source)
     # These are trusted, repository-owned Ruby examples. Executing them is the
     # test's purpose: syntax-only compilation cannot catch calls to a stale API.
-    # rubocop:disable Security/Eval
+    # rubocop:disable-next Security/Eval
     Object.new.instance_eval { eval(example.source, binding, example.label, 1) }
-    # rubocop:enable Security/Eval
     supply_referenced_declarations
     Clickwrap::Services::ValidatePolicyReferences.call
   end

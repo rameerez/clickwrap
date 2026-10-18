@@ -128,10 +128,10 @@ class ConfigurationTest < ActiveSupport::TestCase
     Object.const_set(:ReloadableActor, Class.new)
 
     refute_equal first.object_id, Clickwrap.config.actor_class.object_id,
-      "actor_class handed back the class the app had already thrown away"
+                 "actor_class handed back the class the app had already thrown away"
     assert_equal ReloadableActor, Clickwrap.config.actor_class
     assert ReloadableActor.new.is_a?(Clickwrap.config.actor_class),
-      "a freshly reloaded record is not an instance of the cached class"
+           "a freshly reloaded record is not an instance of the cached class"
   ensure
     Object.send(:remove_const, :ReloadableActor) if Object.const_defined?(:ReloadableActor)
   end
