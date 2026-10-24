@@ -256,6 +256,7 @@ way past — it is the shape of the code.
 user.clickwraps.current_for?(:signup)
 user.clickwraps.required_for?(:current_terms)
 user.clickwraps.agreed_to?(:terms)
+user.clickwraps.agreed_to_current_version_of?(:terms)   # under any policy
 user.clickwraps.acknowledged?(:privacy_notice)
 user.clickwraps.consented_to?(:product_updates)
 user.clickwraps.declared?(:independent_contractor, subject: scheme)

@@ -218,7 +218,7 @@ module Clickwrap
         end
 
         if statement.requires_current_version?
-          stale = stale_document?(statement, state)
+          stale = state.document_key_with_unseen_current_version(statement.document_keys)
 
           if stale
             return Result.failure(:unseen_document_version,
@@ -481,23 +481,6 @@ module Clickwrap
 
         value = statement.subject_fingerprint_with.call(subject)
         value.nil? ? nil : Digest.digest(value.to_s)
-      end
-
-      # Returns the document key whose current published version is newer than
-      # the one this evidence was captured against, or nil when everything the
-      # statement requires is still current.
-      def stale_document?(statement, state)
-        recorded = Array(state.document_version_ids).map(&:to_s)
-
-        statement.document_keys.find do |document_key|
-          document = ::Clickwrap::Document.find_by(
-            document_key: document_key,
-            tenant_key: state.tenant_key.presence
-          )
-          current = document&.current_version(locale: I18n.locale)
-
-          current && !recorded.include?(current.id.to_s)
-        end
       end
     end
   end

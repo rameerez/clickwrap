@@ -180,6 +180,28 @@ class OrganizationsAuthorityTest < ActiveSupport::TestCase
                  actor.clickwraps.statement_states.first.represented_party_reference
   end
 
+  test "an agreement made for an organization counts only when asked for that organization" do
+    actor = create_user
+    organization = create_test_organization
+    organization.clickwrap_memberships = Organizations::MembershipRelation.new([
+                                                                                 membership_for(actor, role: :admin)
+                                                                               ])
+
+    capture_for(actor, organization)
+
+    assert actor.clickwraps.agreed_to_current_version_of?(:terms, tenant: organization, acting_for: organization)
+    assert actor.clickwraps.agreed_to?(:terms, tenant: organization, acting_for: organization)
+    assert_not actor.clickwraps.agreed_to_current_version_of?(:terms, tenant: organization),
+               "the person's own capacity is a different identity"
+    assert_not actor.clickwraps.agreed_to?(:terms, tenant: organization)
+    assert_not actor.clickwraps.agreed_to_current_version_of?(:terms)
+
+    publish_new_document_version!(:terms, version: "2026-12-01")
+
+    assert_not actor.clickwraps.agreed_to_current_version_of?(:terms, tenant: organization,
+                                                                      acting_for: organization)
+  end
+
   test "ordinary members, strangers, and removed admins are denied" do
     actor = create_user
     organization = create_test_organization

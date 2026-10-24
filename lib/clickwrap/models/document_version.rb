@@ -34,6 +34,17 @@ module Clickwrap
     scope :effective_at_or_before, ->(moment) { where(effective_at: ..moment).or(where(effective_at: nil)) }
     scope :not_retired_at, ->(moment) { where(retired_at: nil).or(where(retired_at: moment...)) }
 
+    # The versions a policy may present at `moment` in `locale`, the one to
+    # present first. `Document#current_version` and
+    # `DocumentVersionsInForce` both read this scope, so they cannot disagree.
+    scope :presentable_newest_first, lambda { |moment, locale|
+      published
+        .effective_at_or_before(moment)
+        .not_retired_at(moment)
+        .for_locale(locale)
+        .order(effective_at: :desc, published_at: :desc, created_at: :desc)
+    }
+
     # Publishing freezes content. Editing a published version is refused here
     # rather than in a code review, because the whole promise of this table is
     # that its rows do not change.
