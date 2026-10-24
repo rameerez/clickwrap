@@ -633,7 +633,7 @@ class DashboardController < ApplicationController
 end
 ```
 
-`agreed_to_current_version_of?` applies the rule `require_current_version: true` applies. A version published with a later `effective_at` counts only from that time, so the gate starts on the effective date and not on the deploy that gives notice. Until then, the agreement to the version in force still counts. Like `agreed_to?`, it reads the current-state projection; `Clickwrap.verify` is the call that rechecks the evidence itself.
+`agreed_to_current_version_of?` applies the rule `require_current_version: true` applies. A version published with a later `effective_at` counts only from that time, so the gate starts on the effective date and not on the deploy that gives notice. Until then, the agreement to the version in force still counts. It takes the `subject:`, `tenant:` and `acting_for:` keywords of `agreed_to?`, with the same defaults. Like `agreed_to?`, it reads the current-state projection; `Clickwrap.verify` is the call that rechecks the evidence itself.
 
 ## Consent that can actually be withdrawn
 

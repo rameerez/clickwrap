@@ -49,12 +49,20 @@ module Clickwrap
     # with a later `effective_at` counts only from that time, and until then
     # the acceptance of the version it replaces still counts. An agreement that
     # no longer stands does not count. No agreement at all is false.
-    def agreed_to_current_version_of?(statement_key)
-      states(subject: nil, tenant: nil, acting_for: nil)
+    #
+    # The scope keywords mean what they mean on `agreed_to?`, and so do their
+    # defaults: no subject, no tenant, not acting for anyone. That default is
+    # where a `tenant_is :not_applicable` policy records its evidence.
+    def agreed_to_current_version_of?(statement_key, subject: nil, tenant: nil, acting_for: nil)
+      # Each policy that recorded the agreement usually binds the same
+      # documents, so their versions in force are looked up once per call.
+      versions_in_force = DocumentVersionsInForce.new
+
+      states(subject: subject, tenant: tenant, acting_for: acting_for)
         .for_statement(statement_key)
         .where(kind: "agreement")
         .order(effective_at: :desc)
-        .any? { |state| state.satisfies? && agreed_to_current_versions?(state) }
+        .any? { |state| state.satisfies? && agreed_to_current_versions?(state, versions_in_force) }
     end
 
     def acknowledged?(statement_key, subject: nil, tenant: nil, acting_for: nil)
@@ -132,11 +140,12 @@ module Clickwrap
     # exactly as `require_current_version` reads them. Evidence under a policy
     # that is no longer declared has nothing to check against, and "cannot
     # check" is never "yes".
-    def agreed_to_current_versions?(state)
+    def agreed_to_current_versions?(state, versions_in_force)
       statement = Clickwrap.policies[state.policy_key]&.statement(state.statement_key)
       return false unless statement
 
-      state.document_key_with_unseen_current_version(statement.document_keys).nil?
+      state.document_key_with_unseen_current_version(statement.document_keys,
+                                                     versions_in_force: versions_in_force).nil?
     end
 
     def satisfied?(kind, statement_key, subject:, tenant:, acting_for:)

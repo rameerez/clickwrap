@@ -88,20 +88,21 @@ module Clickwrap
 
     # The first of these documents whose version in force now is not one this
     # state recorded, or nil when this state recorded each of them. "In force"
-    # is `Document#current_version` for the request's locale in this state's
-    # tenant, so a version published with a later `effective_at` changes
-    # nothing before that time. A document with no version in force changes
-    # nothing either. `require_current_version: true` and
-    # `agreed_to_current_version_of?` both ask this method, so a gate and a
-    # predicate never disagree about which version is current.
-    def document_key_with_unseen_current_version(document_keys)
+    # is `Document#current_version` for the request's locale, with this
+    # state's tenant document first and the shared document after it, as the
+    # presenter offered them. So a version published with a later
+    # `effective_at` changes nothing before that time, and a document with no
+    # version in force changes nothing either. `require_current_version: true`
+    # and `agreed_to_current_version_of?` both ask this method, so a gate and
+    # a predicate never disagree about which version is current. Pass one
+    # `versions_in_force` to several states to look each document up once.
+    def document_key_with_unseen_current_version(document_keys, versions_in_force: DocumentVersionsInForce.new)
       recorded = Array(document_version_ids).map(&:to_s)
 
       Array(document_keys).find do |document_key|
-        document = Document.find_by(document_key: document_key.to_s, tenant_key: tenant_key.presence)
-        current = document&.current_version(locale: I18n.locale)
+        current_id = versions_in_force.id_for(document_key, tenant_key: tenant_key)
 
-        current && !recorded.include?(current.id.to_s)
+        current_id && !recorded.include?(current_id.to_s)
       end
     end
 

@@ -18,19 +18,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the version in force now of each document the statement binds. A version
   with a later `effective_at` counts only from that time. Until then, the
   agreement to the version in force still counts. No agreement is false, and
-  so is an agreement under a policy that is no longer declared.
+  so is an agreement under a policy that is no longer declared. It takes the
+  `subject:`, `tenant:` and `acting_for:` keywords of `agreed_to?`, with the
+  same defaults.
 
   ```ruby
   requires_clickwrap :current_terms,
                      unless: -> { current_user.clickwraps.agreed_to_current_version_of?(:terms) }
   ```
 
+### Fixed — tenant evidence re-asks when the shared document moves on
+
+- **`require_current_version: true` never re-asked evidence recorded in a
+  tenant that was offered the shared document.** The presenter offers a
+  tenant its own document and falls back to the shared one. The staleness
+  check looked only for the tenant's own document, found none, and answered
+  "current" whatever version was in force. The check now resolves the
+  document the way the presenter does, so a new shared version re-asks that
+  evidence. Evidence against a tenant's own document is unchanged.
+
 ### Changed
 
 - The "is this version current?" rule moved from a private method of
   `Clickwrap::Verification` to `StatementState#document_key_with_unseen_current_version`.
   `require_current_version: true` and the new predicate call the same method,
-  so they cannot disagree. Verification gives the same answers as before.
+  so they cannot disagree.
+- The rule reads version ids only, through `Clickwrap::DocumentVersionsInForce`,
+  and never loads document bytes. The predicate looks up each document once
+  per call, however many policies recorded the agreement.
+  `Document#current_version` and this lookup share one scope,
+  `DocumentVersion.presentable_newest_first`.
 
 ## [0.3.3] - 2026-08-31
 
