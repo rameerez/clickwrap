@@ -34,6 +34,29 @@ module Clickwrap
       satisfied?("agreement", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
 
+    # Whether the actor agreed to the version in force now of each document
+    # this statement binds, under ANY policy that records the statement.
+    #
+    # Neither neighbour answers this. `agreed_to?` reads the newest agreement
+    # and ignores versions. `current_for?` checks versions inside one policy
+    # only. A signup form and a re-acceptance screen usually record the same
+    # `agree_to :terms` under two policies, so a person who signed up an hour
+    # ago has the version in force under `:signup` and nothing under
+    # `:current_terms`. A gate on `current_for?(:current_terms)` alone sends
+    # that person back to accept the same text again.
+    #
+    # "In force" is the rule `require_current_version: true` applies: a version
+    # with a later `effective_at` counts only from that time, and until then
+    # the acceptance of the version it replaces still counts. An agreement that
+    # no longer stands does not count. No agreement at all is false.
+    def agreed_to_current_version_of?(statement_key)
+      states(subject: nil, tenant: nil, acting_for: nil)
+        .for_statement(statement_key)
+        .where(kind: "agreement")
+        .order(effective_at: :desc)
+        .any? { |state| state.satisfies? && agreed_to_current_versions?(state) }
+    end
+
     def acknowledged?(statement_key, subject: nil, tenant: nil, acting_for: nil)
       satisfied?("acknowledgment", statement_key, subject: subject, tenant: tenant, acting_for: acting_for)
     end
@@ -103,6 +126,17 @@ module Clickwrap
         tenant_key: Reference.tenant(tenant),
         represented_party_reference: Reference.represented_party(acting_for)
       )
+    end
+
+    # The documents come from the statement as its policy declares it now,
+    # exactly as `require_current_version` reads them. Evidence under a policy
+    # that is no longer declared has nothing to check against, and "cannot
+    # check" is never "yes".
+    def agreed_to_current_versions?(state)
+      statement = Clickwrap.policies[state.policy_key]&.statement(state.statement_key)
+      return false unless statement
+
+      state.document_key_with_unseen_current_version(statement.document_keys).nil?
     end
 
     def satisfied?(kind, statement_key, subject:, tenant:, acting_for:)

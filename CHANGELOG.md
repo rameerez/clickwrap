@@ -6,6 +6,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-24
+
+### Added — ask whether the Terms in force were agreed, under any policy
+
+- **`user.clickwraps.agreed_to_current_version_of?(:terms)`.** An invoicing
+  app on the fleet records the Terms agreement under two policies, signup and
+  re-acceptance, and had to write this query itself, because `current_for?`
+  reads one policy and `agreed_to?` ignores versions. The predicate is true
+  when a satisfied agreement to that statement, under any policy, recorded
+  the version in force now of each document the statement binds. A version
+  with a later `effective_at` counts only from that time. Until then, the
+  agreement to the version in force still counts. No agreement is false, and
+  so is an agreement under a policy that is no longer declared.
+
+  ```ruby
+  requires_clickwrap :current_terms,
+                     unless: -> { current_user.clickwraps.agreed_to_current_version_of?(:terms) }
+  ```
+
+### Changed
+
+- The "is this version current?" rule moved from a private method of
+  `Clickwrap::Verification` to `StatementState#document_key_with_unseen_current_version`.
+  `require_current_version: true` and the new predicate call the same method,
+  so they cannot disagree. Verification gives the same answers as before.
+
 ## [0.3.3] - 2026-08-31
 
 ### Fixed — the actor class survives a reload

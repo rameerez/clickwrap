@@ -86,6 +86,25 @@ module Clickwrap
       true
     end
 
+    # The first of these documents whose version in force now is not one this
+    # state recorded, or nil when this state recorded each of them. "In force"
+    # is `Document#current_version` for the request's locale in this state's
+    # tenant, so a version published with a later `effective_at` changes
+    # nothing before that time. A document with no version in force changes
+    # nothing either. `require_current_version: true` and
+    # `agreed_to_current_version_of?` both ask this method, so a gate and a
+    # predicate never disagree about which version is current.
+    def document_key_with_unseen_current_version(document_keys)
+      recorded = Array(document_version_ids).map(&:to_s)
+
+      Array(document_keys).find do |document_key|
+        document = Document.find_by(document_key: document_key.to_s, tenant_key: tenant_key.presence)
+        current = document&.current_version(locale: I18n.locale)
+
+        current && !recorded.include?(current.id.to_s)
+      end
+    end
+
     # Why it does not, as one of the stable error symbols applications branch
     # on. Never an English string: an authorization decision should not depend
     # on parsing a message.

@@ -569,6 +569,7 @@ The actor proxy is the everyday API:
 ```ruby
 user.clickwraps.current_for?(:signup)
 user.clickwraps.agreed_to?(:terms)
+user.clickwraps.agreed_to_current_version_of?(:terms)
 user.clickwraps.consented_to?(:product_updates)
 user.clickwraps.declared?(:independent_contractor, subject: scheme)
 user.clickwraps.authorized?(:withdrawal, subject: withdrawal)
@@ -622,6 +623,17 @@ Publish a new version and `current_for?` flips to `false` for everyone who accep
 ```bash
 bin/rails clickwrap:reacceptance:plan POLICY=current_terms
 ```
+
+`current_for?(:current_terms)` reads only the evidence recorded under `:current_terms`. A person who signed up an hour ago agreed to the Terms in force under `:signup`, and has nothing under `:current_terms` yet. A gate on that policy alone sends them back to accept the same text again. Ask across every policy that records the agreement instead:
+
+```ruby
+class DashboardController < ApplicationController
+  requires_clickwrap :current_terms,
+                     unless: -> { current_user.clickwraps.agreed_to_current_version_of?(:terms) }
+end
+```
+
+`agreed_to_current_version_of?` applies the rule `require_current_version: true` applies. A version published with a later `effective_at` counts only from that time, so the gate starts on the effective date and not on the deploy that gives notice. Until then, the agreement to the version in force still counts. Like `agreed_to?`, it reads the current-state projection; `Clickwrap.verify` is the call that rechecks the evidence itself.
 
 ## Consent that can actually be withdrawn
 
@@ -1014,6 +1026,8 @@ class ApplicationController < ActionController::Base
   requires_clickwrap :current_terms
 end
 ```
+
+A person who accepted the Terms in force at signup did so under `:signup`, not under `:current_terms`. Let them through as [Reacceptance when documents change](#reacceptance-when-documents-change) shows.
 
 Publish the new version and every signed-in user gets redirected to the acceptance screen on their next request — and sent back to wherever they were going the moment they accept. Preview the blast radius before you activate it:
 
